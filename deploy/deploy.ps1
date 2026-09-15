@@ -47,6 +47,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# This script inspects $LASTEXITCODE itself after every docker/ollama/certutil
+# call and turns failures into actionable messages. Pin the PowerShell 7.4+
+# native-command preference off so a non-zero exit code can never be
+# escalated into a raw terminating error before those checks run, regardless
+# of the host's PowerShell version or profile.
+$PSNativeCommandUseErrorActionPreference = $false
 
 # ============================================================================
 # Paths (script-scoped constants for this run)
@@ -57,6 +63,7 @@ $script:LogsDir         = Join-Path $script:DeployRoot 'logs'
 $script:CertsDir        = Join-Path $script:RepoRoot 'certs'
 $script:EnvFile         = Join-Path $script:RepoRoot '.env'
 $script:EnvExampleFile  = Join-Path $script:RepoRoot '.env.example'
+$script:BuiltThisRun    = $false   # set by Step 5 when it has to build the image itself
 
 # ============================================================================
 # Output helpers - Write-Host progress output (also captured by Start-Transcript)
@@ -78,7 +85,15 @@ function Write-Fail { param([string]$Message) Write-Host "  [FAIL] $Message" -Fo
 function Invoke-DockerCompose {
     Push-Location -Path $script:RepoRoot
     try {
-        & docker compose @args
+        # `| Out-Host` is load-bearing: everything a native command writes to
+        # stdout inside a PowerShell function becomes part of that function's
+        # *return value*. Without it, `$x = Invoke-DockerCompose build` made $x
+        # an array of every BuildKit log line followed by the exit code, so
+        # `$x -ne 0` was always truthy and error messages dumped the whole
+        # build log (observed on the first production deploy). Out-Host prints
+        # the log for the operator but keeps it out of the pipeline; the
+        # function then returns only the integer exit code.
+        & docker compose @args | Out-Host
         $exitCode = $LASTEXITCODE
     } finally {
         Pop-Location
@@ -418,17 +433,35 @@ function Initialize-TlsCertificate {
         New-Item -ItemType Directory -Path $script:CertsDir -Force | Out-Null
     }
 
+    # `docker compose run` does NOT build a missing image — with both `build:`
+    # and `image:` set it tries to *pull* the image name from Docker Hub and
+    # fails ("pull access denied"). Build explicitly first.
     docker image inspect sqlcheck-app:latest *> $null
-    $imageExists = ($LASTEXITCODE -eq 0)
-    if (-not $imageExists) {
-        Write-Info '尚未建置映像檔，`docker compose run` 將自動先行建置 (首次執行可能需要數分鐘)...'
+    if ($LASTEXITCODE -ne 0) {
+        Write-Info '尚未建置映像檔，先執行 docker compose build (首次建置需下載 base image 與套件，可能需要數分鐘)...'
+        $buildExit = Invoke-DockerCompose build
+        if ($buildExit -ne 0) {
+            throw "docker compose build 失敗 (結束碼 $buildExit)。請檢查上方輸出的錯誤訊息 (常見原因: 網路無法連上 Docker Hub / npm / PyPI、Dockerfile 建置錯誤、磁碟空間不足)。"
+        }
+        $script:BuiltThisRun = $true
+        Write-Ok '映像檔建置完成。'
     }
 
     Write-Info "產生自我簽署憑證 (SAN 包含: $ProductionIp, $env:COMPUTERNAME, 127.0.0.1, localhost)..."
-    $certgenExit = Invoke-DockerCompose run --rm sqlcheck python -m app.certgen --out-dir /certs --host $ProductionIp --host $env:COMPUTERNAME
+    # Deliberately NOT `docker compose run`: docker-compose.yml mounts ./certs
+    # read-only (`:ro`) for the running service — correct hardening at runtime,
+    # but it makes the one-shot generation step fail with "Read-only file
+    # system" (the real cause of the exit-code-1 seen on the first production
+    # deploy). A plain `docker run` on the freshly built image with an explicit
+    # read-write bind mount keeps the service's :ro mount untouched while
+    # letting this single step write the three certificate files.
+    $certsMount = "$($script:CertsDir):/certs"
+    & docker run --rm -v $certsMount sqlcheck-app:latest `
+        python -m app.certgen --out-dir /certs --host $ProductionIp --host $env:COMPUTERNAME | Out-Host
+    $certgenExit = $LASTEXITCODE
 
     if ($certgenExit -ne 0) {
-        throw "憑證產生失敗 (certgen 結束碼 $certgenExit)。請檢查上方輸出的錯誤訊息 (常見原因: Docker 映像檔建置失敗、--host 參數格式錯誤)。"
+        throw "憑證產生失敗 (certgen 結束碼 $certgenExit)。請檢查上方 certgen 印出的錯誤訊息 (常見原因: .\certs 目錄無法寫入、--host 參數格式錯誤)。"
     }
     if (-not (Test-Path $certPath)) {
         throw "certgen 回報成功，但找不到預期的憑證檔案 $certPath。請檢查 .\certs 目錄內容。"
@@ -485,12 +518,19 @@ function Invoke-BuildAndStart {
     Write-Step 'Step 6/6: 建置映像檔並啟動容器'
 
     if (-not $SkipBuild) {
-        Write-Info '將目前的映像檔標記為復原點 (sqlcheck-app:prev)...'
-        docker tag sqlcheck-app:latest sqlcheck-app:prev 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Ok '已建立復原點映像檔 sqlcheck-app:prev。'
+        if ($script:BuiltThisRun) {
+            # The image was just built in Step 5 for certificate generation —
+            # there is no *previous* deployment to preserve, and tagging the
+            # brand-new build as :prev would make -Rollback a no-op.
+            Write-Info '映像檔於本次執行的 Step 5 剛建置完成，尚無前一版可作為復原點，略過標記。'
         } else {
-            Write-Info '尚無既有的 sqlcheck-app:latest 映像檔可標記為復原點 (可能是首次部署)，略過。'
+            Write-Info '將目前的映像檔標記為復原點 (sqlcheck-app:prev)...'
+            docker tag sqlcheck-app:latest sqlcheck-app:prev 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Ok '已建立復原點映像檔 sqlcheck-app:prev。'
+            } else {
+                Write-Info '尚無既有的 sqlcheck-app:latest 映像檔可標記為復原點 (可能是首次部署)，略過。'
+            }
         }
 
         Write-Info '建置並啟動容器中 (docker compose up -d --build)，首次建置可能需要數分鐘...'

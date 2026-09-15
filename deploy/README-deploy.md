@@ -60,7 +60,7 @@ pwsh -ExecutionPolicy Bypass -File .\deploy.ps1
 | 參數 | 型別 | 預設值 | 說明 |
 |---|---|---|---|
 | `-CheckOnly` | switch | (關閉) | 只執行 Preflight 檢查並印出通過/失敗摘要，**不做任何變更**（不啟動 Docker Desktop、不動防火牆、不動 `.env`/憑證、不建置或啟動容器）。開發機沒有 Docker，只能用這個模式確認腳本邏輯本身正常。 |
-| `-SkipBuild` | switch | (關閉) | 略過 `docker compose build`，直接用現有映像檔執行 `docker compose up -d`。適合「只是重啟容器、程式碼沒有變更」的情境。 |
+| `-SkipBuild` | switch | (關閉) | Step 6 略過重新建置，直接用現有映像檔執行 `docker compose up -d`。適合「只是重啟容器、程式碼沒有變更」的情境。（例外：若映像檔完全不存在且憑證尚未產生，Step 5 仍會先建置一次，否則無法產生憑證。） |
 | `-Rollback` | switch | (關閉) | 停止目前容器，回復到上一次部署時標記的 `sqlcheck-app:prev` 映像檔並重新啟動。 |
 | `-Down` | switch | (關閉) | 執行 `docker compose down` 後結束，不做其他任何事。 |
 | `-ProductionIp` | string | `10.97.15.58` | 正式主機的區網 IP。會寫入憑證的 SAN（讓瀏覽器用這個 IP 連線時憑證有效），部署完成後也會用這個位址自動開啟瀏覽器。 |
@@ -122,11 +122,16 @@ pwsh -ExecutionPolicy Bypass -File .\deploy.ps1
 若 `.\certs\sqlcheck.crt` 已存在則略過（憑證有效期約 825 天，不需要每次部署都重簽）。
 不存在時：
 
-1. 透過 `docker compose run --rm sqlcheck python -m app.certgen --out-dir /certs
-   --host <ProductionIp> --host <本機電腦名稱>` 在容器內產生憑證（`127.0.0.1` / `localhost`
-   一律會自動加入，不需另外指定）。輸出的 `sqlcheck.crt` / `sqlcheck.key` / `sqlcheck.cer`
-   會落在正式主機的 `.\certs\` 目錄（與 `docker-compose.yml` 的 volume 掛載相符）。
-2. 用 `certutil -addstore Root .\certs\sqlcheck.cer` 把憑證匯入**正式主機本機**的信任清單，
+1. 若映像檔 `sqlcheck-app:latest` 尚未存在，先執行 `docker compose build`（首次需下載
+   base image 與套件，可能需要數分鐘；此步驟不受 `-SkipBuild` 影響，因為沒有映像檔就無法
+   產生憑證）。
+2. 以一次性的 `docker run --rm -v <專案>\certs:/certs sqlcheck-app:latest python -m
+   app.certgen --out-dir /certs --host <ProductionIp> --host <本機電腦名稱>` 產生憑證
+   （`127.0.0.1` / `localhost` 一律會自動加入，不需另外指定）。刻意不用 `docker compose run`：
+   `docker-compose.yml` 對執行中的服務是以**唯讀**方式掛載 `./certs`（執行期安全設定），
+   一次性的產生步驟必須用可寫入的掛載才寫得出檔案。輸出的 `sqlcheck.crt` / `sqlcheck.key` /
+   `sqlcheck.cer` 會落在正式主機的 `.\certs\` 目錄。
+3. 用 `certutil -addstore Root .\certs\sqlcheck.cer` 把憑證匯入**正式主機本機**的信任清單，
    讓主機自己（以及在主機上開瀏覽器測試）不會看到憑證警告。這一步失敗只會印出警告，不會
    中止部署——但代表您需要手動處理，見下一節。
 

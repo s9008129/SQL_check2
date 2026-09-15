@@ -117,3 +117,27 @@
   不能只靠口頭確認就寫死成預設；一定要（1）做成可覆寫的參數／環境變數，（2）在部署
   腳本最前面做實機驗證並在不符時清楚列出真實狀態。這次兩者都有做到，所以修正只需要
   改預設值，不需要改任何邏輯。已將全專案預設改為 `gemma4:31b`（PRD 原文保留不動）。
+
+## 2026-09-15 正式主機首次建置：Step 5 憑證產生失敗的兩個根因
+
+- **失敗模式 1**：`docker compose run --rm sqlcheck ...` 在映像檔不存在時，因服務同時
+  設定 `build:` 與 `image: sqlcheck-app:latest`，Compose 先嘗試從 Docker Hub 拉取
+  `sqlcheck-app`（"pull access denied"）。腳本註解寫「run 會自動先行建置」是錯誤假設。
+  **預防規則**：本地建置的映像檔在 compose 裡宣告 `pull_policy: never`；部署腳本在需要
+  映像檔的步驟前**明確** `docker compose build`，不依賴 `run` 的隱含行為。
+- **失敗模式 2**：certgen 結束碼 1，但錯誤訊息印出整段 BuildKit 日誌後才接 `1`。原因是
+  PowerShell 函式 `Invoke-DockerCompose` 內 `& docker compose @args` 的 stdout 全部變成
+  函式回傳值，`$exit -ne 0` 對陣列永遠為真、訊息把整個陣列字串化。
+  **預防規則**：包裝原生指令的 PowerShell 函式，一律 `| Out-Host`（或 `| Out-Null`）把
+  輸出擋在管線外，只 `return $LASTEXITCODE`；同時明確設
+  `$PSNativeCommandUseErrorActionPreference = $false`，避免不同 PowerShell 版本把非零
+  結束碼提前升級成例外、繞過腳本自己的檢查。
+- **失敗模式 3（真正的 exit 1）**：`docker-compose.yml` 把 `./certs` 掛成 `:ro`，certgen
+  在容器內寫 `/certs/sqlcheck.crt` 得到 Read-only file system。錯誤被失敗模式 2 的噪音
+  淹沒，差點誤判成建置問題。
+  **預防規則**：「執行期唯讀」與「一次性寫入」是兩個不同需求，不要共用同一個掛載設定。
+  憑證產生改用 `docker run --rm -v <certs>:/certs sqlcheck-app:latest python -m app.certgen`
+  明確以讀寫掛載執行，服務本身維持 `:ro`。
+- **通用教訓**：一個步驟同時暴露多個錯誤時，先修「讓錯誤訊息變清楚」的那個（失敗模式 2），
+  否則會對著錯誤的根因修。開發機沒有 Docker，這類問題只有在正式主機首次執行才會浮現，
+  所以部署腳本每一步的失敗訊息都必須自帶足夠的診斷資訊。

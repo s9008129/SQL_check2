@@ -4,6 +4,12 @@ services:
   sqlcheck:
     build: .
     image: sqlcheck-app:latest
+    # This image only ever exists locally (built from `build: .` above). Without
+    # this, any `docker compose run`/`up` that finds the image missing tries to
+    # *pull* "sqlcheck-app" from Docker Hub first and fails with "pull access
+    # denied" — observed on the first production deploy. `never` makes Compose
+    # rely solely on the local build; deploy.ps1 builds explicitly before use.
+    pull_policy: never
     container_name: sqlcheck-app
     ports:
       # host 443 -> container's single internal port (see Dockerfile).

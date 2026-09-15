@@ -1,0 +1,139 @@
+# SQLCheck 2.0 規則與改善優先指數設定（PRD §13、§16）。
+#
+# 本檔案是唯一決定「哪些規則存在、BLOCK/NOTICE 分類、改善優先指數怎麼算」的地方；
+# rule_engine.py / improvement_score.py 只讀取本檔案，不得寫死規則邏輯的業務數字。
+#
+# 規則狀態語意（PRD §13.2）：PASS 符合 / NOTICE 提醒 / BLOCK 不符合 / REVIEW 請確認 / N/A 不適用。
+# 只有 type: block 的規則會影響「中心規範」總判定；type: notice 永遍不影響總判定。
+
+model_version: 1
+
+rules:
+  - id: R001
+    name: COST
+    type: block
+    enabled: true
+    threshold: 100000
+
+  - id: R002
+    name: WHERE 查詢條件
+    type: block
+    enabled: true
+    # UPDATE/DELETE 的 JOIN ON 條件是否可視為等同 WHERE，業務未定案，預設不接受。
+    accept_join_on: false
+
+  - id: R003
+    name: Parallel Hint
+    type: block
+    enabled: true
+
+  - id: R004
+    name: LIKE 前置萬用字元
+    type: notice
+    enabled: true
+
+  - id: R005
+    name: 條件欄位使用函數
+    type: notice
+    enabled: true
+
+  - id: R006
+    name: OR 條件
+    type: notice
+    enabled: true
+
+  - id: R007
+    name: 重要資料表
+    type: notice
+    enabled: true
+
+  - id: R008
+    name: 重要資料表禁止操作
+    type: block
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# 改善優先指數編製模型（PRD §16.3，由系統設計；業務定案前標示 provisional）。
+#
+# 公式（improvement_score.py 實作）：
+#   1. 每一段 SQL（statement）分別計算 F_i（規則發現分）與 S_i（結構複雜度分）
+#   2. base = max_i(F_i + S_i)  — 多段 SQL 取「最需要優先處理的那一段」
+#   3. C = 依原始 COST 與門檻比例查表（全案件只有一個 COST，不分段）
+#   4. A = AI 對建議項目給的 impact（low/medium/high）換算後加總，設上限
+#   5. score = clamp(0, 100, base + C + A)
+#   6. 若任一段出現 BLOCK 等級 finding，score = max(score, block_floor)
+#
+# 這個模型讓 AI 能參與判讀（A 分量），但分數上限、下限與四捨五入全由程式與本檔案的
+# 數字控制，AI 無法自由打分，符合 PRD §16.1「不讓 AI 自由打分」的要求。
+# ---------------------------------------------------------------------------
+improvement_score:
+  provisional: true
+  max_score: 100
+  levels:
+    good:
+      max: 59
+      label: 目前良好
+      color: green
+    improve:
+      min: 60
+      max: 79
+      label: 建議改善
+      color: yellow
+    priority:
+      min: 80
+      label: 優先改善
+      color: red
+
+  # 任一段 SQL 出現 BLOCK 等級 finding 時的分數下限（不符合規範者必為「優先改善」）。
+  block_floor: 80
+
+  # F：規則發現分（0–70）。同一 rule_id 在同一段 SQL 內重複命中時，依出現順序遞減權重。
+  rule_findings:
+    max: 70
+    repeat_decay: [1.0, 0.5, 0.25]
+    weights:
+      missing_where: 35
+      cost_over_threshold: 35
+      parallel_hint: 30
+      forbidden_operation: 35
+      function_on_condition: 30
+      leading_wildcard_like: 25
+      important_table_notice: 20
+      or_condition: 15
+
+  # S：結構複雜度分（0–15）。反映「即使沒有觸發任何規則，寫法本身有多複雜」。
+  structure:
+    max: 15
+    many_tables_threshold: 4
+    subquery_depth_threshold: 2
+    weights:
+      many_tables: 4
+      cartesian_join: 6
+      deep_subquery: 3
+      select_star: 2
+      distinct_or_union: 3
+      not_in_subquery: 2
+
+  # C：COST 接近門檻分（0–15）。ratio = 使用者輸入的原始 COST / R001 門檻。
+  cost_ratio:
+    max: 15
+    bands:
+      - max_ratio: 0.25
+        score: 0
+      - max_ratio: 0.50
+        score: 5
+      - max_ratio: 0.75
+        score: 10
+      - max_ratio: 1.00
+        score: 14
+      - max_ratio: null
+        score: 15
+
+  # A：AI 判讀調整分（0–10）。AI 每條建議可附 impact，程式換算後加總並設上限；
+  # AI 不可用時 A=0，指數仍可完整計算（不因 AI 降級而無法顯示指數）。
+  ai_adjustment:
+    max: 10
+    impact_scores:
+      low: 0
+      medium: 2
+      high: 5

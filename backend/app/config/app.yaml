@@ -1,0 +1,89 @@
+# SQLCheck 2.0 應用程式設定（上傳限制、Ollama 連線、AI 守門清單）。
+# 環境變數（見 .env.example）永遠可覆寫本檔案列出的 *_env 對應項目。
+
+app:
+  name: "SQLCheck 2.0"
+  title: "SQL 效能檢核"
+
+upload:
+  max_file_mb: 10
+  max_extracted_chars: 300000
+  allowed_extensions:
+    - .sql
+    - .txt
+    - .md
+    - .markdown
+    - .csv
+    - .docx
+    - .pdf
+  # DOCX 屬於 zip 容器；解壓炸彈防護：拒絕解壓後總量超過此上限，或壓縮比超過此倍數的檔案。
+  docx_max_uncompressed_mb: 80
+  docx_max_compression_ratio: 100
+
+ollama:
+  base_url_env: OLLAMA_BASE_URL
+  base_url_default: "http://host.docker.internal:11434"
+  model_env: OLLAMA_MODEL
+  model_default: "gemma4:31b-it-qat"
+  timeout_seconds_env: OLLAMA_TIMEOUT_SECONDS
+  timeout_seconds_default: 120
+  num_ctx_env: OLLAMA_NUM_CTX
+  num_ctx_default: 8192
+  num_predict: 1024
+  temperature: 0.2
+  keep_alive: "30m"
+  max_retries_on_invalid_json: 1
+
+# 建議寫法 / 預估改善幅度守門條件（PRD §17.4、§25）。
+ai_gate:
+  # candidate_allowed：只有單一段、SELECT、parser 成功解析、且不含任何複雜度旗標時才允許 AI 給建議寫法。
+  candidate_forbidden_complexity_flags:
+    - outer_join
+    - group_by_aggregate
+    - distinct
+    - window_function
+    - connect_by
+    - set_operation
+    - rownum
+    - correlated_subquery
+  # estimate_improvement_allowed 預設等於 candidate_allowed；若要放寬（允許在無建議寫法時仍給預估
+  # 百分比）可將此改為 false，但仍需至少一項 finding 才會給值，見 ai_service.py。
+  estimate_requires_candidate: true
+
+# AI 回覆的後處理守門清單（PRD §17.4、§22、§23、§56）。
+ai_guard:
+  # 命中即整條建議移除（禁止 AI 宣稱資料庫實際行為，或捏造改善後 COST）。
+  forbidden_phrases:
+    - "Full Table Scan"
+    - "full table scan"
+    - "全表掃描"
+    - "全資料表掃描"
+    - "索引失效"
+    - "已使用索引"
+    - "未使用索引"
+    - "已避免全表掃描"
+    - "使用了索引"
+    - "沒有使用索引"
+    - "改善後 COST"
+    - "改善後COST"
+    - "Execution Plan"
+    - "執行計畫顯示"
+    - "已驗證"
+    - "已測試"
+    - "實測"
+    - "高風險"
+    - "嚴重問題"
+    - "錯誤寫法"
+  # 詞彙替換（PRD §22）：只套用在 AI 的說明文字欄位（summary / advice 標題與說明 /
+  # suggested_sql.reason），不套用在 SQL 程式碼欄位（sql / example）。
+  vocabulary_replacements:
+    數據庫: 資料庫
+    数据库: 資料庫
+    字段: 欄位
+    优化SQL: 改善 SQL
+    優化SQL: 改善 SQL
+    优化: 改善
+    優化: 改善
+    数据: 資料
+    候選SQL: 建議寫法
+    候選 SQL: 建議寫法

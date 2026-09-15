@@ -1,0 +1,19 @@
+# Single service (PRD §49) — no `ollama` service, no `db` service. Ollama
+# runs natively on the Windows host and is reached via host.docker.internal.
+services:
+  sqlcheck:
+    build: .
+    image: sqlcheck-app:latest
+    container_name: sqlcheck-app
+    ports:
+      # host 443 -> container's single internal port (see Dockerfile).
+      - "443:8000"
+    volumes:
+      # TLS cert/key produced by `python -m app.certgen` (deploy.ps1 runs
+      # this on first deploy). Read-only: the app never writes here.
+      - ./certs:/certs:ro
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

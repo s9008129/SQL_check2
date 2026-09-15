@@ -1,0 +1,14 @@
+line-length = 100
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[lint.isort]
+known-first-party = ["app"]
+
+[lint.per-file-ignores]
+# Exploratory, sequential spike scripts (see tasks/lessons.md) — imports are
+# deliberately placed next to the section that first needs them.
+"tests/_spike_*.py" = ["E402"]

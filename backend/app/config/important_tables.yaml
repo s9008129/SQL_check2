@@ -1,0 +1,19 @@
+# 重要資料表清單（PRD §45）。
+#
+# name    : 精確表名比對（不分大小寫，比對時忽略 schema 前綴，例如 TAX.HOUT120 -> HOUT120）。
+# pattern : fnmatch 萬用字元比對（不分大小寫），例如 "HOU*" 會同時比對到 HOUT120 與
+#           HOUSE_TMP 這類名稱，需業務端確認清單後再收斂。
+# message : 顯示於「智慧改善建議」與規則比對表的提醒文字。
+#
+# 以下僅為 PRD 範例值，正式清單待業務端提供（PRD §61.4），不得由 Coding Agent 自行擴充。
+
+important_tables:
+  - name: WIIT001
+    message: 請特別確認查詢範圍與必要性。
+  - pattern: "HOU*"
+    message: 請確認查詢條件範圍，避免一次讀取過多資料。
+
+# 重要資料表禁止操作矩陣（R008，PRD §13.3、§45）。
+# 每筆：table（name 或 pattern）+ statement_types（適用的 BLOCK 語句類型）+ message。
+# 正式清單待業務端提供；預設空陣列，R008 在此清單為空時不會產生任何 BLOCK。
+forbidden_operations: []

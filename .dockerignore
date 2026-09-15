@@ -1,0 +1,18 @@
+# Keep the build context small and avoid leaking dev-only artifacts into
+# either build stage.
+**/.git
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+backend/tests
+backend/static
+frontend/node_modules
+frontend/dist
+frontend/.vite
+certs
+deploy/logs
+.env
+*.md
+!README.md

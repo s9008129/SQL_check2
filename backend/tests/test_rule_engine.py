@@ -114,6 +114,15 @@ def test_important_table_name_and_pattern_match(cfg):
     assert any(f.rule_id == "R007" and f.table == "WIIT001" for f in findings)
 
 
+def test_important_table_schema_qualified_still_matches(cfg):
+    rules_cfg, tables_cfg = cfg
+    parsed = parse_sql_text("SELECT * FROM TAX.HOUT120 A WHERE A.X=1")
+    _, rows, _ = rule_engine.evaluate(parsed, 1000, rules_cfg, tables_cfg)
+    r007 = _row(rows, "R007")
+    assert r007.status == "NOTICE"
+    assert "HOUT120" in r007.evidence
+
+
 def test_important_table_no_match_is_pass(cfg):
     rules_cfg, tables_cfg = cfg
     parsed = parse_sql_text("SELECT * FROM PLAIN_TABLE A WHERE A.X=1")

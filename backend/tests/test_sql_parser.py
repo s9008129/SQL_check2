@@ -245,6 +245,22 @@ def test_upper_on_like_column_side_is_flagged():
     assert any("UPPER" in f for f in s.function_findings)
 
 
+def test_function_in_select_list_does_not_trigger_r005():
+    # R005 is about condition columns (WHERE/HAVING/ON), never the SELECT
+    # list — TRUNC(A.TXN_DATE) as an output column is completely normal.
+    s = _one("SELECT TRUNC(A.TXN_DATE) AS D FROM T A WHERE A.Y = 1")
+    assert s.function_findings == []
+
+
+def test_subquery_without_where_does_not_force_outer_missing_where():
+    # PRD/plan assumption: R002 only evaluates the top-level statement (and
+    # set-operation branches); an unfiltered subquery inside e.g. an IN(...)
+    # must not make the OUTER statement look like it is missing a WHERE.
+    s = _one("SELECT * FROM T A WHERE A.ID IN (SELECT B.ID FROM T2 B) AND A.X = 1")
+    assert s.where_applicable is True
+    assert s.has_where is True
+
+
 # ---------------------------------------------------------------------------
 # OR detection (R006)
 # ---------------------------------------------------------------------------

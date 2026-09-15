@@ -315,8 +315,12 @@ def _revalidate_suggested_sql(
             return False, "建議寫法的提醒項目多於原始 SQL"
 
         return True, None
-    except Exception:
-        logger.exception("ai_service: suggested SQL re-validation raised unexpectedly")
+    except Exception as exc:
+        # PRD §50.4: log the exception *type* only, never str(exc)/a
+        # traceback — sqlglot's ParseError.__str__() embeds a raw snippet of
+        # the surrounding SQL (confirmed), and this re-validation path runs
+        # on the model's *unmasked* rewrite, i.e. real literal values.
+        logger.error("ai_service: suggested SQL re-validation raised unexpectedly: %s", type(exc).__name__)
         return False, "建議寫法安全性檢查失敗"
 
 
@@ -544,8 +548,12 @@ async def get_ai_result(
             settings.rules_config,
             settings.important_tables_config,
         )
-    except Exception:
-        logger.exception("ai_service.get_ai_result: unexpected failure, degrading to unavailable")
+    except Exception as exc:
+        # PRD §50.4: exception type only, never a message/traceback that
+        # could embed SQL text (see _revalidate_suggested_sql's comment).
+        logger.error(
+            "ai_service.get_ai_result: unexpected failure, degrading to unavailable: %s", type(exc).__name__
+        )
         return _unavailable()
 
 

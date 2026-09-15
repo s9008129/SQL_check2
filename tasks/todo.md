@@ -14,8 +14,45 @@
 - [x] Phase 5 前端元件、樣式、列印、響應 + vitest（52 項測試通過，tsc/build 皆過）
 - [x] Phase 6 本機整合 E2E（Playwright，1366×768／1920×1080／480 窄螢幕）：後端服務真實前端 build + fake_ollama，實際跑過「貼上 SQL 檢核」「上傳 .sql 附件辨識」兩條路徑，過程中發現並修正一個真實 UI 重複文字 bug（見 lessons.md）
 - [x] Phase 7 deploy.ps1 / smoke-test.ps1 / README-deploy.md — 完成，PowerShell 語法驗證通過（0 errors x3），內容經覆核；端對端執行仍待正式主機驗證
-- [ ] Phase 8 硬化、lint、todo Results、lessons
-- [x] Verify：`uv run pytest`（186 通過）、`uv run ruff check`（無錯誤）、`tsc --noEmit`（無錯誤）、`npm run test`（52 通過）、`npm run build`（成功）、Playwright E2E（三種解析度手動驅動通過）；PS 語法檢查（3 個腳本皆 0 錯誤）
+- [x] Phase 8 硬化：log 稽核（子代理專案審查，結論 CLEAN，並補強一個潛在缺口）、
+      prompt injection 防護（system prompt 明文禁止把 SQL 內容當指令 + 2 項測試）、
+      XSS 檢查（前端全文 grep 確認無 `dangerouslySetInnerHTML`／`innerHTML`）、
+      危險函式檢查（後端全文 grep 確認無 `eval`／`exec`／`subprocess`／`pickle` 等）
+- [x] Verify：`uv run pytest`（191 通過）、`uv run ruff check`（無錯誤）、`tsc --noEmit`（無錯誤）、`npm run test`（52 通過）、`npm run build`（成功）、Playwright E2E（三種解析度手動驅動通過）；PS 語法檢查（3 個腳本皆 0 錯誤）
+
+## Results（完成摘要）
+
+**已完成**：PRD 全部 8 個開發階段（Phase 0-8）。單一 Docker Container 架構、
+無資料庫、無 Oracle 連線；決定性規則引擎（R001-R008）+ 改善優先指數模型
+（F+S+C+A，含 BLOCK 下限）+ 附件擷取（TXT/SQL/MD/CSV/DOCX/PDF）+ SQL 辨識 +
+AI 服務（遮罩、structured output、多層安全守門、prompt injection 防護）+
+React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態）+ HTTPS 自簽
+憑證 + 正式主機一鍵部署腳本，全部完成並在開發機驗證通過。
+
+**測試總數**：後端 191 項（`uv run pytest`）、前端 52 項（`npm run test`），
+外加 Playwright 手動驅動的端對端驗證（1366×768／1920×1080／480px，含檢核與
+附件上傳兩條主要流程），以及正式主機專用的 golden dataset 腳本
+（`backend/tests/golden/run_golden.py`，需真實 Ollama，開發機無法執行）。
+
+**過程中發現並修正的真實問題**（詳見 lessons.md）：
+1. sqlglot `error_level=RAISE` 對壞掉的 SQL 不可靠，需另外檢查頂層節點型別。
+2. `exp.And`／`exp.Or` 本身是 `exp.Func` 子類別，函數偵測需改用 `exp.Predicate`。
+3. sqlglot `find_all(exp.Literal)` 不依原始文字順序回傳，遮罩改用 token 位置。
+4. Big5 解碼被 charset-normalizer 誤判成韓文；PDF 掃描偵測門檻誤傷短 SQL。
+5. 多段 SQL 候選用空行接起來會被誤判成 1 段解析失敗。
+6. `main.py` SPA fallback 路由存在路徑穿越漏洞（自動化安全掃描發現）。
+7. AI 安全守門原本漏了「建議寫法需重新解析＋比對表集合＋重跑規則引擎」這一層
+   （核准計畫有寫，交辦子代理時漏寫，覆核時自行補上）。
+8. 前端在「伺服器端拒絕建議寫法」時會把固定文案顯示兩次（唯有實際跑通前後端
+   整合才會現形，前端單元測試的假資料用了不同字句所以沒測出來）。
+
+**尚未／無法在開發機驗證的部分**：
+- Docker 映像實際建置與啟動（開發機無 Docker）。
+- `deploy.ps1` 完整流程與正式主機 Ollama 綁定／防火牆設定（需 Windows 系統管理員
+  權限與真實 Docker Desktop／Ollama，僅能在正式主機驗證；`-CheckOnly` 模式的邏輯
+  已在開發機驗證）。
+- 真實 Gemma 4 的輸出品質與繁體中文用詞（`run_golden.py` 已備妥，需正式主機執行）。
+- 改善優先指數的正式權重（`rules.yaml` 標示 `provisional: true`，待業務端確認）。
 
 ## Risk & Rollback
 - 風險：中（新系統、部署腳本改動正式主機 Ollama 綁定與防火牆）。

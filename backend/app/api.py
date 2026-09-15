@@ -30,6 +30,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _AI_UNAVAILABLE_MESSAGE = "智慧改善建議目前暫時無法使用，仍可依上方規則檢核結果進行確認。"
+_ANALYZE_FAILED_MESSAGE = "系統暫時無法完成檢核，請稍後再試一次。"
+_EXTRACT_FAILED_MESSAGE = "附件內容無法辨識，請確認檔案內容，或直接貼上 SQL。"
+
+
+def _log_exception_type_only(message: str, exc: Exception) -> None:
+    """PRD §50.4 allows logging an exception's *type*, never its message or
+    a traceback — several exception types reachable from this module
+    (confirmed: sqlglot's ParseError) embed a raw snippet of the SQL/literal
+    text that triggered them in `str(exc)`. Deliberately uses `logger.error`
+    with only `type(exc).__name__`, never `logger.exception`/`exc_info=True`,
+    so this stays true even if some future exception type also embeds
+    sensitive text — safety does not depend on auditing every call site by
+    hand each time the code changes."""
+    logger.error("%s: %s", message, type(exc).__name__)
 
 
 def _ext_of(filename: str) -> str:
@@ -42,8 +56,8 @@ async def health() -> HealthResponse:
     settings = get_settings()
     try:
         available = await ai_service.check_ollama_available(settings)
-    except Exception:  # noqa: BLE001 - health check must never itself fail
-        logger.exception("check_ollama_available raised unexpectedly")
+    except Exception as exc:  # noqa: BLE001 - health check must never itself fail
+        _log_exception_type_only("check_ollama_available raised unexpectedly", exc)
         available = False
     return HealthResponse(status="ok", ai_available=available)
 
@@ -60,7 +74,14 @@ async def extract_sql(file: Annotated[UploadFile, File(...)]) -> ExtractSqlRespo
     finally:
         await file.close()
 
-    detected = sql_detect.detect_sql(extracted.text, _ext_of(filename))
+    try:
+        detected = sql_detect.detect_sql(extracted.text, _ext_of(filename))
+    except Exception as exc:  # noqa: BLE001 - defense-in-depth: sql_parser internally
+        # guards its own sqlglot calls, but never let an unexpected failure
+        # here fall through to FastAPI's default handler, whose traceback
+        # could otherwise embed raw SQL text (sqlglot ParseError does).
+        _log_exception_type_only("sql_detect.detect_sql raised unexpectedly", exc)
+        raise HTTPException(status_code=500, detail=_EXTRACT_FAILED_MESSAGE) from None
 
     return ExtractSqlResponse(
         status="ok",
@@ -75,11 +96,19 @@ async def extract_sql(file: Annotated[UploadFile, File(...)]) -> ExtractSqlRespo
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
     settings = get_settings()
-    parsed = parse_sql_text(payload.sql)
-
-    compliance, rule_rows, findings = rule_engine.evaluate(
-        parsed, payload.cost, settings.rules_config, settings.important_tables_config
-    )
+    try:
+        parsed = parse_sql_text(payload.sql)
+        compliance, rule_rows, findings = rule_engine.evaluate(
+            parsed, payload.cost, settings.rules_config, settings.important_tables_config
+        )
+    except Exception as exc:  # noqa: BLE001 - defense-in-depth: both functions already
+        # guard their own sqlglot calls internally, but never let an
+        # unexpected failure fall through to FastAPI's default handler,
+        # whose traceback could otherwise embed raw SQL text (sqlglot
+        # ParseError does) — the deterministic rule check must fail safely,
+        # never silently return a fabricated PASS (PRD §15).
+        _log_exception_type_only("sql_parser/rule_engine raised unexpectedly", exc)
+        raise HTTPException(status_code=500, detail=_ANALYZE_FAILED_MESSAGE) from None
 
     if payload.include_ai:
         try:
@@ -91,8 +120,8 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
                 statements=parsed.statements,
                 settings=settings,
             )
-        except Exception:  # noqa: BLE001 - AI must never be a single point of failure (PRD §51)
-            logger.exception("ai_service.get_ai_result raised unexpectedly")
+        except Exception as exc:  # noqa: BLE001 - AI must never be a single point of failure (PRD §51)
+            _log_exception_type_only("ai_service.get_ai_result raised unexpectedly", exc)
             ai_result = AiResult(status="unavailable", message=_AI_UNAVAILABLE_MESSAGE)
     else:
         ai_result = AiResult(status="pending")

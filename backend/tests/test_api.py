@@ -146,6 +146,23 @@ async def test_analyze_with_ai_true_calls_ai_service_and_recomputes_score(client
     assert ai_component["score"] > 0
 
 
+async def test_analyze_returns_safe_500_when_rule_pipeline_raises_unexpectedly(client, monkeypatch):
+    # Defense-in-depth (PRD §50.4): an unexpected failure in the
+    # deterministic pipeline itself must never fall through to FastAPI's
+    # default handler (whose traceback could embed raw SQL — sqlglot's
+    # ParseError does) and must never silently report a fabricated PASS.
+    def _boom(_sql):
+        raise RuntimeError("simulated sql_parser failure")
+
+    monkeypatch.setattr(api_module, "parse_sql_text", _boom)
+    resp = await client.post(
+        "/api/analyze",
+        json={"application_no": "A1", "cost": 1000, "sql": "SELECT 1 FROM DUAL", "include_ai": False},
+    )
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == api_module._ANALYZE_FAILED_MESSAGE
+
+
 async def test_analyze_degrades_gracefully_when_ai_service_raises(client, monkeypatch):
     async def _raise(**kwargs):
         raise RuntimeError("ollama exploded")
@@ -206,6 +223,17 @@ async def test_extract_sql_docx_roundtrip(client):
     resp = await client.post("/api/extract-sql", files=files)
     assert resp.status_code == 200
     assert "SELECT A.X" in resp.json()["sql"]
+
+
+async def test_extract_sql_returns_safe_500_when_sql_detect_raises_unexpectedly(client, monkeypatch):
+    def _boom(_text, _ext):
+        raise RuntimeError("simulated sql_detect failure")
+
+    monkeypatch.setattr(api_module.sql_detect, "detect_sql", _boom)
+    files = {"file": ("q.sql", b"SELECT 1 FROM DUAL", "application/octet-stream")}
+    resp = await client.post("/api/extract-sql", files=files)
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == api_module._EXTRACT_FAILED_MESSAGE
 
 
 async def test_extract_sql_does_not_write_any_temp_file(client):

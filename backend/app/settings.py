@@ -107,7 +107,7 @@ def get_settings() -> Settings:
         ),
         model=os.environ.get(
             ollama_section.get("model_env", "OLLAMA_MODEL"),
-            ollama_section.get("model_default", "gemma4:31b-it-qat"),
+            ollama_section.get("model_default", "gemma4:31b"),
         ),
         timeout_seconds=_env_int(
             ollama_section.get("timeout_seconds_env", "OLLAMA_TIMEOUT_SECONDS"),

@@ -29,7 +29,7 @@ HTTPS 443（自簽憑證），不使用 Nginx 或任何反向代理，不建立�
 
 - Windows 11，且已安裝：
   - **Docker Desktop**（`docker` CLI 可用）
-  - **Ollama for Windows**（`ollama` CLI 可用），且已執行過 `ollama pull gemma4:31b-it-qat`
+  - **Ollama for Windows**（`ollama` CLI 可用），且已執行過 `ollama pull gemma4:31b`
     （或您實際要用的模型標籤）下載好模型
   - **PowerShell 7 以上**（`pwsh`）
 - 以**系統管理員身分**執行 PowerShell（設定防火牆規則、使用者層級環境變數需要提權）。
@@ -64,7 +64,7 @@ pwsh -ExecutionPolicy Bypass -File .\deploy.ps1
 | `-Rollback` | switch | (關閉) | 停止目前容器，回復到上一次部署時標記的 `sqlcheck-app:prev` 映像檔並重新啟動。 |
 | `-Down` | switch | (關閉) | 執行 `docker compose down` 後結束，不做其他任何事。 |
 | `-ProductionIp` | string | `10.97.15.58` | 正式主機的區網 IP。會寫入憑證的 SAN（讓瀏覽器用這個 IP 連線時憑證有效），部署完成後也會用這個位址自動開啟瀏覽器。 |
-| `-OllamaModel` | string | `gemma4:31b-it-qat` | 正式主機上應已安裝的 Ollama 模型標籤。會寫入 `.env` 的 `OLLAMA_MODEL`，也是 Preflight 檢查 `ollama list` 時要找的模型名稱。 |
+| `-OllamaModel` | string | `gemma4:31b` | 正式主機上應已安裝的 Ollama 模型標籤。會寫入 `.env` 的 `OLLAMA_MODEL`，也是 Preflight 檢查 `ollama list` 時要找的模型名稱。 |
 | `-DockerRemoteAddress` | string | `172.16.0.0/12` | 找不到 `vEthernet (WSL*)` 介面時，Ollama（11434）防火牆規則改用的來源位址範圍 (CIDR)。實際範圍依 Docker Desktop 的網路模式而異，如有需要請調整此參數後重新執行。 |
 
 `-CheckOnly`、`-Rollback`、`-Down` 三者是互斥的操作模式：同時給多個時，`-Down` 優先於
@@ -175,7 +175,7 @@ pwsh -ExecutionPolicy Bypass -File .\deploy.ps1
 - 確認實際已安裝的模型名稱：`ollama list`。
 - 若模型標籤與 `-OllamaModel`／`.env` 的 `OLLAMA_MODEL` 不一致（例如標籤打錯字），請以
   `.\deploy.ps1 -OllamaModel <正確標籤>` 重新執行，或直接下載對應模型：
-  `ollama pull gemma4:31b-it-qat`（模型可能高達數十 GB，請確認網路與磁碟空間足夠）。
+  `ollama pull gemma4:31b`（模型可能高達數十 GB，請確認網路與磁碟空間足夠）。
 
 ### 部署成功但 `ai_available: false`（健康檢查顯示 AI 不可用）
 決定性規則檢查仍可正常使用，但 AI 輔助複核／改善建議會停用。依序檢查：

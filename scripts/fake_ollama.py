@@ -15,7 +15,7 @@ Usage:
     python scripts/fake_ollama.py --mode down
 
 Then point the backend at it, e.g.:
-    OLLAMA_BASE_URL=http://127.0.0.1:11434 OLLAMA_MODEL=gemma4:31b-it-qat \
+    OLLAMA_BASE_URL=http://127.0.0.1:11434 OLLAMA_MODEL=gemma4:31b \
         uv run uvicorn app.main:app --reload
 
 Modes (--mode, default "normal"):
@@ -44,7 +44,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DEFAULT_PORT = 11434
-FAKE_MODEL_NAME = "gemma4:31b-it-qat"
+FAKE_MODEL_NAME = "gemma4:31b"
 SLOW_MODE_DELAY_SECONDS = 5
 
 

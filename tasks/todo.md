@@ -59,7 +59,7 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
 - 回滾：`deploy.ps1 -Rollback`（回前版映像）、`-Down`；Ollama 環境變數可手動移除。
 
 ## Dependencies & Environment
-- Python 3.12 / uv、Node 22；Docker 僅正式主機；OLLAMA_MODEL=gemma4:31b-it-qat。
+- Python 3.12 / uv、Node 22；Docker 僅正式主機；OLLAMA_MODEL=gemma4:31b（正式主機 `ollama list` 實際顯示的標籤；先前計畫誤記為 gemma4:31b-it-qat，2026-09-15 首次部署 Preflight 發現後修正）。
 
 ## Working Notes
 - 開發機無 Docker/Ollama：AI 測試用 respx + scripts/fake_ollama.py。

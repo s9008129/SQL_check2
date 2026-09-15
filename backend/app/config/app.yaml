@@ -24,7 +24,7 @@ ollama:
   base_url_env: OLLAMA_BASE_URL
   base_url_default: "http://host.docker.internal:11434"
   model_env: OLLAMA_MODEL
-  model_default: "gemma4:31b-it-qat"
+  model_default: "gemma4:31b"
   timeout_seconds_env: OLLAMA_TIMEOUT_SECONDS
   timeout_seconds_default: 120
   num_ctx_env: OLLAMA_NUM_CTX

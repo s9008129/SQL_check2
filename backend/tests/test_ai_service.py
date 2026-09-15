@@ -29,7 +29,7 @@ def _ollama_envelope(content_str: str) -> dict:
     """Shape confirmed against Ollama's documented /api/chat non-streaming
     response: top-level message.content is a JSON *string* to be parsed."""
     return {
-        "model": "gemma4:31b-it-qat",
+        "model": "gemma4:31b",
         "created_at": "2024-01-01T00:00:00Z",
         "message": {"role": "assistant", "content": content_str},
         "done": True,

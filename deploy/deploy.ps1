@@ -42,7 +42,7 @@ param(
     [switch]$Rollback,
     [switch]$Down,
     [string]$ProductionIp = '10.97.15.58',
-    [string]$OllamaModel = 'gemma4:31b-it-qat',
+    [string]$OllamaModel = 'gemma4:31b',
     [string]$DockerRemoteAddress = '172.16.0.0/12'
 )
 

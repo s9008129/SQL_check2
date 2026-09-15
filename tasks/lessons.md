@@ -141,3 +141,31 @@
 - **通用教訓**：一個步驟同時暴露多個錯誤時，先修「讓錯誤訊息變清楚」的那個（失敗模式 2），
   否則會對著錯誤的根因修。開發機沒有 Docker，這類問題只有在正式主機首次執行才會浮現，
   所以部署腳本每一步的失敗訊息都必須自帶足夠的診斷資訊。
+
+## 2026-09-15 正式主機首次 E2E：前端網頁 404（`main.py` 靜態檔路徑算錯一層）
+
+- **失敗模式**：正式主機部署成功、`/api/health` 回報 `ai_available:true`，但瀏覽器打開
+  `https://10.97.15.58/` 得到 404；直接 curl `/`、`/index.html`、`/assets/` 皆為 404
+  且 `content-type: application/json`（FastAPI 自己的預設 404，代表根本沒註冊靜態路由）。
+- **根因**：`main.py` 用 `Path(__file__).resolve().parent / "static"` 找前端 build 結果，
+  只往上一層等於 `app/static`；但 Dockerfile 是從 `WORKDIR /app/backend` 執行
+  `COPY --from=frontend-build .../dist ./static`，實際落點是 `backend/static`（往上兩層
+  才對，`app/` 的「同層」而非「內層」）。這個候選路徑因此**永遠不存在**，`_STATIC_DIR`
+  必為 None，整個靜態檔服務區塊（含 `/`、`/{full_path}`、`/assets` 掛載）從未註冊，
+  只剩 `/api/*` 還在運作——這正是「/api/health 正常但網頁打不開」的原因。
+- **為什麼 Phase 6 本機 E2E 沒抓到**：本機測試是在 `backend/` 目錄下直接跑
+  `uvicorn app.main:app`，`backend/static` 只有 `.gitkeep`（空的），程式正確地跳過它，
+  改用第二個候選路徑 `frontend/dist`（該路徑算法用的是 `.parents[2]`，層數不同，本來就
+  是對的）。等於「production 專用的那個候選路徑」從沒被本機測試真正走過一次。
+- **預防規則**：
+  1. 修正為 `Path(__file__).resolve().parent.parent / "static"`，抽成獨立函式
+     `_find_static_dir(main_py_path)`，讓路徑計算脫離「有沒有真的檔案在那裡」單獨可測。
+  2. 補 3 個測試：用 `tempfile` 建一個「假的」容器目錄結構（`.../backend/app/main.py` +
+     `.../backend/static/index.html`）直接驗證函式算出正確路徑；本機 dev 情境（`frontend/dist`）
+     與「兩邊都沒建置」也各補一個案例。這種「多候選路徑、只有其中一個会在正式環境走到」
+     的邏輯，必須為**每一個候選路徑**各寫一個獨立測試，不能因為「至少一個分支測試綠燈」
+     就放心。
+- **通用教訓**：本機做的整合測試，如果剛好因為環境差異（本機沒有 Docker）而走了「備援」
+  分支，會讓「正式環境專用」的那條路徑完全沒被驗證過，卻誤以為 Phase 6 E2E 已經涵蓋了
+  「靜態檔服務」這件事。往後遇到「本機 / 正式環境用不同分支」的程式碼，要明確意識到
+  「哪一支分支只有正式環境會走到」，並針對那支分支寫不依賴真實 Docker 的單元測試。

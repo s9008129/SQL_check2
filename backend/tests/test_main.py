@@ -8,7 +8,68 @@ from pathlib import Path
 
 import pytest
 
-from app.main import _safe_static_path
+from app.main import _find_static_dir, _safe_static_path
+
+
+# ---------------------------------------------------------------------------
+# _find_static_dir: regression coverage for a real bug found on the first
+# production deploy. `/`, `/index.html`, and `/assets/*` all 404'd (while
+# `/api/*` worked fine) because the production candidate path was computed
+# one directory level too shallow, so it could never exist and the whole
+# static-serving block silently never activated. Builds a fake directory
+# tree mirroring the real container layout instead of relying on an actual
+# Docker build (unavailable on the dev machine) to catch this class of bug.
+# ---------------------------------------------------------------------------
+def test_find_static_dir_matches_dockerfile_production_layout():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        # Mirrors WORKDIR /app/backend in the Dockerfile: app/main.py lives
+        # at <backend>/app/main.py; `COPY ... ./static` lands at
+        # <backend>/static, a *sibling* of app/, not inside it.
+        backend_dir = root / "app" / "backend"
+        app_dir = backend_dir / "app"
+        static_dir = backend_dir / "static"
+        app_dir.mkdir(parents=True)
+        static_dir.mkdir(parents=True)
+        (static_dir / "index.html").write_text("<html>prod build</html>")
+        fake_main_py = app_dir / "main.py"
+
+        result = _find_static_dir(fake_main_py)
+
+        assert result == static_dir
+        assert (result / "index.html").is_file()
+
+
+def test_find_static_dir_falls_back_to_frontend_dist_for_local_dev():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        # Mirrors the repo layout for local Phase 6 integration testing:
+        # <repo>/backend/app/main.py and <repo>/frontend/dist/index.html,
+        # with backend/static left empty (just as it is in the real repo,
+        # populated only by a Docker build).
+        repo_dir = root / "SQL_check2"
+        backend_static = repo_dir / "backend" / "static"
+        app_dir = repo_dir / "backend" / "app"
+        frontend_dist = repo_dir / "frontend" / "dist"
+        backend_static.mkdir(parents=True)  # exists but empty -> must be skipped
+        app_dir.mkdir(parents=True)
+        frontend_dist.mkdir(parents=True)
+        (frontend_dist / "index.html").write_text("<html>local dev build</html>")
+        fake_main_py = app_dir / "main.py"
+
+        result = _find_static_dir(fake_main_py)
+
+        assert result == frontend_dist
+
+
+def test_find_static_dir_returns_none_when_nothing_built():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        app_dir = root / "backend" / "app"
+        app_dir.mkdir(parents=True)
+        fake_main_py = app_dir / "main.py"
+
+        assert _find_static_dir(fake_main_py) is None
 
 
 @pytest.fixture

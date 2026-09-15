@@ -22,16 +22,33 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="SQLCheck 2.0", docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(api_router, prefix="/api")
 
-# Two candidate locations for the built frontend: the production Docker
-# image copies `frontend/dist` to `backend/static` at build time; local
-# integration testing (Phase 6) instead points this at a sibling
-# `frontend/dist` produced by `npm run build` on the dev machine, so the
-# exact same FastAPI app can serve either without extra configuration.
-_CANDIDATE_STATIC_DIRS = [
-    Path(__file__).resolve().parent / "static",
-    Path(__file__).resolve().parents[2] / "frontend" / "dist",
-]
-_STATIC_DIR = next((d for d in _CANDIDATE_STATIC_DIRS if d.is_dir() and any(d.iterdir())), None)
+def _find_static_dir(main_py_path: Path) -> Path | None:
+    """Two candidate locations for the built frontend, given this module's
+    own `__file__`:
+
+    1. Production (Dockerfile): `COPY --from=frontend-build .../dist ./static`
+       runs from `WORKDIR /app/backend`, landing the build at `backend/static`
+       — a *sibling* of `app/` (this file's own parent), not inside it. So
+       resolving relative to this file requires going up **two** levels
+       (`app/main.py` -> `app/` -> `backend/`), not one. A one-level
+       `.parent / "static"` silently resolves to a directory that can never
+       exist (`app/static`) and this whole block never activates — the exact
+       bug that shipped to the first production deploy (confirmed live:
+       `/`, `/index.html`, `/assets/*` all 404'd while `/api/*` worked fine,
+       because FastAPI had no static routes registered at all).
+    2. Local Phase 6 integration testing (`uvicorn app.main:app` run from
+       `backend/`, frontend built separately via `npm run build`): a sibling
+       `frontend/dist` two levels above `backend/` itself.
+    """
+    backend_dir = main_py_path.resolve().parent.parent  # app/main.py -> app/ -> backend/
+    candidates = [
+        backend_dir / "static",
+        backend_dir.parent / "frontend" / "dist",
+    ]
+    return next((d for d in candidates if d.is_dir() and any(d.iterdir())), None)
+
+
+_STATIC_DIR = _find_static_dir(Path(__file__))
 
 
 def _safe_static_path(static_root: Path, requested_path: str) -> Path | None:

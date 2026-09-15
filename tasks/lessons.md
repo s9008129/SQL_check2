@@ -54,3 +54,23 @@
   可能直接吃掉 base path 的邊界案例）。
 - **通用教訓**：任何用 FastAPI/Starlette 的 `{param:path}` 或類似「吃掉整段路徑」的路由參數
   去組檔案系統路徑時，一律要先做 containment check，不能只檢查副檔名或 `is_file()`。
+
+## 2026-09-15 Phase 6 E2E（Playwright 實跑）發現的真實 UI 問題
+
+- **失敗模式**：`SqlCompare.tsx` 在「無法提供建議寫法」時，同時顯示固定文案
+  （`SUGGESTED_SQL_NOT_AVAILABLE_MESSAGE`）與 `ai.suggested_sql.reason`；當後端
+  是「伺服器端覆寫」情境（`candidate_allowed=false` 或 `_revalidate_suggested_sql`
+  安全複核未通過）時，`ai_service.py` 會把 `reason` 也設成同一句固定文案，導致
+  畫面上同一句話連續出現兩次。
+- **偵測訊號**：前端單元測試沒抓到，因為測試裡的 mock `reason` 都刻意寫成跟固定
+  文案「不同」的字串；只有實際啟動後端（含 fake_ollama）＋瀏覽器操作，餵一支會
+  觸發「建議寫法引用了原始查詢以外的資料表」這類安全複核失敗的 SQL，才會讓後端
+  真的把 `reason` 設成與固定文案相同的值，暴露這個重複顯示的問題。
+- **預防規則**：`SqlCompare.tsx` 加上 `reason !== SUGGESTED_SQL_NOT_AVAILABLE_MESSAGE`
+  的判斷，只有在後端提供「不同於固定文案」的額外原因時才多顯示一行；並在
+  `SqlCompare.test.tsx` 補上「reason 與固定文案完全相同時，畫面上只出現一次」
+  的回歸測試。
+- **通用教訓**：「前端元件測試」與「後端服務測試」各自獨立通過，不代表兩者組合
+  起來的真實資料流不會有問題——組合處的邊界案例（例如兩邊剛好用了同一句固定
+  文案）只有跑過真正的整合／E2E 才會現形。之後每個主要功能都應該至少跑一次
+  「真實前端 + 真實後端（可用假 Ollama）」的操作流程，不能只看個別測試綠燈。

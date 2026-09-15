@@ -6,16 +6,16 @@
 - 詳細計畫：C:\Users\ca0283\.claude\plans\must-use-rpd-best-use-lively-cupcake.md
 
 ## Checklist
-- [x] Phase 0 骨架（backend uv 專案、Dockerfile/compose/.env.example/.dockerignore/.gitignore/README）— frontend Vite 骨架併入 Phase 5（子代理進行中）
+- [x] Phase 0 骨架（backend uv 專案、frontend Vite 骨架、Dockerfile/compose/.env.example/.dockerignore/.gitignore/README）
 - [x] Phase 1 Parser + 規則引擎 + 改善優先指數 + 單元測試（73 項測試通過）
 - [x] Phase 2 附件擷取 + SQL 辨識 + fixtures（32 項測試通過，另修正 5 個邊界案例，見 lessons.md）
-- [~] Phase 3 AI service（masking、schema、守門、降級）+ fake_ollama — 子代理進行中（a273b6e5c0776c2e3）
-- [x] Phase 4 API + run.py + certgen（本機部分完成：certgen 5 項測試通過；api.py 等待 Phase 3 的 ai_service.py 落地後才能執行 test_api.py）
-- [~] Phase 5 前端元件、樣式、列印、響應 + vitest — 子代理進行中（a63977d51c92ef48d）
-- [ ] Phase 6 本機整合 E2E（Playwright 1366/1920）— 待 Phase 3+5 完成後執行
+- [x] Phase 3 AI service（masking、schema、守門、降級）+ fake_ollama（32 項測試通過；另補上核准計畫中「建議寫法需重新驗證」這項守門，子代理任務說明漏寫，已自行補上並測試）
+- [x] Phase 4 API + run.py + certgen（含自動化安全掃描抓到並修復的路徑穿越漏洞，6 項回歸測試）
+- [x] Phase 5 前端元件、樣式、列印、響應 + vitest（52 項測試通過，tsc/build 皆過）
+- [x] Phase 6 本機整合 E2E（Playwright，1366×768／1920×1080／480 窄螢幕）：後端服務真實前端 build + fake_ollama，實際跑過「貼上 SQL 檢核」「上傳 .sql 附件辨識」兩條路徑，過程中發現並修正一個真實 UI 重複文字 bug（見 lessons.md）
 - [x] Phase 7 deploy.ps1 / smoke-test.ps1 / README-deploy.md — 完成，PowerShell 語法驗證通過（0 errors x3），內容經覆核；端對端執行仍待正式主機驗證
 - [ ] Phase 8 硬化、lint、todo Results、lessons
-- [ ] Verify：uv run pytest、ruff、tsc、vitest、npm run build、E2E、PS 語法檢查
+- [x] Verify：`uv run pytest`（186 通過）、`uv run ruff check`（無錯誤）、`tsc --noEmit`（無錯誤）、`npm run test`（52 通過）、`npm run build`（成功）、Playwright E2E（三種解析度手動驅動通過）；PS 語法檢查（3 個腳本皆 0 錯誤）
 
 ## Risk & Rollback
 - 風險：中（新系統、部署腳本改動正式主機 Ollama 綁定與防火牆）。

@@ -1,0 +1,78 @@
+/* PRD §37 — print/PDF layout. Loaded unconditionally (see src/main.tsx);
+   every rule here is wrapped in @media print so it never affects on-screen
+   rendering, only window.print() output. Hides the sidebar/topbar/buttons/
+   upload controls and lays the report out for A4. */
+@media print {
+  body {
+    background: #fff;
+  }
+
+  .no-print,
+  .topbar,
+  .sidebar,
+  .footer-actions,
+  .upload-box,
+  .primary,
+  .clear {
+    display: none !important;
+  }
+
+  .layout {
+    display: block;
+    max-width: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .main {
+    width: 100%;
+  }
+
+  .card,
+  .metric {
+    box-shadow: none;
+    break-inside: avoid;
+  }
+
+  .summary {
+    grid-template-columns: repeat(5, 1fr);
+  }
+
+  .sql-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .sql-box {
+    background: #fff !important;
+    border: 1px solid #d0d7e2;
+  }
+
+  .sql-box .cm-editor,
+  .sql-box .cm-gutters,
+  .sql-box .cm-content,
+  .sql-box .cm-scroller {
+    background: #fff !important;
+    color: #111 !important;
+  }
+
+  .cm-diff-added {
+    background: rgba(34, 160, 107, 0.18) !important;
+  }
+  .cm-diff-removed {
+    background: rgba(209, 63, 71, 0.16) !important;
+  }
+
+  .sql-fallback,
+  .sql-fallback p,
+  .sql-fallback-reason {
+    color: #333 !important;
+  }
+
+  .hero {
+    margin-top: 0;
+  }
+
+  .estimate-ring::before {
+    box-shadow: inset 0 0 0 1px #d0d7e2;
+  }
+}

@@ -69,3 +69,42 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
 ## Working Notes（持續更新）
 - certgen.py 的 SAN 清單務必包含 127.0.0.1（loopback IP），Dockerfile HEALTHCHECK 以憑證釘選（cafile=/certs/sqlcheck.crt）方式驗證，不停用 TLS 驗證。
 - deploy.ps1 的 `Set-OllamaHostBinding` 用 `Get-Process -Name 'ollama*','ollama app'` 嘗試停止 Windows Ollama 行程；正式主機上 Ollama 系統匣程式的實際 process name 未經現場確認，若停止失敗腳本只會靜默略過（不阻斷部署），正式部署時請留意 Step 2 的輸出，必要時手動結束該行程。
+
+## 2026-09-16：修正「一律不給建議寫法」與「WHERE 死判」根因，新增 SQL 蒐集檔
+
+### 已完成
+- 修正 `sql_detect._trim_trailing_prose` 連續空行截斷附件 SQL 的 bug（真實案例：
+  LND_台糖馬稠後產業園區土地課稅情形.docx 被誤判 R002 BLOCK）。
+- R002「WHERE 查詢條件」改為看限制條件證據（`sql_parser._restriction_evidence`）：
+  JOIN ON 含常數、僅 JOIN 鍵值連接、子查詢／WITH 內有 WHERE，依 `rules.yaml`
+  `R002.restriction_verdicts` 判定，預設皆 PASS 並給白話說明。
+- `app.yaml` 的 `candidate_forbidden_complexity_flags` 移除 outer_join／
+  group_by_aggregate／distinct（原因：這三者涵蓋了幾乎所有真實業務查詢，導致
+  candidate_allowed 對使用者 6 份測試 SQL 全部為 false）；改由
+  `sql_parser.structural_signature` + `ai_service._revalidate_suggested_sql` 的
+  結構複核（JOIN 種類順序、GROUP BY、DISTINCT、彙總函數、ORDER BY、欄位數）把關。
+- `estimate_requires_candidate` 改為 false；`num_predict` 1024→3072、
+  `OLLAMA_TIMEOUT_SECONDS` 120→180；前端 `AI_TIMEOUT_MS` 150s→200s。
+- `masking.py` 新增「短 ASCII 常數（<=4 字元）不遮罩」規則，讓 AI 看得到
+  `'114%'`／`'55'`／`'H'` 這類代碼；新增 `literal_hints`（結構提示，不含值）；
+  新增 `deidentify_sql()`（供蒐集檔用，更嚴格）。
+- `ai_service.py` 決策 log 由 debug 提升為 info（gate／model／revalidation／
+  forbidden-phrase 皆可在正式主機 log 直接看到，不含 SQL 內容）；新增
+  `decline_code` 讓「不提供建議寫法」的原因具體化；新增 `done_reason=length`
+  截斷偵測（不重試，直接降級並記 log）。
+- 新增 `backend/app/services/sql_archive.py`：去識別化 SQL 蒐集檔（JSON Lines，
+  `data/sql_archive/*.jsonl`），只在 `include_ai=true` 時記錄，不存申請單號／
+  原始 SQL／附件檔名；`docker-compose.yml`／`Dockerfile`／`deploy.ps1`／
+  `.env.example`／`.gitignore` 同步更新，`deploy.ps1` Step 6 前新增寫入探測。
+- System prompt（`sql_review_zh_tw.txt`）新增「candidate_allowed 為 true 時的
+  預設行為」「改寫硬性規則」「等價改寫範例」「literal_hints／where_evidence
+  說明」。
+- 後端測試由 194 → 269 全數通過；`ruff check` 全過；前端 52 項測試全過、
+  `npm run build` 成功。
+
+### 待辦
+- 正式主機重新部署（`git pull` + `deploy.ps1`）並用使用者的 6 份真實檔案重新測試，
+  確認 log 能看到具體的 gate／revalidation 決策，且至少部分案例能拿到真正的
+  建議寫法（開發機用 fake_ollama 模擬，無法驗證 Gemma 4 本身是否會依照新
+  system prompt 指示給出改寫，需正式主機真實 Ollama 驗證）。
+- 確認 `./data` 掛載在正式主機可寫入（deploy.ps1 已加探測，但正式主機從未跑過）。

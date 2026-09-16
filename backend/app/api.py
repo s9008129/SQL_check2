@@ -21,7 +21,14 @@ from app.schemas import (
     HealthResponse,
     StatementSummary,
 )
-from app.services import ai_service, file_extract, improvement_score, rule_engine, sql_detect
+from app.services import (
+    ai_service,
+    file_extract,
+    improvement_score,
+    rule_engine,
+    sql_archive,
+    sql_detect,
+)
 from app.services.file_extract import AttachmentError
 from app.services.sql_parser import parse_sql_text
 from app.settings import get_settings
@@ -143,6 +150,27 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
         )
         for s in parsed.statements
     ]
+
+    if payload.include_ai:
+        # 2026-09-16: de-identified SQL archive (see sql_archive.py's module
+        # docstring for the PRD §6.3 exception this represents). Only
+        # recorded on the frontend's second/final /api/analyze call
+        # (include_ai=true) so each submission is archived once, with its
+        # final AI outcome included — not once per keystroke/attempt.
+        # Fully isolated: never allowed to affect this response.
+        try:
+            sql_archive.record_analysis(
+                parsed=parsed,
+                compliance=compliance,
+                rule_rows=rule_rows,
+                findings=findings,
+                improvement=improvement,
+                ai_result=ai_result,
+                cost=payload.cost,
+                settings=settings,
+            )
+        except Exception as exc:  # noqa: BLE001 - archive must never affect the response
+            _log_exception_type_only("sql_archive.record_analysis raised unexpectedly", exc)
 
     return AnalyzeResponse(
         application_no=payload.application_no,

@@ -17,7 +17,13 @@ type Phase = "idle" | "loading-initial" | "loading-ai" | "done" | "error";
 
 // Client-side watchdog on the second (include_ai:true) /api/analyze call —
 // if Ollama/Gemma is slow or stuck, degrade locally instead of hanging.
-const AI_TIMEOUT_MS = 150_000;
+// 2026-09-16: raised from 150s to 200s alongside backend's
+// OLLAMA_TIMEOUT_SECONDS going from 120s to 180s (app.yaml's num_predict
+// was tripled to 3072, so the longest real replies take longer) — this
+// must stay comfortably above the backend's own timeout, or the frontend
+// would give up and show "unavailable" before the backend's second retry
+// attempt even had a chance to finish.
+const AI_TIMEOUT_MS = 200_000;
 
 function degradedAi(): AiResult {
   return {

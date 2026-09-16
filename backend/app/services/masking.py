@@ -42,35 +42,63 @@ mentioning the 6-digit rule, which is inconsistent with the rule as stated —
 100000 has 6 digits. We follow the explicit, testable "6+ digits" rule
 rather than invent an undocumented special case for one literal value; see
 this file's tests for the exact boundary.)
+
+Short-ASCII string exception (2026-09-16, `app.yaml: masking.
+keep_short_ascii_literal_max_len`): a string literal is left unmasked when
+its content (excluding quotes) is at most that many characters AND contains
+only ASCII letters/digits/`%`/`_`. This covers Oracle-style short codes and
+LIKE patterns such as `'H'`, `'55'`, `'55R'`, `'114%'` — real production SQL
+observed in testing routinely uses these, and masking them away left the AI
+completely unable to reason about (or rewrite) year-prefix `LIKE` patterns
+into range comparisons, which was one confirmed cause of the model always
+declining to propose a rewrite. Anything containing a non-ASCII character
+(e.g. a Chinese name) or longer than the threshold (dates, ID numbers,
+address codes — anything that could plausibly be personal data) is still
+always masked, regardless of this exception.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 import sqlglot
 from sqlglot.tokens import Tokenizer, TokenType
 
 DIALECT = "oracle"
 MIN_MASKED_DIGITS = 6
+DEFAULT_KEEP_SHORT_ASCII_MAX_LEN = 4
 
 _STR_PREFIX = "STR"
 _NUM_PREFIX = "NUM"
 
 _tokenizer = Tokenizer(dialect=DIALECT)
 
+# A literal's content is left unmasked only if it matches this in full
+# (ASCII letters/digits/percent/underscore only — no spaces, no punctuation,
+# no non-ASCII characters).
+_KEEP_SHORT_ASCII_RE = re.compile(r"^[A-Za-z0-9%_]*$")
+
 
 @dataclass
 class MaskResult:
     masked_sql: str
     reverse_map: dict[str, str] = field(default_factory=dict)
+    # placeholder -> {"kind": "string"|"number", "length": int,
+    # "wildcard": "none"|"leading"|"trailing"|"both", "shape": "digits"|
+    # "alnum"|"text"} for every placeholder actually created (never for a
+    # literal kept unmasked). Never contains the literal's actual value —
+    # sent to the AI (unlike reverse_map) as extra structural context so it
+    # can still reason about e.g. "this is a leading-wildcard LIKE pattern"
+    # without seeing the real text.
+    literal_hints: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
 # Public entrypoints
 # ---------------------------------------------------------------------------
-def mask_sql(raw_sql: str) -> MaskResult:
+def mask_sql(raw_sql: str, keep_short_ascii_max_len: int = DEFAULT_KEEP_SHORT_ASCII_MAX_LEN) -> MaskResult:
     """Mask string/large-numeric literals in `raw_sql`, returning the masked
     text plus a placeholder -> original-text reverse mapping. Never raises —
     worst case (unparseable input, or any unexpected error while walking the
@@ -82,12 +110,12 @@ def mask_sql(raw_sql: str) -> MaskResult:
     try:
         sqlglot.parse_one(raw_sql, read=DIALECT)
     except Exception:
-        return _mask_fallback_regex(raw_sql)
+        return _mask_fallback_regex(raw_sql, keep_short_ascii_max_len)
 
     try:
-        return _mask_via_tokens(raw_sql)
+        return _mask_via_tokens(raw_sql, keep_short_ascii_max_len)
     except Exception:
-        return _mask_fallback_regex(raw_sql)
+        return _mask_fallback_regex(raw_sql, keep_short_ascii_max_len)
 
 
 def unmask_sql(text: str | None, reverse_map: dict[str, str]) -> str | None:
@@ -105,24 +133,67 @@ def unmask_sql(text: str | None, reverse_map: dict[str, str]) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Literal hint classification (shared by both masking paths)
+# ---------------------------------------------------------------------------
+def _literal_shape(inner: str) -> str:
+    if inner.isdigit():
+        return "digits"
+    if inner.isalnum():
+        return "alnum"
+    return "text"
+
+
+def _literal_wildcard(inner: str) -> str:
+    leading = inner.startswith("%") or inner.startswith("_")
+    trailing = inner.endswith("%") or inner.endswith("_")
+    if leading and trailing:
+        return "both"
+    if leading:
+        return "leading"
+    if trailing:
+        return "trailing"
+    return "none"
+
+
+def _literal_hint(kind: str, inner: str) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "length": len(inner),
+        "wildcard": _literal_wildcard(inner) if kind == "string" else "none",
+        "shape": _literal_shape(inner),
+    }
+
+
+def _is_keepable_short_ascii(inner: str, max_len: int) -> bool:
+    return len(inner) <= max_len and bool(_KEEP_SHORT_ASCII_RE.fullmatch(inner))
+
+
+# ---------------------------------------------------------------------------
 # Primary path: token-position masking on the original text
 # ---------------------------------------------------------------------------
 def _digit_count(text: str) -> int:
     return sum(ch.isdigit() for ch in text)
 
 
-def _mask_via_tokens(raw_sql: str) -> MaskResult:
+def _mask_via_tokens(raw_sql: str, keep_short_ascii_max_len: int) -> MaskResult:
     tokens = _tokenizer.tokenize(raw_sql)
     out: list[str] = []
     reverse_map: dict[str, str] = {}
+    literal_hints: dict[str, dict[str, Any]] = {}
     last = 0
     str_n = 0
     num_n = 0
 
     for i, tok in enumerate(tokens):
         if tok.token_type == TokenType.STRING:
+            # tok.text is the string's content with quotes already stripped
+            # (confirmed empirically) — exactly what the keep-short-ASCII
+            # check and the hint classifier need.
+            if _is_keepable_short_ascii(tok.text, keep_short_ascii_max_len):
+                continue  # left as-is in the output; no placeholder, no counter increment
             str_n += 1
             placeholder = f":{_STR_PREFIX}_{str_n:03d}"
+            literal_hints[placeholder] = _literal_hint("string", tok.text)
         elif tok.token_type == TokenType.NUMBER:
             if _digit_count(tok.text) < MIN_MASKED_DIGITS:
                 continue
@@ -131,6 +202,7 @@ def _mask_via_tokens(raw_sql: str) -> MaskResult:
                 continue  # positional bind variable (e.g. :123456), not a literal
             num_n += 1
             placeholder = f":{_NUM_PREFIX}_{num_n:03d}"
+            literal_hints[placeholder] = _literal_hint("number", tok.text)
         else:
             continue
 
@@ -141,7 +213,7 @@ def _mask_via_tokens(raw_sql: str) -> MaskResult:
         last = tok.end + 1
 
     out.append(raw_sql[last:])
-    return MaskResult(masked_sql="".join(out), reverse_map=reverse_map)
+    return MaskResult(masked_sql="".join(out), reverse_map=reverse_map, literal_hints=literal_hints)
 
 
 # ---------------------------------------------------------------------------
@@ -160,14 +232,20 @@ _NUMERIC_LITERAL_RE = re.compile(r"(?<![:\w.])\d{6,}(?:\.\d+)?(?!\w)")
 _PLACEHOLDER_RE = re.compile(r":(?:STR|NUM)_\d+")
 
 
-def _mask_fallback_regex(raw_sql: str) -> MaskResult:
+def _mask_fallback_regex(raw_sql: str, keep_short_ascii_max_len: int) -> MaskResult:
     reverse_map: dict[str, str] = {}
+    literal_hints: dict[str, dict[str, Any]] = {}
     counters = {"str": 0, "num": 0}
 
     def _sub_str(m: re.Match[str]) -> str:
+        full = m.group(0)
+        inner = full[1:-1] if len(full) >= 2 else ""
+        if _is_keepable_short_ascii(inner, keep_short_ascii_max_len):
+            return full
         counters["str"] += 1
         placeholder = f":{_STR_PREFIX}_{counters['str']:03d}"
-        reverse_map[placeholder] = m.group(0)
+        reverse_map[placeholder] = full
+        literal_hints[placeholder] = _literal_hint("string", inner)
         return placeholder
 
     # Mask strings first so any digits *inside* a string literal are removed
@@ -179,7 +257,52 @@ def _mask_fallback_regex(raw_sql: str) -> MaskResult:
         counters["num"] += 1
         placeholder = f":{_NUM_PREFIX}_{counters['num']:03d}"
         reverse_map[placeholder] = m.group(0)
+        literal_hints[placeholder] = _literal_hint("number", m.group(0))
         return placeholder
 
     masked = _NUMERIC_LITERAL_RE.sub(_sub_num, masked)
-    return MaskResult(masked_sql=masked, reverse_map=reverse_map)
+    return MaskResult(masked_sql=masked, reverse_map=reverse_map, literal_hints=literal_hints)
+
+
+# ---------------------------------------------------------------------------
+# De-identification for the SQL archive (backend/app/services/sql_archive.py)
+# — stricter than `mask_sql`: also strips non-hint comments (free-text
+# comments routinely contain applicant names/notes) and sweeps the residual
+# text for ID-number/email/long-digit shapes as defense in depth. Never
+# returns the reverse map (the archive must never be able to recover
+# original values) and never raises — any unexpected failure degrades to a
+# fixed marker that leaks nothing, rather than ever falling back to raw SQL.
+# ---------------------------------------------------------------------------
+_BLOCK_COMMENT_NON_HINT_RE = re.compile(r"/\*(?!\+)(?:[^*]|\*(?!/))*\*/", re.DOTALL)
+_LINE_COMMENT_NON_HINT_RE = re.compile(r"--(?!\+)[^\n]*")
+_TW_ID_LIKE_RE = re.compile(r"\b[A-Za-z][12]\d{8}\b")
+_EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+_LONG_DIGIT_RUN_RE = re.compile(r"(?<!\w)\d{8,}(?!\w)")
+
+DEIDENTIFY_FAILED_MARKER = "[DEIDENTIFY_FAILED]"
+
+
+def _strip_non_hint_comments(text: str) -> str:
+    text = _BLOCK_COMMENT_NON_HINT_RE.sub(" ", text)
+    text = _LINE_COMMENT_NON_HINT_RE.sub("", text)
+    return text
+
+
+def deidentify_sql(raw_sql: str) -> str:
+    """Best-effort, defense-in-depth de-identification for the SQL archive.
+    Not used on the AI request path (that stays on `mask_sql`, which must
+    preserve as much structure as possible for the model to reason about);
+    this is deliberately more aggressive since its output may be read by a
+    human or another AI process later, offline, with no re-validation step.
+    """
+    if not raw_sql or not raw_sql.strip():
+        return raw_sql
+    try:
+        masked = mask_sql(raw_sql).masked_sql
+        stripped = _strip_non_hint_comments(masked)
+        stripped = _TW_ID_LIKE_RE.sub("[REDACTED]", stripped)
+        stripped = _EMAIL_RE.sub("[REDACTED]", stripped)
+        stripped = _LONG_DIGIT_RUN_RE.sub("[REDACTED]", stripped)
+        return stripped
+    except Exception:
+        return DEIDENTIFY_FAILED_MARKER

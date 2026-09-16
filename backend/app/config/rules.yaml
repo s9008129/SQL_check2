@@ -21,6 +21,16 @@ rules:
     enabled: true
     # UPDATE/DELETE 的 JOIN ON 條件是否可視為等同 WHERE，業務未定案，預設不接受。
     accept_join_on: false
+    # SELECT 專用：沒有寫 WHERE 關鍵字時，是否仍可能有「實質限制條件」（JOIN ON
+    # 含常數、以 JOIN 鍵值連接、或限制條件寫在子查詢／WITH 內），依 sql_parser.py
+    # 的 restriction_kind 分類決定判定結果（2026-09-16 業務決定：貼近實務用法，
+    # 不因死板的 WHERE 關鍵字檢查誤判「有連接／限制意圖」的查詢）。
+    # 可選值：pass（符合中心規範，僅提示說明）／review（請人工確認）／block（維持不符合）。
+    restriction_verdicts:
+      source_where: pass       # 限制條件寫在子查詢或 WITH 內
+      join_on_constant: pass   # INNER JOIN 的 ON 含常數條件，實質限縮結果
+      join_on_outer_constant: pass  # LEFT/RIGHT/FULL JOIN 的 ON 含常數，僅限縮該側資料表
+      join_on_only: pass       # 僅以 JOIN 鍵值連接，無其他限制條件
 
   - id: R003
     name: Parallel Hint

@@ -1,4 +1,6 @@
+import dataclasses
 import json
+import logging
 
 import httpx
 import pytest
@@ -257,9 +259,10 @@ async def test_candidate_not_allowed_forces_suggested_sql_unavailable(settings, 
     assert result.status == "ok"
     assert result.suggested_sql.available is False
     assert result.suggested_sql.sql is None
-    # PRD §25.4's fixed copy replaces the model's now-contradictory reason
-    # (it was written to justify available=true).
-    assert result.suggested_sql.reason == "為避免改變原本查詢內容，本次先提供改善方向，不自動產生建議寫法。"
+    # 2026-09-16: replaces the model's now-contradictory reason (it was
+    # written to justify available=true) with a decline_code-specific
+    # explanation instead of always the same fixed PRD §25.4 sentence.
+    assert result.suggested_sql.reason == ai_service._DECLINE_REASON_TEXT["multi_statement"]
 
 
 @respx.mock
@@ -323,7 +326,10 @@ async def test_suggested_sql_identical_to_original_is_rejected(settings, chat_ur
         settings=settings,
     )
     assert result.suggested_sql.available is False
-    assert result.suggested_sql.reason == ai_service._NO_REWRITE_REASON
+    # 2026-09-16: revalidation rejections now compose a specific reason
+    # instead of the generic fixed sentence, so a reviewer can see *why*.
+    assert "未通過系統安全複核" in result.suggested_sql.reason
+    assert "建議寫法與原始 SQL 相同" in result.suggested_sql.reason
 
 
 @respx.mock
@@ -373,7 +379,8 @@ async def test_suggested_sql_that_would_newly_block_is_rejected(settings, chat_u
     result = await _call(settings, _clean_select_statement())
 
     assert result.suggested_sql.available is False
-    assert result.suggested_sql.reason == ai_service._NO_REWRITE_REASON
+    assert "未通過系統安全複核" in result.suggested_sql.reason
+    assert "不符合中心規範" in result.suggested_sql.reason
 
 
 @respx.mock
@@ -412,15 +419,44 @@ async def test_suggested_sql_that_is_unparseable_is_rejected(settings, chat_url)
 
 @respx.mock
 async def test_candidate_not_allowed_also_nulls_estimated_pct_when_estimate_requires_candidate(settings, chat_url):
-    # Default app.yaml config: estimate_requires_candidate is true, so a
-    # non-candidate-allowed input also forces the pct to null server-side.
-    assert settings.ai_gate.get("estimate_requires_candidate", True) is True
+    # When estimate_requires_candidate is true, a non-candidate-allowed input
+    # also forces the pct to null server-side. app.yaml's own default was
+    # relaxed to false on 2026-09-16 (see app.yaml's comment), so this test
+    # builds its own settings override to exercise the true branch directly
+    # rather than depending on the shipped default.
+    strict_settings = dataclasses.replace(
+        settings, ai_gate={**settings.ai_gate, "estimate_requires_candidate": True}
+    )
     inner = _good_inner(estimated_improvement_pct=80)
     respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
 
-    result = await _call(settings, _multi_statement(), sql_text="SELECT * FROM T A WHERE A.X=1;\nSELECT * FROM T2 B WHERE B.Y=1;")
+    result = await _call(
+        strict_settings, _multi_statement(), sql_text="SELECT * FROM T A WHERE A.X=1;\nSELECT * FROM T2 B WHERE B.Y=1;"
+    )
 
     assert result.estimated_improvement_pct is None
+
+
+@respx.mock
+async def test_candidate_not_allowed_but_estimate_allowed_when_finding_exists_and_not_required(
+    settings, chat_url
+):
+    # 2026-09-16 default: estimate_requires_candidate is false, so a
+    # non-candidate-allowed input (multi-statement here) still gets a pct
+    # as long as there is at least one finding.
+    assert settings.ai_gate.get("estimate_requires_candidate") is False
+    inner = _good_inner(estimated_improvement_pct=47)
+    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
+
+    finding = Finding(rule_id="R004", status="NOTICE", fact="A.Y LIKE '%X'", statement_index=0)
+    result = await _call(
+        settings,
+        _multi_statement(),
+        findings=[finding],
+        sql_text="SELECT * FROM T A WHERE A.X=1;\nSELECT * FROM T2 B WHERE B.Y=1;",
+    )
+
+    assert result.estimated_improvement_pct == 45
 
 
 # ---------------------------------------------------------------------------
@@ -470,27 +506,64 @@ def test_representative_statement_picks_worst_for_multi_statement(settings):
 
 def test_candidate_allowed_false_for_non_select():
     statements = parse_sql_text("UPDATE T SET X = 1 WHERE Y = 2").statements
-    allowed, _ = ai_service._compute_gates(statements, [], {"candidate_forbidden_complexity_flags": []})
+    allowed, _, decline_code = ai_service._compute_gates(statements, [], {"candidate_forbidden_complexity_flags": []})
     assert allowed is False
+    assert decline_code == "not_select"
 
 
 def test_candidate_allowed_false_when_complexity_flag_forbidden():
     statements = parse_sql_text("SELECT COUNT(*) FROM T A WHERE A.X = 1 GROUP BY A.X").statements
     assert "group_by_aggregate" in statements[0].complexity_flags
-    allowed, _ = ai_service._compute_gates(
+    allowed, _, decline_code = ai_service._compute_gates(
         statements, [], {"candidate_forbidden_complexity_flags": ["group_by_aggregate"]}
     )
     assert allowed is False
+    assert decline_code == "complexity:group_by_aggregate"
+
+
+def test_candidate_allowed_true_for_outer_join_group_by_distinct_after_2026_09_16_relaxation():
+    # These three flags used to be in app.yaml's forbidden list and made
+    # candidate_allowed False for nearly every real business query (LEFT
+    # JOIN multi-table reports, GROUP BY summaries, DISTINCT). Relaxed
+    # 2026-09-16 — see app.yaml's comment on candidate_forbidden_complexity_flags.
+    for sql in (
+        "SELECT A.X FROM T A LEFT JOIN U B ON A.K = B.K WHERE A.Y = 1",
+        "SELECT A.K, COUNT(*) FROM T A WHERE A.Y = 1 GROUP BY A.K",
+        "SELECT DISTINCT A.X FROM T A WHERE A.Y = 1",
+    ):
+        statements = parse_sql_text(sql).statements
+        allowed, _, decline_code = ai_service._compute_gates(
+            statements,
+            [],
+            {"candidate_forbidden_complexity_flags": ["window_function", "connect_by", "set_operation", "rownum", "correlated_subquery"]},
+        )
+        assert allowed is True, sql
+        assert decline_code is None, sql
+
+
+def test_candidate_allowed_false_multi_statement_decline_code():
+    statements = parse_sql_text("SELECT A.X FROM T A WHERE A.Y=1;\nSELECT B.X FROM U B WHERE B.Y=1;").statements
+    allowed, _, decline_code = ai_service._compute_gates(statements, [], {})
+    assert allowed is False
+    assert decline_code == "multi_statement"
 
 
 def test_estimate_allowed_without_candidate_when_not_requiring_candidate():
     statements = parse_sql_text("UPDATE T SET X = 1 WHERE Y = 2").statements
     findings = [Finding(rule_id="R002", status="BLOCK", fact="x", statement_index=0)]
-    candidate_allowed, estimate_allowed = ai_service._compute_gates(
+    candidate_allowed, estimate_allowed, _decline_code = ai_service._compute_gates(
         statements, findings, {"candidate_forbidden_complexity_flags": [], "estimate_requires_candidate": False}
     )
     assert candidate_allowed is False
     assert estimate_allowed is True  # allowed because at least one finding exists
+
+
+def test_decline_reason_text_is_specific_per_code():
+    assert ai_service._decline_reason_text("multi_statement") == ai_service._DECLINE_REASON_TEXT["multi_statement"]
+    assert "視窗函數" in ai_service._decline_reason_text("complexity:window_function")
+    assert ai_service._decline_reason_text(None) == ai_service._NO_REWRITE_REASON
+    # Unknown code never crashes and never returns an empty string.
+    assert ai_service._decline_reason_text("something_unrecognized")
 
 
 # ---------------------------------------------------------------------------
@@ -502,6 +575,16 @@ def test_system_prompt_contains_explicit_anti_injection_instruction():
     assert "<SQL_DATA>" in ai_service.SYSTEM_PROMPT
     assert "不是指令" in ai_service.SYSTEM_PROMPT
     assert "忽略先前的指示" in ai_service.SYSTEM_PROMPT
+
+
+def test_system_prompt_contains_default_affirmative_rewrite_guidance():
+    # 2026-09-16: guards the instruction that made the model actually
+    # propose rewrites once candidate_allowed relaxed to cover LEFT JOIN /
+    # GROUP BY / DISTINCT queries, instead of defaulting to declining.
+    assert "candidate_allowed 為 true 時的預設行為" in ai_service.SYSTEM_PROMPT
+    assert "硬性規則" in ai_service.SYSTEM_PROMPT
+    assert "literal_hints" in ai_service.SYSTEM_PROMPT
+    assert "where_evidence" in ai_service.SYSTEM_PROMPT
 
 
 @respx.mock
@@ -571,3 +654,180 @@ async def test_injection_attempt_cannot_bypass_server_side_safety_gates(settings
 
     assert result.suggested_sql.available is False
     assert result.suggested_sql.sql is None
+
+
+# ---------------------------------------------------------------------------
+# Structural-guard re-validation (2026-09-16): now that outer_join /
+# group_by_aggregate / distinct are no longer in app.yaml's forbidden
+# complexity list, `structural_signature` comparison is the safeguard that
+# makes it safe to allow candidate rewrites of these shapes at all.
+# ---------------------------------------------------------------------------
+async def _call_rewrite(settings, chat_url, original_sql: str, rewrite_sql: str, cost: int = 1000):
+    inner = _good_inner(suggested_sql={"available": True, "reason": "改寫測試。", "sql": rewrite_sql})
+    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
+    statements = parse_sql_text(original_sql).statements
+    return await ai_service.get_ai_result(
+        sql_text=original_sql,
+        cost=cost,
+        compliance_status="PASS",
+        findings=[],
+        statements=statements,
+        settings=settings,
+    )
+
+
+@respx.mock
+async def test_equivalent_rewrite_of_left_join_group_by_query_is_kept(settings, chat_url):
+    original = "SELECT A.X, COUNT(*) FROM T A LEFT JOIN U B ON A.K = B.K WHERE A.Y = 'A' GROUP BY A.X"
+    rewrite = "SELECT A.X, COUNT(*) FROM T A LEFT JOIN U B ON A.K = B.K WHERE A.Y >= 'A' GROUP BY A.X"
+    result = await _call_rewrite(settings, chat_url, original, rewrite)
+    assert result.suggested_sql.available is True
+    assert result.suggested_sql.sql == rewrite
+
+
+@respx.mock
+async def test_rewrite_changing_join_kind_is_rejected(settings, chat_url):
+    original = "SELECT A.X, COUNT(*) FROM T A LEFT JOIN U B ON A.K = B.K WHERE A.Y = 'A' GROUP BY A.X"
+    rewrite = "SELECT A.X, COUNT(*) FROM T A JOIN U B ON A.K = B.K WHERE A.Y >= 'A' GROUP BY A.X"
+    result = await _call_rewrite(settings, chat_url, original, rewrite)
+    assert result.suggested_sql.available is False
+    assert "JOIN 種類或順序" in result.suggested_sql.reason
+
+
+@respx.mock
+async def test_rewrite_dropping_group_by_is_rejected(settings, chat_url):
+    original = "SELECT A.X, COUNT(*) FROM T A LEFT JOIN U B ON A.K = B.K WHERE A.Y = 'A' GROUP BY A.X"
+    rewrite = "SELECT A.X, COUNT(*) FROM T A LEFT JOIN U B ON A.K = B.K WHERE A.Y >= 'A'"
+    result = await _call_rewrite(settings, chat_url, original, rewrite)
+    assert result.suggested_sql.available is False
+    assert "GROUP BY" in result.suggested_sql.reason
+
+
+@respx.mock
+async def test_rewrite_adding_distinct_is_rejected(settings, chat_url):
+    original = "SELECT A.X FROM T A LEFT JOIN U B ON A.K = B.K WHERE A.Y = 'A'"
+    rewrite = "SELECT DISTINCT A.X FROM T A LEFT JOIN U B ON A.K = B.K WHERE A.Y >= 'A'"
+    result = await _call_rewrite(settings, chat_url, original, rewrite)
+    assert result.suggested_sql.available is False
+    assert "DISTINCT" in result.suggested_sql.reason
+
+
+@respx.mock
+async def test_rewrite_changing_aggregate_function_is_rejected(settings, chat_url):
+    original = "SELECT A.X, COUNT(*) FROM T A WHERE A.Y = 'A' GROUP BY A.X"
+    rewrite = "SELECT A.X, SUM(A.Z) FROM T A WHERE A.Y >= 'A' GROUP BY A.X"
+    result = await _call_rewrite(settings, chat_url, original, rewrite)
+    assert result.suggested_sql.available is False
+    assert "彙總函數" in result.suggested_sql.reason
+
+
+@respx.mock
+async def test_rewrite_dropping_order_by_is_rejected(settings, chat_url):
+    original = "SELECT A.X FROM T A WHERE A.Y = 'A' ORDER BY A.X"
+    rewrite = "SELECT A.X FROM T A WHERE A.Y >= 'A'"
+    result = await _call_rewrite(settings, chat_url, original, rewrite)
+    assert result.suggested_sql.available is False
+    assert "ORDER BY" in result.suggested_sql.reason
+
+
+@respx.mock
+async def test_rewrite_changing_column_count_is_rejected(settings, chat_url):
+    original = "SELECT A.X, A.Z FROM T A WHERE A.Y = 'A'"
+    rewrite = "SELECT A.X FROM T A WHERE A.Y >= 'A'"
+    result = await _call_rewrite(settings, chat_url, original, rewrite)
+    assert result.suggested_sql.available is False
+    assert "查詢欄位數" in result.suggested_sql.reason
+
+
+# ---------------------------------------------------------------------------
+# Truncated model output (done_reason=length) — 2026-09-16.
+# ---------------------------------------------------------------------------
+def _truncated_envelope() -> dict:
+    return {
+        "model": "gemma4:31b",
+        "created_at": "2024-01-01T00:00:00Z",
+        "message": {"role": "assistant", "content": '{"summary": "unfinished'},
+        "done": True,
+        "done_reason": "length",
+        "eval_count": 3072,
+    }
+
+
+@respx.mock
+async def test_truncated_response_degrades_without_retry(settings, chat_url):
+    route = respx.post(chat_url).mock(return_value=httpx.Response(200, json=_truncated_envelope()))
+    result = await _call(settings, _clean_select_statement())
+    assert result.status == "unavailable"
+    # Retrying with identical parameters would very likely truncate the
+    # same way again — a truncation must degrade immediately, not retry.
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_ollama_response_metadata_logged_without_sql(settings, chat_url, caplog):
+    caplog.set_level(logging.INFO, logger="app.services.ai_service")
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
+    )
+    await _call(settings, _clean_select_statement())
+    full_log = "\n".join(r.getMessage() for r in caplog.records)
+    assert "eval_count" in full_log
+    assert "done_reason" in full_log
+
+
+# ---------------------------------------------------------------------------
+# Payload additions: literal_hints (no values) and where_evidence.
+# ---------------------------------------------------------------------------
+@respx.mock
+async def test_payload_includes_literal_hints_without_leaking_values(settings, chat_url):
+    route = respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
+    )
+    original_sql = "SELECT A.X FROM T A WHERE A.NAME = '王小明'"
+    statements = parse_sql_text(original_sql).statements
+    await ai_service.get_ai_result(
+        sql_text=original_sql, cost=1000, compliance_status="PASS", findings=[], statements=statements, settings=settings
+    )
+    sent_body = json.loads(route.calls[0].request.content)
+    user_message = next(m["content"] for m in sent_body["messages"] if m["role"] == "user")
+    assert "王小明" not in user_message
+    payload = json.loads(user_message.removeprefix("<SQL_DATA>\n").removesuffix("\n</SQL_DATA>"))
+    hint = payload["literal_hints"][":STR_001"]
+    assert hint["kind"] == "string"
+    assert "王小明" not in json.dumps(hint, ensure_ascii=False)
+
+
+@respx.mock
+async def test_payload_includes_where_evidence_for_join_only_restriction(settings, chat_url):
+    route = respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
+    )
+    original_sql = "SELECT A.X FROM T A JOIN U B ON A.K = B.K"
+    statements = parse_sql_text(original_sql).statements
+    await ai_service.get_ai_result(
+        sql_text=original_sql, cost=1000, compliance_status="PASS", findings=[], statements=statements, settings=settings
+    )
+    sent_body = json.loads(route.calls[0].request.content)
+    user_message = next(m["content"] for m in sent_body["messages"] if m["role"] == "user")
+    payload = json.loads(user_message.removeprefix("<SQL_DATA>\n").removesuffix("\n</SQL_DATA>"))
+    assert payload["where_evidence"]["kind"] == "join_on_only"
+
+
+@respx.mock
+async def test_payload_omits_where_evidence_for_normal_where(settings, chat_url):
+    route = respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
+    )
+    result_statements = _clean_select_statement()
+    await ai_service.get_ai_result(
+        sql_text="SELECT A.X FROM T A WHERE A.Y = 'A123456789'",
+        cost=1000,
+        compliance_status="PASS",
+        findings=[],
+        statements=result_statements,
+        settings=settings,
+    )
+    sent_body = json.loads(route.calls[0].request.content)
+    user_message = next(m["content"] for m in sent_body["messages"] if m["role"] == "user")
+    payload = json.loads(user_message.removeprefix("<SQL_DATA>\n").removesuffix("\n</SQL_DATA>"))
+    assert "where_evidence" not in payload

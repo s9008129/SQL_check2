@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 import sqlglot
 from sqlglot import exp
@@ -88,6 +89,17 @@ class ParsedStatement:
     function_findings: list[str] = field(default_factory=list)
     hint_evidence: str | None = None
     complexity_flags: set[str] = field(default_factory=set)
+    # Populated only for stype=="SELECT" when where_applicable is True and
+    # has_where is False — best-effort classification of *why* R002 might
+    # still not need to BLOCK even though there is no top-level WHERE (see
+    # `_restriction_evidence`). None means "genuinely no restriction evidence
+    # found" (comma join, cartesian join, single unfiltered table, ...),
+    # which must still BLOCK. Deliberately does NOT change `has_where`'s
+    # existing True/False/None contract — has_where=None (parse-status-
+    # dependent "unknown") must keep producing REVIEW regardless of this
+    # field.
+    restriction_kind: str | None = None
+    restriction_detail: str = ""
 
 
 @dataclass
@@ -259,6 +271,8 @@ def _build_statement(index: int, raw_sql: str) -> ParsedStatement:
     where_applicable, has_where = _where_check(tree, stype)
     stmt.where_applicable = where_applicable
     stmt.has_where = has_where
+    if stype == "SELECT" and where_applicable and has_where is False:
+        stmt.restriction_kind, stmt.restriction_detail = _restriction_evidence(tree)
 
     scope_roots = _condition_scope_roots(tree, stype)
     stmt.or_findings = _find_or(scope_roots)
@@ -361,6 +375,141 @@ def _where_check(tree: exp.Expression, stype: str) -> tuple[bool, bool | None]:
             return _where_check(source, "SELECT")
         return False, None  # INSERT ... VALUES — WHERE concept does not apply
     return False, None  # MERGE / UNKNOWN — not evaluated by R002
+
+
+# ---------------------------------------------------------------------------
+# R002 restriction evidence beyond a literal top-level WHERE (real-world
+# usage: a JOIN's ON condition, or a subquery/CTE the FROM clause reads from,
+# can already limit the result set even though the outer SELECT itself has
+# no WHERE keyword). SELECT-only by design (PRD's stated R002 scope);
+# UPDATE/DELETE/INSERT keep relying solely on `has_where` — this is
+# advisory/explanatory only and never turns a genuine BLOCK into a PASS on
+# its own; `rule_engine.py`'s `rules.yaml`-driven `restriction_verdicts`
+# decides the actual status per kind.
+#
+# Priority order when evidence exists (most to least confident):
+#   where > source_where > join_on_constant > join_on_outer_constant
+#   > join_on_only > None (no evidence at all — must still BLOCK).
+#
+# Deliberately does NOT attempt to recognize bind variables/placeholders as
+# "constants" in a JOIN ON — only `exp.Literal` (string/number/bool/null)
+# is checked. This is a conservative subset (real production SQL observed
+# so far uses literal constants in ON, e.g. `T.DATA_YR='114'`), not a claim
+# that every possible constant shape is covered.
+# ---------------------------------------------------------------------------
+def _cte_where_map(tree: exp.Expression) -> dict[str, bool]:
+    """Alias (upper) -> whether that top-level CTE's own SELECT already has
+    restriction evidence. Best-effort, one level only (a CTE referencing
+    another CTE is not resolved transitively)."""
+    result: dict[str, bool] = {}
+    # NOTE: sqlglot 30.18 stores the WITH clause under args key "with_"
+    # (trailing underscore, same quirk as "from_" documented above in
+    # `_select_has_real_from` — `select.args.get("with")` silently returns
+    # None). Confirmed empirically.
+    with_ = tree.args.get("with_")
+    if with_ is None:
+        return result
+    for cte in getattr(with_, "expressions", None) or []:
+        alias = (cte.alias_or_name or "").upper()
+        inner = cte.this
+        if alias and isinstance(inner, exp.Select):
+            kind, _ = _branch_restriction(inner, {})
+            result[alias] = kind is not None
+    return result
+
+
+def _source_restriction(select: exp.Select, cte_map: dict[str, bool]) -> tuple[str | None, str]:
+    from_ = select.args.get("from_")
+    if from_ is None:
+        return None, ""
+    direct = from_.this
+    if isinstance(direct, exp.Subquery) and isinstance(direct.this, exp.Select):
+        inner_kind, _ = _branch_restriction(direct.this, cte_map)
+        if inner_kind is not None:
+            alias = direct.alias_or_name or "子查詢"
+            return "source_where", f"限制條件位於子查詢 {alias} 內"
+        return None, ""
+    if isinstance(direct, exp.Table) and direct.name:
+        name = direct.name.upper()
+        if cte_map.get(name):
+            return "source_where", f"限制條件位於 CTE {name} 內"
+    return None, ""
+
+
+def _join_on_has_literal(on: exp.Expression) -> bool:
+    return next(on.find_all(exp.Literal), None) is not None
+
+
+def _join_restriction(select: exp.Select) -> tuple[str | None, str]:
+    joins = select.args.get("joins") or []
+    has_any_on = False
+    has_inner_constant = False
+    has_outer_constant = False
+
+    for join in joins:
+        on = join.args.get("on")
+        using = join.args.get("using")
+        if on is None and not using:
+            continue  # cartesian/comma join with no ON/USING at all
+        has_any_on = True
+        side = str(join.args.get("side") or "").upper()
+        if on is not None and _join_on_has_literal(on):
+            if side in ("LEFT", "RIGHT", "FULL"):
+                has_outer_constant = True
+            else:
+                has_inner_constant = True
+
+    if has_inner_constant:
+        return "join_on_constant", "限制條件位於 JOIN ON（INNER JOIN 含常數條件）"
+    if has_outer_constant:
+        return "join_on_outer_constant", "限制條件位於 JOIN ON，但屬於外部連接（LEFT/RIGHT/FULL JOIN）"
+    if has_any_on:
+        return "join_on_only", "以 JOIN ON 條件連接資料表（僅鍵值對應）"
+    return None, ""
+
+
+def _branch_restriction(select: exp.Select, cte_map: dict[str, bool]) -> tuple[str | None, str]:
+    if _own_where(select):
+        return "where", ""
+    kind, detail = _source_restriction(select, cte_map)
+    if kind:
+        return kind, detail
+    return _join_restriction(select)
+
+
+_RESTRICTION_KIND_ORDER = [
+    "where",
+    "source_where",
+    "join_on_constant",
+    "join_on_outer_constant",
+    "join_on_only",
+]
+
+
+def _restriction_evidence_impl(tree: exp.Expression) -> tuple[str | None, str]:
+    cte_map = _cte_where_map(tree)
+    branches = [b for b in _flatten_set_op(tree) if isinstance(b, exp.Select)]
+    applicable = [b for b in branches if _select_has_real_from(b)]
+    if not applicable:
+        return None, ""
+    kinds = [_branch_restriction(b, cte_map) for b in applicable]
+    if any(k is None for k, _ in kinds):
+        # At least one UNION branch has no evidence at all -> the overall
+        # statement must still BLOCK (mirrors `_where_check`'s "all branches
+        # must have their own WHERE" semantics).
+        return None, ""
+    # Report the least-confident evidence found across branches, not the
+    # best one, so the reviewer never sees a stronger claim than warranted.
+    return max(kinds, key=lambda kd: _RESTRICTION_KIND_ORDER.index(kd[0]))
+
+
+def _restriction_evidence(tree: exp.Expression) -> tuple[str | None, str]:
+    """Never raises — any unexpected AST shape degrades to "no evidence"
+    (None), which is the conservative/safe outcome (R002 still BLOCKs)."""
+    try:
+        return _restriction_evidence_impl(tree)
+    except Exception:
+        return None, ""
 
 
 # ---------------------------------------------------------------------------
@@ -556,3 +705,68 @@ def _complexity_flags(tree: exp.Expression, stype: str) -> set[str]:
                 break
 
     return flags
+
+
+# ---------------------------------------------------------------------------
+# Structural signature (2026-09-16, ai_service.py's `_revalidate_suggested_sql`):
+# a fingerprint of a SELECT's shape used to make sure the AI's proposed
+# rewrite has not silently changed join semantics, grouping, distinctness, or
+# column count — this is what makes it safe to allow candidate rewrites for
+# LEFT JOIN / GROUP BY / DISTINCT queries (previously blocked outright by
+# app.yaml's `candidate_forbidden_complexity_flags`). Any unexpected AST
+# shape degrades to `{}`; callers must treat two empty signatures as
+# "cannot verify" (reject), never as "equal".
+# ---------------------------------------------------------------------------
+def structural_signature(tree: exp.Expression) -> dict[str, Any]:
+    try:
+        return _structural_signature_impl(tree)
+    except Exception:
+        return {}
+
+
+def _structural_signature_impl(tree: exp.Expression) -> dict[str, Any]:
+    branches = [b for b in _flatten_set_op(tree) if isinstance(b, exp.Select)]
+    if not branches:
+        return {}
+
+    select_count = 0
+    distinct = False
+    group_by_count = 0
+    having = False
+    order_by = False
+    agg_funcs: list[str] = []
+    # Source order matters here (unlike a plain "which flags are present"
+    # set): reordering an outer join relative to other joins can change
+    # query results, so the rewrite must preserve both the join kinds AND
+    # their sequence, not just the same multiset of kinds.
+    join_sides: list[str] = []
+
+    for branch in branches:
+        select_count += len(branch.expressions)
+        if branch.args.get("distinct"):
+            distinct = True
+        group = branch.args.get("group")
+        if group is not None:
+            group_by_count += len(group.expressions)
+        if branch.args.get("having") is not None:
+            having = True
+        if branch.args.get("order") is not None:
+            order_by = True
+        for item in branch.expressions:
+            for f in item.find_all(exp.Func):
+                if isinstance(f, getattr(exp, "AggFunc", ())) or type(f).__name__.upper() in _AGG_FUNC_NAMES:
+                    agg_funcs.append(type(f).__name__.upper())
+        for join in branch.args.get("joins") or []:
+            side = str(join.args.get("side") or "").upper()
+            kind = str(join.args.get("kind") or "").upper()
+            join_sides.append(side or kind or "JOIN")
+
+    return {
+        "select_count": select_count,
+        "distinct": distinct,
+        "group_by_count": group_by_count,
+        "having": having,
+        "order_by": order_by,
+        "agg_funcs": sorted(agg_funcs),
+        "join_sides": join_sides,
+    }

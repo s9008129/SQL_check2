@@ -38,6 +38,13 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
 @dataclass(frozen=True)
 class UploadSettings:
     max_file_mb: int
@@ -68,6 +75,17 @@ class OllamaSettings:
 
 
 @dataclass(frozen=True)
+class MaskingSettings:
+    keep_short_ascii_literal_max_len: int
+
+
+@dataclass(frozen=True)
+class ArchiveSettings:
+    enabled: bool
+    dir: Path
+
+
+@dataclass(frozen=True)
 class Settings:
     app_name: str
     app_title: str
@@ -75,6 +93,8 @@ class Settings:
     ollama: OllamaSettings
     ai_gate: dict[str, Any]
     ai_guard: dict[str, Any]
+    masking: MaskingSettings
+    archive: ArchiveSettings
     rules_config: dict[str, Any]
     important_tables_config: dict[str, Any]
     prompts_dir: Path = PROMPTS_DIR
@@ -89,6 +109,8 @@ def get_settings() -> Settings:
     app_section = app_cfg.get("app", {})
     upload_section = app_cfg.get("upload", {})
     ollama_section = app_cfg.get("ollama", {})
+    masking_section = app_cfg.get("masking", {})
+    archive_section = app_cfg.get("archive", {})
 
     upload = UploadSettings(
         max_file_mb=int(upload_section.get("max_file_mb", 10)),
@@ -123,6 +145,23 @@ def get_settings() -> Settings:
         max_retries_on_invalid_json=int(ollama_section.get("max_retries_on_invalid_json", 1)),
     )
 
+    masking = MaskingSettings(
+        keep_short_ascii_literal_max_len=int(masking_section.get("keep_short_ascii_literal_max_len", 4)),
+    )
+
+    archive = ArchiveSettings(
+        enabled=_env_bool(
+            archive_section.get("enabled_env", "SQLCHECK_ARCHIVE_ENABLED"),
+            bool(archive_section.get("enabled", True)),
+        ),
+        dir=Path(
+            os.environ.get(
+                archive_section.get("dir_env", "SQLCHECK_ARCHIVE_DIR"),
+                archive_section.get("dir_default", "/data/sql_archive"),
+            )
+        ),
+    )
+
     return Settings(
         app_name=app_section.get("name", "SQLCheck 2.0"),
         app_title=app_section.get("title", "SQL 效能檢核"),
@@ -130,6 +169,8 @@ def get_settings() -> Settings:
         ollama=ollama,
         ai_gate=app_cfg.get("ai_gate", {}),
         ai_guard=app_cfg.get("ai_guard", {}),
+        masking=masking,
+        archive=archive,
         rules_config=rules_cfg,
         important_tables_config=tables_cfg,
     )

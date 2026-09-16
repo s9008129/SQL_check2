@@ -1,4 +1,4 @@
-from app.services.sql_parser import parse_sql_text
+from app.services.sql_parser import parse_sql_text, structural_signature
 
 
 def _one(sql: str):
@@ -60,6 +60,63 @@ def test_join_on_condition_populates_scope_not_where():
     s = _one("SELECT * FROM T A JOIN T2 B ON A.ID = B.ID")
     assert s.where_applicable is True
     assert s.has_where is False
+
+
+# ---------------------------------------------------------------------------
+# R002 restriction evidence beyond a literal WHERE (real-world usage: JOIN
+# ON conditions or a subquery/CTE source can already limit the result set).
+# ---------------------------------------------------------------------------
+def test_restriction_kind_none_when_where_present():
+    s = _one("SELECT * FROM T A WHERE A.X = 1")
+    assert s.restriction_kind is None
+
+
+def test_restriction_kind_inner_join_on_constant():
+    s = _one("SELECT A.X FROM T A JOIN U B ON A.K = B.K AND B.YR = '114'")
+    assert s.has_where is False
+    assert s.restriction_kind == "join_on_constant"
+
+
+def test_restriction_kind_left_join_on_constant_is_outer_only():
+    s = _one("SELECT A.X FROM T A LEFT JOIN U B ON A.K = B.K AND B.YR = '114'")
+    assert s.restriction_kind == "join_on_outer_constant"
+
+
+def test_restriction_kind_join_key_equality_only():
+    s = _one("SELECT A.X FROM T A JOIN U B ON A.K = B.K")
+    assert s.restriction_kind == "join_on_only"
+
+
+def test_restriction_kind_left_join_key_equality_only():
+    s = _one("SELECT A.X FROM T A LEFT JOIN U B ON A.K = B.K")
+    assert s.restriction_kind == "join_on_only"
+
+
+def test_restriction_kind_none_for_comma_join_with_no_condition():
+    s = _one("SELECT A.X FROM T A, U B")
+    assert s.restriction_kind is None
+
+
+def test_restriction_kind_none_for_single_unfiltered_table():
+    s = _one("SELECT X FROM T")
+    assert s.restriction_kind is None
+
+
+def test_restriction_kind_source_where_for_inline_view():
+    s = _one("SELECT V.K FROM (SELECT K FROM T WHERE Y = 1) V")
+    assert s.has_where is False
+    assert s.restriction_kind == "source_where"
+
+
+def test_restriction_kind_source_where_for_cte():
+    s = _one("WITH V AS (SELECT K FROM T WHERE Y = 1) SELECT V.K FROM V")
+    assert s.has_where is False
+    assert s.restriction_kind == "source_where"
+
+
+def test_restriction_kind_none_when_union_branch_has_no_evidence_at_all():
+    s = _one("SELECT X FROM T A WHERE A.Y = 1 UNION SELECT X FROM U B")
+    assert s.restriction_kind is None
 
 
 # ---------------------------------------------------------------------------
@@ -363,3 +420,47 @@ def test_parse_failure_still_detects_hint_and_cost_relevant_tables():
     s = result.statements[0]
     assert s.parse_status == "failed"
     assert s.hint_evidence is not None
+
+
+# ---------------------------------------------------------------------------
+# structural_signature (used by ai_service.py to re-validate candidate
+# rewrites of LEFT JOIN / GROUP BY / DISTINCT queries).
+# ---------------------------------------------------------------------------
+def _sig(sql: str) -> dict:
+    return structural_signature(_one(sql).tree)
+
+
+def test_structural_signature_join_order_matters():
+    a = _sig("SELECT A.X FROM T A LEFT JOIN U B ON A.K=B.K JOIN V C ON A.K=C.K")
+    b = _sig("SELECT A.X FROM T A JOIN V C ON A.K=C.K LEFT JOIN U B ON A.K=B.K")
+    assert a["join_sides"] == ["LEFT", "JOIN"]
+    assert b["join_sides"] == ["JOIN", "LEFT"]
+    assert a != b
+
+
+def test_structural_signature_detects_group_by_change():
+    with_group = _sig("SELECT A.K, COUNT(*) FROM T A GROUP BY A.K")
+    without_group = _sig("SELECT A.K, COUNT(*) FROM T A")
+    assert with_group["group_by_count"] == 1
+    assert without_group["group_by_count"] == 0
+
+
+def test_structural_signature_detects_distinct_change():
+    assert _sig("SELECT DISTINCT A.X FROM T A")["distinct"] is True
+    assert _sig("SELECT A.X FROM T A")["distinct"] is False
+
+
+def test_structural_signature_detects_aggregate_function_change():
+    sig = _sig("SELECT SUM(A.X) FROM T A")
+    assert "SUM" in sig["agg_funcs"]
+    assert "SUM" not in _sig("SELECT A.X FROM T A")["agg_funcs"]
+
+
+def test_structural_signature_select_count_matches_column_count():
+    assert _sig("SELECT A.X, A.Y FROM T A")["select_count"] == 2
+    assert _sig("SELECT A.X FROM T A")["select_count"] == 1
+
+
+def test_structural_signature_non_select_tree_is_empty():
+    stmt = _one("UPDATE T SET X = 1 WHERE Y = 2")
+    assert structural_signature(stmt.tree) == {}

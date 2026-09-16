@@ -26,29 +26,47 @@ ollama:
   model_env: OLLAMA_MODEL
   model_default: "gemma4:31b"
   timeout_seconds_env: OLLAMA_TIMEOUT_SECONDS
-  timeout_seconds_default: 120
+  # 2026-09-16 由 120 調高為 180：31B 模型在 num_predict 提高到 3072 後，最長回覆
+  # （中文 summary + 3 條建議 + SQL 改寫）實測需要更多時間，120 秒偏緊。
+  timeout_seconds_default: 180
   num_ctx_env: OLLAMA_NUM_CTX
   num_ctx_default: 8192
-  num_predict: 1024
+  # 2026-09-16 由 1024 調高為 3072：實測（正式主機 E2E）確認 1024 對「中文
+  # summary + 最多 3 條建議（各含 explanation/example）+ 完整 SQL 改寫」經常不夠，
+  # 導致輸出被截斷成無效 JSON、觸發重試、最終降級為「暫時無法使用」。若正式主機
+  # VRAM 吃緊導致回應變慢，可視情況調低，但務必同時檢查 log 中的
+  # `done_reason=length` 是否又開始出現。
+  num_predict: 3072
   temperature: 0.2
   keep_alive: "30m"
   max_retries_on_invalid_json: 1
 
 # 建議寫法 / 預估改善幅度守門條件（PRD §17.4、§25）。
 ai_gate:
-  # candidate_allowed：只有單一段、SELECT、parser 成功解析、且不含任何複雜度旗標時才允許 AI 給建議寫法。
+  # candidate_allowed：單一段、SELECT、parser 成功解析、且不含下列任何複雜度旗標時
+  # 才允許 AI 給建議寫法。
+  #
+  # 2026-09-16 業務決定移除 outer_join / group_by_aggregate / distinct：
+  # 開發機重現使用者昨天用 6 份真實稅務 SQL 測試的結果，發現這 3 個旗標涵蓋了
+  # 「幾乎所有日常業務查詢」（LEFT JOIN 多表關聯、GROUP BY 彙總、DISTINCT），
+  # 導致 candidate_allowed 對每一份測試 SQL 都是 false——AI 從未被允許改寫，
+  # 使用者看到的「一律不提供建議寫法」其實是這個守門造成的，不是模型過度保守。
+  # 放寬後改由 ai_service.py 的 `structural_signature` 比對（相同 JOIN 種類與
+  # 順序、GROUP BY、DISTINCT、彙總函數、欄位數）在建議寫法送回前做結構複核，
+  # 取代「乾脆整類禁止」的做法。仍保留禁止的 4 類（集合運算、視窗函數、
+  # CONNECT BY、相關子查詢、ROWNUM）是因為這些寫法的等價改寫語意風險較高，
+  # 目前的結構複核不足以驗證。
   candidate_forbidden_complexity_flags:
-    - outer_join
-    - group_by_aggregate
-    - distinct
     - window_function
     - connect_by
     - set_operation
     - rownum
     - correlated_subquery
-  # estimate_improvement_allowed 預設等於 candidate_allowed；若要放寬（允許在無建議寫法時仍給預估
-  # 百分比）可將此改為 false，但仍需至少一項 finding 才會給值，見 ai_service.py。
-  estimate_requires_candidate: true
+  # 2026-09-16 由 true 改為 false：預估改善幅度不應該完全綁在「有沒有建議寫法」
+  # 上——只要有任何規則發現（findings），AI 仍可依經驗法則給一個粗略的改善空間
+  # 預估（見 ai_service._compute_gates 的 false 分支：candidate_allowed 或至少
+  # 一項 finding 即允許）。
+  estimate_requires_candidate: false
 
 # AI 回覆的後處理守門清單（PRD §17.4、§22、§23、§56）。
 ai_guard:
@@ -87,3 +105,26 @@ ai_guard:
     数据: 資料
     候選SQL: 建議寫法
     候選 SQL: 建議寫法
+
+# 送給 AI 前的 SQL 遮罩規則（backend/app/services/masking.py，PRD §17.4、§20）。
+masking:
+  # 2026-09-16 新增：字串常數只有在「長度 <= 此值，且僅含 ASCII 英數字／% ／ _」
+  # 時才保留原文不遮罩（例如 '114%'、'2'、'H'、'55R' 這類稅務代碼／年度／萬用字元）。
+  # 背景：實測發現舊規則把所有字串常數一律遮罩，導致 AI 看不到
+  # `APPR_DATE LIKE '114%'` 的實際內容，完全無法判斷「這是年度前綴」還是別的
+  # 東西，也就無法給出「LIKE 前綴 → 日期範圍」這類最常見的等價改寫建議——這正是
+  # 使用者昨天測試中，AI 給了建議但沒給改寫的那一筆案例的根因之一。任何非 ASCII
+  # 字元（例如中文姓名）或超過此長度的字串（日期、身分證、地址代碼等可能個資）
+  # 一律仍遮罩，不受此設定影響。
+  keep_short_ascii_literal_max_len: 4
+
+# 去識別化 SQL 蒐集檔（backend/app/services/sql_archive.py）。
+# 2026-09-16 使用者決定新增：蒐集所有送出檢核的 SQL（去識別化後），以利後續
+# 交給 AI 做離線分析、統計、優化參考。這是 PRD §6.3「不得永久儲存原始 SQL／
+# 申請單號／COST」的明確例外——蒐集檔只存去識別化後的 SQL 與規則結果，不存
+# 申請單號、原始 SQL 常數值、附件檔名或任何使用者/IP 資訊。
+archive:
+  enabled: true
+  enabled_env: SQLCHECK_ARCHIVE_ENABLED
+  dir_env: SQLCHECK_ARCHIVE_DIR
+  dir_default: "/data/sql_archive"

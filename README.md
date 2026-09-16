@@ -72,7 +72,12 @@ Dockerfile／docker-compose.yml 在開發機只能做語法層級的靜態檢查
 ## 重要設計原則（不得在後續修改中破壞）
 
 1. 單一 Docker Container；Ollama 不進容器。
-2. 不建立任何應用資料庫，不保存任何案件資料（申請單號／SQL／COST／AI 建議一律不落地）。
+2. 不建立任何應用資料庫，不保存任何「可識別」的案件資料：申請單號、原始 SQL、附件檔名
+   一律不落地。**例外（2026-09-16，使用者明確決定）**：`backend/app/services/
+   sql_archive.py` 會把去識別化後的 SQL、規則結果、AI 建議寫入 `data/sql_archive/*.jsonl`
+   （申請單號／原始常數值一律不寫入），供後續離線分析用途；見
+   `deploy/README-deploy.md`「去識別化 SQL 蒐集檔」一節，可用 `SQLCHECK_ARCHIVE_ENABLED=false`
+   完全停用。
 3. 不連財政資訊中心 Oracle，不取得 Execution Plan／Index／實際資料。
 4. 規則引擎（`backend/app/services/rule_engine.py`）是唯一決定「符合／不符合中心規範」的地方；
    AI 只負責白話解釋、建議、建議寫法、預估效能改善幅度。

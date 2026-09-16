@@ -61,6 +61,7 @@ $script:DeployRoot     = $PSScriptRoot
 $script:RepoRoot        = Split-Path -Parent $PSScriptRoot
 $script:LogsDir         = Join-Path $script:DeployRoot 'logs'
 $script:CertsDir        = Join-Path $script:RepoRoot 'certs'
+$script:DataDir         = Join-Path $script:RepoRoot 'data'
 $script:EnvFile         = Join-Path $script:RepoRoot '.env'
 $script:EnvExampleFile  = Join-Path $script:RepoRoot '.env.example'
 $script:BuiltThisRun    = $false   # set by Step 5 when it has to build the image itself
@@ -514,8 +515,38 @@ function Wait-ForHealthCheck {
 # ============================================================================
 # Step 6/6: Build & start
 # ============================================================================
+function Test-DataDirWritable {
+    # SQL 蒐集檔 (app/services/sql_archive.py) 掛載為讀寫 volume (docker-compose.yml
+    # 的 ./data:/data)。這個掛載能不能寫入只有在正式主機才驗證得到 (同一類問題見
+    # tasks/lessons.md「正式主機首次建置：Step 5 憑證產生失敗」)，寫入失敗時
+    # sql_archive.py 會靜默略過 (絕不影響 /api/analyze 回應)，代表使用者可能過了
+    # 好幾週才發現蒐集檔是空的。這裡在啟動前就先探測，提早示警。
+    if (-not (Test-Path $script:DataDir)) {
+        try {
+            New-Item -ItemType Directory -Path $script:DataDir -Force | Out-Null
+        } catch {
+            return $false
+        }
+    }
+    $probePath = Join-Path $script:DataDir '.write-probe'
+    try {
+        Set-Content -Path $probePath -Value 'ok' -Encoding utf8 -ErrorAction Stop
+        Remove-Item -Path $probePath -Force -ErrorAction SilentlyContinue
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function Invoke-BuildAndStart {
     Write-Step 'Step 6/6: 建置映像檔並啟動容器'
+
+    Write-Info '檢查 SQL 蒐集檔資料夾是否可寫入 (.\data)...'
+    if (Test-DataDirWritable) {
+        Write-Ok "SQL 蒐集檔資料夾可正常寫入 ($script:DataDir)。"
+    } else {
+        Write-Warn "資料夾 $script:DataDir 無法寫入。SQL 蒐集檔功能 (去識別化 SQL 統計用途) 將會靜默失效，但不影響網頁與 SQL 檢核本身。請確認資料夾權限，或於 .env 將 SQLCHECK_ARCHIVE_ENABLED 設為 false 明確停用。"
+    }
 
     if (-not $SkipBuild) {
         if ($script:BuiltThisRun) {

@@ -18,6 +18,11 @@ services:
       # TLS cert/key produced by `python -m app.certgen` (deploy.ps1 runs
       # this on first deploy). Read-only: the app never writes here.
       - ./certs:/certs:ro
+      # De-identified SQL archive (app/services/sql_archive.py, 2026-09-16).
+      # Read-write, unlike ./certs above: the app appends JSON Lines files
+      # here on every include_ai=true /api/analyze call. Survives container
+      # rebuilds/removal since it lives on the host at ./data/sql_archive.
+      - ./data:/data
     env_file:
       - .env
     extra_hosts:

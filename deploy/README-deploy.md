@@ -22,6 +22,7 @@ HTTPS 443（自簽憑證），不使用 Nginx 或任何反向代理，不建立�
 7. [回復（Rollback）與關閉（Down）](#回復rollback與關閉down)
 8. [單獨執行 smoke-test.ps1](#單獨執行-smoke-testps1)
 9. [記錄檔](#記錄檔)
+10. [去識別化 SQL 蒐集檔](#去識別化-sql-蒐集檔)
 
 ---
 
@@ -270,3 +271,39 @@ cd deploy
 每次執行 `deploy.ps1`（含 `-CheckOnly`／`-Rollback`／`-Down`）都會透過 `Start-Transcript`
 把完整輸出寫到 `deploy\logs\deploy-<時間戳記>.log`（資料夾不存在會自動建立；此目錄已列在
 `.gitignore`，不會被提交進版本控制）。回報問題或請他人協助排除時，請一併附上對應的記錄檔。
+
+---
+
+## 去識別化 SQL 蒐集檔
+
+2026-09-16 新增：系統會把每一次「有勾選 AI 建議」（`include_ai=true`）的檢核結果，以
+去識別化後的內容寫入 JSON Lines 檔案，存放在主機的 `D:\dev\SQL_check2\data\sql_archive\`
+（容器內對應 `/data/sql_archive`，`docker-compose.yml` 已掛載為讀寫 volume），每月一個檔
+案，例如 `sql_archive-2026-09.jsonl`。目的是日後可以把大量 SQL 交給 AI 或人工做離線分析、
+統計、找出常見的改善模式。
+
+**不會**寫入的內容：申請單號、原始 SQL 常數值（字串、日期、身分證字號等一律先去識別
+化）、附件檔名、任何使用者或 IP 資訊——見 `backend/app/services/sql_archive.py` 與
+`backend/app/services/masking.py` 的 `deidentify_sql()`。
+
+每一行是一筆獨立的 JSON 物件，主要欄位：`sql_deidentified`（去識別化後的 SQL）、
+`sql_fingerprint`（SQL 結構指紋，可用來找出重複送出的相似查詢）、`compliance`／`rules`／
+`findings`（規則引擎結果）、`improvement`（改善優先指數）、`ai`（AI 摘要建議標題、
+影響程度、是否提供建議寫法、預估改善幅度——同樣去識別化）。
+
+**如何停用**：在 `.env` 設定 `SQLCHECK_ARCHIVE_ENABLED=false` 後重新 `docker compose up -d`
+即可完全停止寫入（不需要重新建置映像檔）。
+
+**如何讀取分析**（PowerShell 範例，逐行印出 SQL 指紋與改善指數）：
+
+```powershell
+Get-Content .\data\sql_archive\sql_archive-2026-09.jsonl | ForEach-Object {
+    $r = $_ | ConvertFrom-Json
+    "$($r.sql_fingerprint)  score=$($r.improvement.score)  compliance=$($r.compliance.status)"
+}
+```
+
+或用 Python／pandas：`pandas.read_json("data/sql_archive/sql_archive-2026-09.jsonl", lines=True)`。
+
+部署腳本 Step 6/6 會先探測 `.\data` 資料夾是否可寫入；若無法寫入只會印出警告，不會中止
+部署（蒐集檔功能失效不影響網頁與 SQL 檢核本身）。

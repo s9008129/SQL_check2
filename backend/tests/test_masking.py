@@ -1,4 +1,4 @@
-from app.services.masking import mask_sql, unmask_sql
+from app.services.masking import DEIDENTIFY_FAILED_MARKER, deidentify_sql, mask_sql, unmask_sql
 
 
 # ---------------------------------------------------------------------------
@@ -127,3 +127,113 @@ def test_empty_string_input_does_not_crash():
     result = mask_sql("")
     assert result.masked_sql == ""
     assert result.reverse_map == {}
+
+
+# ---------------------------------------------------------------------------
+# Short-ASCII literal exception (2026-09-16): short codes/wildcard patterns
+# stay visible to the AI so it can actually reason about LIKE-prefix /
+# year-code style conditions, while anything longer or non-ASCII (real
+# personal data) is still always masked.
+# ---------------------------------------------------------------------------
+def test_short_ascii_literal_kept_unmasked():
+    result = mask_sql("SELECT * FROM T A WHERE A.TAX_CD = '55' AND A.HSN_CD = 'H'")
+    assert "'55'" in result.masked_sql
+    assert "'H'" in result.masked_sql
+    assert result.reverse_map == {}
+    assert result.literal_hints == {}
+
+
+def test_short_ascii_like_pattern_with_wildcard_kept_unmasked():
+    result = mask_sql("SELECT * FROM T A WHERE A.APPR_DATE LIKE '114%'")
+    assert "'114%'" in result.masked_sql
+
+
+def test_literal_longer_than_threshold_still_masked():
+    # 5 chars > default keep threshold of 4.
+    result = mask_sql("SELECT * FROM T A WHERE A.CODE = '55R12'")
+    assert "'55R12'" not in result.masked_sql
+    assert ":STR_001" in result.masked_sql
+
+
+def test_non_ascii_short_literal_still_masked():
+    # 3 Chinese characters, well under the length threshold, but not ASCII
+    # -> must still be masked (this is exactly the personal-name case).
+    result = mask_sql("SELECT * FROM T A WHERE A.NAME = '王小明'")
+    assert "王小明" not in result.masked_sql
+    assert ":STR_001" in result.masked_sql
+
+
+def test_keep_threshold_is_configurable():
+    result = mask_sql("SELECT * FROM T A WHERE A.CODE = '12345'", keep_short_ascii_max_len=5)
+    assert "'12345'" in result.masked_sql
+
+
+def test_masked_literal_produces_literal_hint_without_value():
+    result = mask_sql("SELECT * FROM T A WHERE A.APPR_DATE LIKE '1140101X%'")
+    hint = result.literal_hints[":STR_001"]
+    assert hint["kind"] == "string"
+    assert hint["wildcard"] == "trailing"
+    assert "1140101" not in str(hint)
+
+
+def test_number_literal_produces_literal_hint():
+    result = mask_sql("SELECT * FROM T A WHERE A.AMOUNT = 1234567")
+    hint = result.literal_hints[":NUM_001"]
+    assert hint["kind"] == "number"
+    assert hint["shape"] == "digits"
+
+
+def test_placeholder_numbering_has_no_gap_from_kept_short_literals():
+    # A kept short literal must not consume a placeholder number — the next
+    # masked literal must still be :STR_001, not :STR_002.
+    result = mask_sql("SELECT * FROM T A WHERE A.HSN_CD = 'H' AND A.NAME = '王小明'")
+    assert ":STR_001" in result.masked_sql
+    assert ":STR_002" not in result.masked_sql
+    assert result.reverse_map[":STR_001"] == "'王小明'"
+
+
+# ---------------------------------------------------------------------------
+# deidentify_sql (SQL archive only — stricter than mask_sql)
+# ---------------------------------------------------------------------------
+def test_deidentify_masks_literals_like_mask_sql():
+    text = deidentify_sql("SELECT * FROM T A WHERE A.NAME = '王小明' AND A.ID = 'A123456789'")
+    assert "王小明" not in text
+    assert "A123456789" not in text
+
+
+def test_deidentify_strips_non_hint_line_comment():
+    text = deidentify_sql("SELECT * FROM T A WHERE A.X = 1 --承辦人：王小明\n")
+    assert "承辦人" not in text
+    assert "王小明" not in text
+
+
+def test_deidentify_strips_non_hint_block_comment():
+    text = deidentify_sql("SELECT /* 備註：測試資料 */ * FROM T A WHERE A.X = 1")
+    assert "備註" not in text
+
+
+def test_deidentify_keeps_parallel_hint_comment():
+    text = deidentify_sql("SELECT /*+ PARALLEL(A,4) */ * FROM T A WHERE A.X = 1")
+    assert "PARALLEL" in text
+
+
+def test_deidentify_redacts_bare_id_like_token_outside_quotes():
+    text = deidentify_sql("SELECT A123456789 FROM T A WHERE A.X = 1")
+    assert "A123456789" not in text
+    assert "[REDACTED]" in text
+
+
+def test_deidentify_never_raises_on_garbage_input():
+    text = deidentify_sql("not valid sql at all !!! ### \x00\x01")
+    assert isinstance(text, str)
+
+
+def test_deidentify_empty_input():
+    assert deidentify_sql("") == ""
+
+
+def test_deidentify_failed_marker_leaks_nothing_when_reachable():
+    # Documents the contract: on any unexpected failure, deidentify_sql must
+    # degrade to a fixed marker, never to the raw input.
+    assert "SELECT" not in DEIDENTIFY_FAILED_MARKER
+    assert "FROM" not in DEIDENTIFY_FAILED_MARKER

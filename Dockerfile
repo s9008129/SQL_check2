@@ -21,7 +21,9 @@ COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONIOENCODING=utf-8 \
+    PYTHONUTF8=1
 
 WORKDIR /app/backend
 
@@ -36,8 +38,8 @@ RUN uv sync --frozen --no-dev
 COPY --from=frontend-build /src/frontend/dist ./static
 
 RUN useradd --create-home --uid 10001 sqlcheck \
-    && mkdir -p /certs \
-    && chown -R sqlcheck:sqlcheck /app /certs
+    && mkdir -p /certs /data/sql_archive \
+    && chown -R sqlcheck:sqlcheck /app /certs /data
 USER sqlcheck
 
 ENV PATH="/app/backend/.venv/bin:${PATH}"

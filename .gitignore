@@ -26,6 +26,10 @@ npm-debug.log*
 certs/*
 !certs/.gitkeep
 
+# --- De-identified SQL archive (production-only; see app/services/sql_archive.py) ---
+data/*
+!data/.gitkeep
+
 # --- Deploy logs ---
 deploy/logs/
 

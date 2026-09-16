@@ -182,6 +182,46 @@ async def test_analyze_degrades_gracefully_when_ai_service_raises(client, monkey
 
 
 # ---------------------------------------------------------------------------
+# SQL archive wiring (2026-09-16): recorded only on the include_ai=true call,
+# and never allowed to affect the response.
+# ---------------------------------------------------------------------------
+async def test_analyze_with_ai_true_records_to_archive(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(api_module.sql_archive, "record_analysis", lambda **kwargs: calls.append(kwargs))
+    resp = await client.post(
+        "/api/analyze",
+        json={"application_no": "A1", "cost": 1000, "sql": "SELECT 1 FROM DUAL", "include_ai": True},
+    )
+    assert resp.status_code == 200
+    assert len(calls) == 1
+    assert calls[0]["cost"] == 1000
+
+
+async def test_analyze_with_ai_false_does_not_record_to_archive(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(api_module.sql_archive, "record_analysis", lambda **kwargs: calls.append(kwargs))
+    resp = await client.post(
+        "/api/analyze",
+        json={"application_no": "A1", "cost": 1000, "sql": "SELECT 1 FROM DUAL", "include_ai": False},
+    )
+    assert resp.status_code == 200
+    assert calls == []
+
+
+async def test_analyze_archive_failure_does_not_affect_response(client, monkeypatch):
+    def _boom(**kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(api_module.sql_archive, "record_analysis", _boom)
+    resp = await client.post(
+        "/api/analyze",
+        json={"application_no": "A1", "cost": 1000, "sql": "SELECT 1 FROM DUAL", "include_ai": True},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["compliance"]["status"] == "PASS"
+
+
+# ---------------------------------------------------------------------------
 # /api/extract-sql
 # ---------------------------------------------------------------------------
 async def test_extract_sql_from_sql_file(client):

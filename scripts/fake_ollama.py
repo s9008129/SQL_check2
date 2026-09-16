@@ -12,6 +12,7 @@ Usage:
     python scripts/fake_ollama.py
     python scripts/fake_ollama.py --mode slow --port 11434
     python scripts/fake_ollama.py --mode bad-json
+    python scripts/fake_ollama.py --mode truncated
     python scripts/fake_ollama.py --mode down
 
 Then point the backend at it, e.g.:
@@ -19,18 +20,27 @@ Then point the backend at it, e.g.:
         uv run uvicorn app.main:app --reload
 
 Modes (--mode, default "normal"):
-    normal    GET /api/tags returns a models list containing the fake model
-              name; POST /api/chat returns a valid, schema-shaped JSON
-              advice response immediately.
-    slow      Same responses as "normal", but POST /api/chat sleeps ~5
-              seconds first, so a manual tester can see the frontend's
-              "AI 分析中" loading state.
-    bad-json  POST /api/chat responds 200 with a message.content string
-              that is NOT valid JSON, to exercise ai_service's
-              retry-once-then-degrade path.
-    down      Does not bind to any port at all and exits immediately, so
-              pointing OLLAMA_BASE_URL at this port reproduces a
-              "connection refused" scenario.
+    normal     GET /api/tags returns a models list containing the fake model
+               name; POST /api/chat returns a valid, schema-shaped JSON
+               advice response immediately, with done_reason="stop" and a
+               fake eval_count/prompt_eval_count/total_duration (2026-09-16:
+               matches the fields ai_service.py now logs from a real
+               response).
+    slow       Same responses as "normal", but POST /api/chat sleeps ~5
+               seconds first, so a manual tester can see the frontend's
+               "AI 分析中" loading state.
+    bad-json   POST /api/chat responds 200 with a message.content string
+               that is NOT valid JSON, to exercise ai_service's
+               retry-once-then-degrade path.
+    truncated  (2026-09-16) POST /api/chat responds 200 with done_reason=
+               "length" and a half-finished message.content, to exercise
+               ai_service's "model output truncated, degrade without
+               retry" path (see app.yaml's num_predict comment — this is
+               what a too-low num_predict looks like from the backend's
+               point of view).
+    down       Does not bind to any port at all and exits immediately, so
+               pointing OLLAMA_BASE_URL at this port reproduces a
+               "connection refused" scenario.
 
 Port (--port, default 11434) is also overridable.
 """
@@ -69,14 +79,21 @@ def _advice_payload() -> dict:
     }
 
 
-def _chat_envelope(content: str) -> dict:
+def _chat_envelope(content: str, done_reason: str = "stop") -> dict:
     """Matches Ollama's documented /api/chat non-streaming response shape:
-    the reply text lives at message.content as a JSON string."""
+    the reply text lives at message.content as a JSON string. Also includes
+    done_reason/eval_count/prompt_eval_count/total_duration (2026-09-16) so
+    a manual tester exercises the same fields ai_service.py logs and acts on
+    for a real Ollama response."""
     return {
         "model": FAKE_MODEL_NAME,
         "created_at": "2026-01-01T00:00:00Z",
         "message": {"role": "assistant", "content": content},
         "done": True,
+        "done_reason": done_reason,
+        "eval_count": 128,
+        "prompt_eval_count": 512,
+        "total_duration": 3_000_000_000,  # nanoseconds, per Ollama's API
     }
 
 
@@ -121,6 +138,8 @@ class _FakeOllamaHandler(BaseHTTPRequestHandler):
     def _chat_envelope_for_mode(self) -> dict:
         if self.mode == "bad-json":
             return _chat_envelope("this is not valid JSON {{{ oops")
+        if self.mode == "truncated":
+            return _chat_envelope('{"summary": "這段 SQL 條件欄位使用了函', done_reason="length")
         return _chat_envelope(json.dumps(_advice_payload(), ensure_ascii=False))
 
     def log_message(self, log_format: str, *args) -> None:
@@ -133,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--mode",
-        choices=["normal", "slow", "bad-json", "down"],
+        choices=["normal", "slow", "bad-json", "truncated", "down"],
         default="normal",
         help="Response behavior for POST /api/chat (default: normal).",
     )

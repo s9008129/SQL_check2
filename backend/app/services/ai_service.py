@@ -41,7 +41,7 @@ from app.schemas import AdviceItem, AiResult, Finding, SuggestedSql
 from app.services import rule_engine
 from app.services.masking import mask_sql, unmask_sql
 from app.services.rule_engine import GLOBAL_STATEMENT_INDEX
-from app.services.sql_parser import ParsedStatement, parse_sql_text
+from app.services.sql_parser import ParsedStatement, parse_sql_text, structural_signature
 from app.settings import PROMPTS_DIR, Settings
 
 logger = logging.getLogger(__name__)
@@ -109,27 +109,80 @@ class _AiRawResponse(BaseModel):
 # ---------------------------------------------------------------------------
 def _compute_gates(
     statements: list[ParsedStatement], findings: list[Finding], ai_gate_cfg: dict[str, Any]
-) -> tuple[bool, bool]:
+) -> tuple[bool, bool, str | None]:
     """candidate_allowed: exactly one statement, SELECT, parsed ok, and none
     of its complexity_flags intersect the configured forbidden set.
     estimate_improvement_allowed: equals candidate_allowed unless
     `ai_gate.estimate_requires_candidate` is false, in which case it is also
     allowed whenever there is at least one finding (both branches per spec).
+    decline_code: None when candidate_allowed is True; otherwise the specific
+    reason candidate_allowed is False (`multi_statement` / `not_select` /
+    `parse_failed` / `complexity:<flag>`) so the reviewer-facing decline
+    reason can be specific instead of always the same fixed sentence — see
+    `_decline_reason_text`. This is purely explanatory; it never changes
+    which SQL is or isn't allowed to be rewritten.
     """
     forbidden_flags = set(ai_gate_cfg.get("candidate_forbidden_complexity_flags", []))
-    candidate_allowed = (
-        len(statements) == 1
-        and statements[0].statement_type == "SELECT"
-        and statements[0].parse_status == "ok"
-        and not (statements[0].complexity_flags & forbidden_flags)
-    )
+
+    decline_code: str | None = None
+    if len(statements) != 1:
+        decline_code = "multi_statement"
+    elif statements[0].statement_type != "SELECT":
+        decline_code = "not_select"
+    elif statements[0].parse_status != "ok":
+        decline_code = "parse_failed"
+    else:
+        hit_flags = statements[0].complexity_flags & forbidden_flags
+        if hit_flags:
+            # Deterministic pick when more than one forbidden flag is hit.
+            decline_code = f"complexity:{sorted(hit_flags)[0]}"
+
+    candidate_allowed = decline_code is None
 
     if ai_gate_cfg.get("estimate_requires_candidate", True):
         estimate_allowed = candidate_allowed
     else:
         estimate_allowed = candidate_allowed or bool(findings)
 
-    return candidate_allowed, estimate_allowed
+    return candidate_allowed, estimate_allowed, decline_code
+
+
+# Traditional-Chinese labels for complexity flags that can still appear in a
+# decline reason (the ones NOT removed from app.yaml's forbidden list on
+# 2026-09-16 — outer_join/group_by_aggregate/distinct are gone from there,
+# so they never reach this dict via a real decline_code anymore, but a label
+# is kept for any of them in case a future config re-adds one).
+_COMPLEXITY_FLAG_LABELS: dict[str, str] = {
+    "window_function": "視窗函數（Analytic Function）",
+    "connect_by": "CONNECT BY 階層查詢",
+    "set_operation": "UNION／MINUS／INTERSECT 等集合運算",
+    "rownum": "ROWNUM",
+    "correlated_subquery": "複雜的相關子查詢（Correlated Subquery）",
+    "outer_join": "OUTER JOIN",
+    "group_by_aggregate": "GROUP BY／彙總函數",
+    "distinct": "DISTINCT",
+}
+
+_DECLINE_REASON_TEXT: dict[str, str] = {
+    "multi_statement": "本次送出包含多段 SQL，系統設定為不自動改寫多段查詢，本次先提供改善方向，不自動產生建議寫法。",
+    "not_select": "此語句不是 SELECT 查詢，系統設定僅對 SELECT 查詢提供建議寫法，本次先提供改善方向，不自動產生建議寫法。",
+    "parse_failed": "此 SQL 結構較複雜，系統無法完整解析，本次先提供改善方向，不自動產生建議寫法。",
+}
+
+
+def _decline_reason_text(decline_code: str | None) -> str:
+    """Reviewer-facing Chinese explanation for why candidate_allowed is
+    False, specific to `decline_code` instead of always the same fixed
+    sentence. Falls back to the original fixed PRD §25.4 copy for any
+    unrecognized/None code so this can never produce an empty or malformed
+    reason."""
+    if decline_code is None:
+        return _NO_REWRITE_REASON
+    if decline_code.startswith("complexity:"):
+        flag = decline_code.split(":", 1)[1]
+        label = _COMPLEXITY_FLAG_LABELS.get(flag, flag)
+        return f"此 SQL 含{label}，系統設定為不自動改寫，本次先提供改善方向，不自動產生建議寫法。"
+    return _DECLINE_REASON_TEXT.get(decline_code, _NO_REWRITE_REASON)
 
 
 def _pick_representative(
@@ -175,13 +228,20 @@ def _build_payload(
     findings: list[Finding],
     candidate_allowed: bool,
     estimate_improvement_allowed: bool,
+    literal_hints: dict[str, dict[str, Any]] | None = None,
+    where_evidence: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Exactly the PRD §20 field set — nothing else, never raw literals,
-    never model/Docker/DB connection info."""
+    """PRD §20's field set plus two additive, non-sensitive fields (2026-09-
+    16): `literal_hints` (placeholder -> shape/length/wildcard, never the
+    actual value — lets the model reason about e.g. "this is a trailing-
+    wildcard LIKE pattern" without seeing real text) and `where_evidence`
+    (why R002 did not BLOCK a SELECT with no top-level WHERE, when
+    applicable). Never raw literals, never model/Docker/DB connection info.
+    """
     important_table_notices = list(
         dict.fromkeys(f.table for f in findings if f.rule_id == "R007" and f.table)
     )
-    return {
+    payload: dict[str, Any] = {
         "statement_type": statement_type,
         "sanitized_sql": sanitized_sql,
         "input_cost": cost,
@@ -190,7 +250,11 @@ def _build_payload(
         "important_table_notices": important_table_notices,
         "candidate_allowed": candidate_allowed,
         "estimate_improvement_allowed": estimate_improvement_allowed,
+        "literal_hints": literal_hints or {},
     }
+    if where_evidence is not None:
+        payload["where_evidence"] = where_evidence
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -229,9 +293,11 @@ def _filter_advice(
             AdviceItem(title=title, explanation=explanation, example=item.example, impact=item.impact)
         )
     if dropped:
-        # PRD: log a debug counter on a forbidden-phrase hit, never the
-        # content that triggered it.
-        logger.debug("ai_service: dropped %d advice item(s) on forbidden-phrase match", dropped)
+        # PRD: log a counter on a forbidden-phrase hit, never the content
+        # that triggered it. INFO (not debug) so this decision is visible in
+        # production logs without needing debug-level logging enabled — see
+        # tasks/lessons.md "決策 log 用 debug 等於沒有 log".
+        logger.info("ai_service: dropped %d advice item(s) on forbidden-phrase match", dropped)
     return kept
 
 
@@ -255,13 +321,6 @@ def _clamp_round_pct(value: int | None, estimate_allowed: bool) -> int | None:
 _NO_REWRITE_REASON = "為避免改變原本查詢內容，本次先提供改善方向，不自動產生建議寫法。"
 
 
-def _select_list_length(tree: Any) -> int | None:
-    try:
-        return len(tree.expressions)
-    except Exception:
-        return None
-
-
 def _revalidate_suggested_sql(
     sql_text: str,
     representative: ParsedStatement,
@@ -271,13 +330,22 @@ def _revalidate_suggested_sql(
     important_tables_config: dict[str, Any],
 ) -> tuple[bool, str | None]:
     """Re-parse and re-run the deterministic rule engine on the model's
-    proposed rewrite before it is ever shown to a user (approved plan: "建議
-    SQL 必須 sqlglot 可解析、statement type 相同、表集合 ⊆ 原始、SELECT 欄位
-    數相同、不引入 hint/ROWNUM、與原始不同、重跑規則引擎不得出現 BLOCK 或更
-    多 NOTICE"). The model is never trusted for anything that could change
-    query semantics or introduce a new compliance problem — this check is
-    the enforcement of that, independent of whatever the model's own
-    `reason`/`available` fields claim. Returns (ok, rejection_reason)."""
+    proposed rewrite before it is ever shown to a user. The model is never
+    trusted for anything that could change query semantics or introduce a
+    new compliance problem — this check is the enforcement of that,
+    independent of whatever the model's own `reason`/`available` fields
+    claim. Returns (ok, rejection_reason).
+
+    2026-09-16: strengthened alongside relaxing app.yaml's
+    candidate_forbidden_complexity_flags (LEFT JOIN / GROUP BY / DISTINCT
+    are no longer blanket-forbidden) — the table check is now *equality*
+    (not subset: a rewrite that quietly drops a table changes which rows can
+    match, e.g. turning an INNER JOIN's implicit filtering into a LEFT JOIN
+    by omission), and `structural_signature` compares JOIN kinds *and order*,
+    GROUP BY/HAVING/DISTINCT/aggregate functions, ORDER BY, and column count
+    — replacing the old column-count-only check, which was the only
+    structural safeguard when these flags were simply banned outright.
+    """
     try:
         normalized_original = " ".join(representative.raw_sql.split())
         normalized_suggested = " ".join(sql_text.split())
@@ -292,18 +360,34 @@ def _revalidate_suggested_sql(
             return False, "建議寫法無法解析"
         if stmt.statement_type != representative.statement_type:
             return False, "建議寫法語句類型與原始不同"
-        if not stmt.tables.issubset(representative.tables):
-            return False, "建議寫法引用了原始查詢以外的資料表"
+        if stmt.tables != representative.tables:
+            return False, "建議寫法引用的資料表與原始查詢不同"
         if stmt.hint_evidence is not None:
             return False, "建議寫法不得包含 Hint"
         if "rownum" in stmt.complexity_flags:
             return False, "建議寫法不得包含 ROWNUM"
 
-        if representative.tree is not None and stmt.tree is not None:
-            orig_len = _select_list_length(representative.tree)
-            new_len = _select_list_length(stmt.tree)
-            if orig_len is not None and new_len is not None and orig_len != new_len:
-                return False, "建議寫法的查詢欄位數與原始不同"
+        if representative.tree is None or stmt.tree is None:
+            return False, "建議寫法結構複核失敗，無法比對"
+
+        orig_sig = structural_signature(representative.tree)
+        new_sig = structural_signature(stmt.tree)
+        if not orig_sig or not new_sig:
+            # Empty means "could not compute" (e.g. non-SELECT branch shape),
+            # never "structurally equal" — reject conservatively.
+            return False, "建議寫法結構複核失敗，無法比對"
+        if orig_sig["join_sides"] != new_sig["join_sides"]:
+            return False, "建議寫法的 JOIN 種類或順序與原始不同"
+        if orig_sig["group_by_count"] != new_sig["group_by_count"] or orig_sig["having"] != new_sig["having"]:
+            return False, "建議寫法的 GROUP BY 與原始不同"
+        if orig_sig["distinct"] != new_sig["distinct"]:
+            return False, "建議寫法的 DISTINCT 與原始不同"
+        if orig_sig["agg_funcs"] != new_sig["agg_funcs"]:
+            return False, "建議寫法使用的彙總函數與原始不同"
+        if orig_sig["order_by"] != new_sig["order_by"]:
+            return False, "建議寫法的 ORDER BY 與原始不同"
+        if orig_sig["select_count"] != new_sig["select_count"]:
+            return False, "建議寫法的查詢欄位數與原始不同"
 
         _compliance, _rows, new_findings = rule_engine.evaluate(
             parsed, cost, rules_config, important_tables_config
@@ -328,6 +412,7 @@ def _finalize_suggested_sql(
     raw: SuggestedSql,
     reverse_map: dict[str, str],
     candidate_allowed: bool,
+    decline_code: str | None,
     forbidden: list[str],
     vocab: dict[str, str],
     representative: ParsedStatement | None,
@@ -346,11 +431,12 @@ def _finalize_suggested_sql(
         # The model's own `reason` was almost certainly written to justify
         # *providing* a rewrite (available=true), so surfacing it verbatim
         # once we flip available to false would read as self-contradictory.
-        # Replace it with the PRD's fixed "declined to rewrite" copy instead.
-        reason = _NO_REWRITE_REASON
+        # Replace it with a reason specific to *why* candidate_allowed is
+        # false (decline_code) instead of always the same fixed sentence.
+        reason = _decline_reason_text(decline_code)
 
     if _contains_forbidden(reason, forbidden):
-        logger.debug("ai_service: suggested_sql.reason discarded on forbidden-phrase match")
+        logger.info("ai_service: suggested_sql.reason discarded on forbidden-phrase match")
         available = False
         reason = "建議寫法說明暫不提供。"
 
@@ -363,10 +449,18 @@ def _finalize_suggested_sql(
             )
             if ok:
                 sql = unmasked
+                logger.info("ai_service: revalidation ok")
             else:
-                logger.debug("ai_service: suggested_sql rejected on re-validation: %s", rejection)
+                # Rejection reasons are all fixed, structure-only Chinese
+                # phrases (see `_revalidate_suggested_sql`) — never contain
+                # SQL text or literal values — so both surfacing this to the
+                # reviewer and logging it at INFO are safe.
+                logger.info("ai_service: revalidation rejected: %s", rejection)
                 available = False
-                reason = _NO_REWRITE_REASON
+                reason = (
+                    f"AI 提出的建議寫法未通過系統安全複核（{rejection}），"
+                    "為避免改變原本查詢內容，本次不顯示建議寫法。"
+                )
         else:
             # No representative statement to validate against, or nothing
             # left after unmasking — conservative: decline rather than show
@@ -382,6 +476,7 @@ def _finalize(
     reverse_map: dict[str, str],
     candidate_allowed: bool,
     estimate_allowed: bool,
+    decline_code: str | None,
     ai_guard_cfg: dict[str, Any],
     representative: ParsedStatement | None,
     original_notice_count: int,
@@ -394,7 +489,7 @@ def _finalize(
 
     summary: str | None = _apply_vocabulary(raw.summary, vocab)
     if _contains_forbidden(summary, forbidden):
-        logger.debug("ai_service: summary discarded on forbidden-phrase match")
+        logger.info("ai_service: summary discarded on forbidden-phrase match")
         summary = None
 
     advice = _filter_advice(raw.advice, forbidden, vocab)
@@ -402,6 +497,7 @@ def _finalize(
         raw.suggested_sql,
         reverse_map,
         candidate_allowed,
+        decline_code,
         forbidden,
         vocab,
         representative,
@@ -411,6 +507,13 @@ def _finalize(
         important_tables_config,
     )
     pct = _clamp_round_pct(raw.estimated_improvement_pct, estimate_allowed)
+
+    logger.info(
+        "ai_service: model available=%s advice=%d pct=%s",
+        suggested_sql.available,
+        len(advice),
+        pct,
+    )
 
     # Still "ok" even if advice ended up empty after filtering — the model
     # did respond and validate; there is no separate "degraded but ok" state.
@@ -446,26 +549,56 @@ def _chat_request_body(settings: Settings, payload: dict[str, Any]) -> dict[str,
     }
 
 
+class _TruncatedResponseError(Exception):
+    """Raised when Ollama reports `done_reason == "length"` — the model hit
+    `num_predict` before finishing its JSON output. Distinguished from a
+    generic JSON-decode failure so `_request_ai` can degrade immediately
+    with a specific log line instead of silently retrying with the exact
+    same parameters (which would very likely truncate the same way again —
+    the fix for a truncation is raising `ollama.num_predict` in app.yaml,
+    not retrying)."""
+
+    def __init__(self, eval_count: int | None):
+        super().__init__("truncated")
+        self.eval_count = eval_count
+
+
 async def _one_attempt(client: httpx.AsyncClient, settings: Settings, payload: dict[str, Any]) -> _AiRawResponse:
     """Exactly one POST + parse + validate. Raises on any problem; the
     caller decides retry-once (invalid JSON/shape) vs immediate-fail
-    (connection/timeout/HTTP-status) based on the exception type."""
+    (connection/timeout/HTTP-status/truncation) based on the exception type.
+    """
     resp = await client.post(
         f"{settings.ollama.base_url}/api/chat",
         json=_chat_request_body(settings, payload),
     )
     resp.raise_for_status()
     data = resp.json()
+    if data.get("done_reason") == "length":
+        raise _TruncatedResponseError(data.get("eval_count"))
     content = data["message"]["content"]  # Ollama's documented chat shape
     raw = json.loads(content)
-    return _AiRawResponse.model_validate(raw)
+    parsed = _AiRawResponse.model_validate(raw)
+    # INFO, never DEBUG: this is the only place the actual model latency and
+    # token counts are observable, and none of these fields can ever embed
+    # SQL text or prompt content.
+    logger.info(
+        "ai_service: ollama response done_reason=%s eval_count=%s prompt_eval_count=%s total_duration_ms=%s",
+        data.get("done_reason"),
+        data.get("eval_count"),
+        data.get("prompt_eval_count"),
+        (data.get("total_duration") or 0) // 1_000_000,
+    )
+    return parsed
 
 
 async def _request_ai(settings: Settings, payload: dict[str, Any]) -> _AiRawResponse | None:
     """Returns a validated raw response, or None on any failure. Connection
     and timeout errors fail immediately (never retried — retrying would just
-    double the wall-clock wait for no benefit). Invalid JSON / schema
-    validation failures are retried exactly once."""
+    double the wall-clock wait for no benefit). A truncated response
+    (`done_reason=length`) also fails immediately, for the same reason —
+    see `_TruncatedResponseError`. Invalid JSON / schema validation failures
+    are retried exactly once."""
     try:
         await asyncio.wait_for(_OLLAMA_SEMAPHORE.acquire(), timeout=settings.ollama.timeout_seconds)
     except TimeoutError:
@@ -477,12 +610,25 @@ async def _request_ai(settings: Settings, payload: dict[str, Any]) -> _AiRawResp
                 return await _one_attempt(client, settings, payload)
             except (httpx.RequestError, httpx.HTTPStatusError):
                 return None
+            except _TruncatedResponseError as exc:
+                logger.info(
+                    "ai_service: model output truncated (done_reason=length, eval_count=%s) — "
+                    "degrading without retry; consider raising ollama.num_predict",
+                    exc.eval_count,
+                )
+                return None
             except (json.JSONDecodeError, ValidationError, KeyError, TypeError):
                 pass  # retry exactly once below
 
             try:
                 return await _one_attempt(client, settings, payload)
             except (httpx.RequestError, httpx.HTTPStatusError):
+                return None
+            except _TruncatedResponseError as exc:
+                logger.info(
+                    "ai_service: model output truncated again on retry (done_reason=length, eval_count=%s) — degrading",
+                    exc.eval_count,
+                )
                 return None
             except (json.JSONDecodeError, ValidationError, KeyError, TypeError):
                 return None
@@ -506,15 +652,32 @@ async def get_ai_result(
     invalid response, or an unexpected bug in this module itself) degrades
     to the PRD-mandated "unavailable" result rather than propagating."""
     try:
-        candidate_allowed, estimate_allowed = _compute_gates(statements, findings, settings.ai_gate)
+        candidate_allowed, estimate_allowed, decline_code = _compute_gates(statements, findings, settings.ai_gate)
 
         representative = _pick_representative(statements, findings)
         if representative is not None:
             statement_type = representative.statement_type
-            mask_result = mask_sql(representative.raw_sql)
+            mask_result = mask_sql(representative.raw_sql, settings.masking.keep_short_ascii_literal_max_len)
         else:
             statement_type = "UNKNOWN"
-            mask_result = mask_sql(sql_text)
+            mask_result = mask_sql(sql_text, settings.masking.keep_short_ascii_literal_max_len)
+
+        where_evidence = None
+        if representative is not None and representative.restriction_kind is not None:
+            where_evidence = {
+                "kind": representative.restriction_kind,
+                "detail": representative.restriction_detail,
+            }
+
+        logger.info(
+            "ai_service: gate candidate=%s estimate=%s decline_code=%s stmt_type=%s flags=%s where_kind=%s",
+            candidate_allowed,
+            estimate_allowed,
+            decline_code,
+            statement_type,
+            sorted(representative.complexity_flags) if representative else [],
+            representative.restriction_kind if representative else None,
+        )
 
         payload = _build_payload(
             statement_type=statement_type,
@@ -524,6 +687,8 @@ async def get_ai_result(
             findings=findings,
             candidate_allowed=candidate_allowed,
             estimate_improvement_allowed=estimate_allowed,
+            literal_hints=mask_result.literal_hints,
+            where_evidence=where_evidence,
         )
 
         raw = await _request_ai(settings, payload)
@@ -541,6 +706,7 @@ async def get_ai_result(
             mask_result.reverse_map,
             candidate_allowed,
             estimate_allowed,
+            decline_code,
             settings.ai_guard,
             representative,
             original_notice_count,

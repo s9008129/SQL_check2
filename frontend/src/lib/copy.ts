@@ -11,7 +11,7 @@ export const SUGGESTED_SQL_NOT_AVAILABLE_MESSAGE =
   "為避免改變原本查詢內容，本次先提供改善方向，不自動產生建議寫法。";
 
 // PRD §51 — AI degrade copy, used when ai.status === "unavailable" (Ollama
-// down, or the client-side 150s watchdog gave up on the second /api/analyze
+// down, or the client-side 200s watchdog gave up on the second /api/analyze
 // call). Different reason, different panel, from SUGGESTED_SQL_NOT_AVAILABLE_MESSAGE above.
 export const AI_UNAVAILABLE_MESSAGE =
   "智慧改善建議目前暫時無法使用，仍可依上方規則檢核結果進行確認。";

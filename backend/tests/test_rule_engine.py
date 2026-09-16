@@ -90,6 +90,90 @@ def test_parallel_hint_block(cfg):
     assert compliance.status == "BLOCK"
 
 
+# ---------------------------------------------------------------------------
+# R002 restriction evidence (2026-09-16 業務決定): a SELECT with no top-level
+# WHERE keyword but real restriction evidence (JOIN ON with a constant, JOIN
+# key equality, or a filtered subquery/CTE source) must not be a dead BLOCK
+# under the default rules.yaml config — it PASSes with an explanatory note
+# instead of the misleading "缺少 WHERE 條件".
+# ---------------------------------------------------------------------------
+def test_where_missing_with_no_restriction_evidence_still_blocks(cfg):
+    rules_cfg, tables_cfg = cfg
+    parsed = parse_sql_text("SELECT * FROM T A, U B")
+    compliance, rows, findings = rule_engine.evaluate(parsed, 1000, rules_cfg, tables_cfg)
+    assert _row(rows, "R002").status == "BLOCK"
+    assert compliance.status == "BLOCK"
+    assert any(f.rule_id == "R002" and f.status == "BLOCK" for f in findings)
+
+
+def test_where_via_inner_join_on_constant_passes_with_explanation(cfg):
+    rules_cfg, tables_cfg = cfg
+    parsed = parse_sql_text("SELECT A.X FROM T A JOIN U B ON A.K = B.K AND B.YR = '114'")
+    compliance, rows, findings = rule_engine.evaluate(parsed, 1000, rules_cfg, tables_cfg)
+    r002 = _row(rows, "R002")
+    assert r002.status == "PASS"
+    assert compliance.status == "PASS"
+    assert "JOIN ON" in r002.evidence
+    assert not any(f.rule_id == "R002" for f in findings)
+
+
+def test_where_via_left_join_on_constant_notes_it_only_restricts_outer_side(cfg):
+    rules_cfg, tables_cfg = cfg
+    parsed = parse_sql_text("SELECT A.X FROM T A LEFT JOIN U B ON A.K = B.K AND B.YR = '114'")
+    _compliance, rows, _findings = rule_engine.evaluate(parsed, 1000, rules_cfg, tables_cfg)
+    r002 = _row(rows, "R002")
+    assert r002.status == "PASS"
+    # Must not overclaim: an outer-joined ON constant restricts only the
+    # joined (副) table, never the driving (主) table's row count.
+    assert "不會縮小主表查詢範圍" in r002.note
+
+
+def test_where_via_join_key_equality_only_passes_with_explanation(cfg):
+    rules_cfg, tables_cfg = cfg
+    parsed = parse_sql_text("SELECT A.X FROM T A JOIN U B ON A.K = B.K")
+    _compliance, rows, _findings = rule_engine.evaluate(parsed, 1000, rules_cfg, tables_cfg)
+    r002 = _row(rows, "R002")
+    assert r002.status == "PASS"
+    assert "JOIN" in r002.evidence
+
+
+def test_where_via_cte_source_passes_with_explanation(cfg):
+    rules_cfg, tables_cfg = cfg
+    parsed = parse_sql_text("WITH V AS (SELECT K FROM T WHERE Y = 1) SELECT V.K FROM V")
+    _compliance, rows, _findings = rule_engine.evaluate(parsed, 1000, rules_cfg, tables_cfg)
+    r002 = _row(rows, "R002")
+    assert r002.status == "PASS"
+    assert "子查詢" in r002.evidence or "WITH" in r002.evidence
+
+
+def test_restriction_verdict_can_be_configured_to_block():
+    settings = get_settings()
+    rules_cfg = dict(settings.rules_config)
+    rules_cfg["rules"] = [
+        dict(r, restriction_verdicts={"join_on_only": "block"}) if r["id"] == "R002" else r
+        for r in rules_cfg["rules"]
+    ]
+    parsed = parse_sql_text("SELECT A.X FROM T A JOIN U B ON A.K = B.K")
+    compliance, rows, findings = rule_engine.evaluate(parsed, 1000, rules_cfg, settings.important_tables_config)
+    assert _row(rows, "R002").status == "BLOCK"
+    assert compliance.status == "BLOCK"
+    assert any(f.rule_id == "R002" and f.status == "BLOCK" for f in findings)
+
+
+def test_restriction_verdict_can_be_configured_to_review():
+    settings = get_settings()
+    rules_cfg = dict(settings.rules_config)
+    rules_cfg["rules"] = [
+        dict(r, restriction_verdicts={"join_on_only": "review"}) if r["id"] == "R002" else r
+        for r in rules_cfg["rules"]
+    ]
+    parsed = parse_sql_text("SELECT A.X FROM T A JOIN U B ON A.K = B.K")
+    compliance, rows, findings = rule_engine.evaluate(parsed, 1000, rules_cfg, settings.important_tables_config)
+    assert _row(rows, "R002").status == "REVIEW"
+    assert compliance.status == "REVIEW"
+    assert any(f.rule_id == "R002" and f.status == "REVIEW" for f in findings)
+
+
 def test_notice_rules_never_flip_compliance(cfg):
     rules_cfg, tables_cfg = cfg
     sql = "SELECT * FROM HOUT120 A WHERE TRUNC(A.TXN_DATE) = :D OR A.STATUS = :S"

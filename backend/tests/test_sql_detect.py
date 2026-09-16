@@ -23,6 +23,39 @@ def test_plain_text_multi_statement_not_truncated_at_blank_line():
     assert "WHERE A.Y = 1" in r.sql
 
 
+def test_plain_text_multiple_consecutive_blank_lines_not_truncated():
+    """Regression for a real production case (LND_台糖馬稠後產業園區土地課稅
+    情形.docx, 2026-09-15): the DOCX had 4 consecutive blank lines between
+    the last JOIN's ON clause and the WHERE clause. A single-blank-line-only
+    paragraph splitter turned that run of blank lines into an empty leading
+    paragraph that failed the continuation check, silently dropping the
+    WHERE clause and everything after it — which then caused a false R002
+    "缺少 WHERE 條件" BLOCK downstream even though the SQL genuinely has a
+    WHERE clause."""
+    text = (
+        "SELECT A.X\n"
+        "FROM T A\n"
+        "LEFT JOIN U B\n"
+        "ON A.K = B.K\n"
+        "\n\n\n\n"
+        "WHERE A.Y = '114'"
+    )
+    r = detect_sql(text, ".txt")
+    assert r.found is True
+    assert "WHERE A.Y" in r.sql
+
+
+def test_plain_text_trailing_prose_after_multiple_blank_lines_still_trimmed():
+    text = (
+        "SELECT A.X FROM T A WHERE A.Y = 1"
+        "\n\n\n"
+        "如有問題請洽承辦人。"
+    )
+    r = detect_sql(text, ".txt")
+    assert r.found is True
+    assert "承辦人" not in r.sql
+
+
 def test_plain_text_no_sql_found():
     r = detect_sql("這是一份普通的文件，沒有任何 SQL 內容。", ".txt")
     assert r.found is False

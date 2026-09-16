@@ -59,8 +59,17 @@ def _trim_trailing_prose(segment: str) -> str:
     since formatted SQL routinely contains blank lines between clauses (PRD
     §11.1). But once a blank-line-separated paragraph no longer looks like a
     clause continuation (e.g. trailing prose such as "如有問題請洽承辦
-    人。"), everything from there on is dropped."""
-    paragraphs = re.split(r"\n[ \t]*\n", segment)
+    人。"), everything from there on is dropped.
+
+    One-or-more consecutive blank lines are treated as a single paragraph
+    separator (`(?:[ \t]*\n)+`, not a single `\n[ \t]*\n`) — real-world
+    attachments (confirmed: a production DOCX test case) routinely have
+    several blank lines between a JOIN's ON clause and the WHERE clause that
+    follows it. A single-blank-line-only regex turns the run of blank lines
+    into an extra empty leading paragraph, whose "first line" is empty and
+    therefore never matches `_CONTINUATION_RE`, silently truncating the SQL
+    before its WHERE clause and causing a false R002 BLOCK downstream."""
+    paragraphs = re.split(r"\n(?:[ \t]*\n)+", segment)
     kept = [paragraphs[0]]
     for para in paragraphs[1:]:
         first_line = next((ln for ln in para.split("\n") if ln.strip()), "")

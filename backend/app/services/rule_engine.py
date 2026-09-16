@@ -80,7 +80,69 @@ def _eval_cost(cost: int, rules_config: dict[str, Any]) -> tuple[RuleRow, list[F
 
 # ---------------------------------------------------------------------------
 # R002 — WHERE 查詢條件
+#
+# 2026-09-16 業務決定：不再只死認「有沒有 WHERE 關鍵字」。SELECT 沒有寫
+# WHERE 時，sql_parser.py 的 restriction_kind 會分類是否仍有「實質限制條件」
+# （JOIN ON 含常數、以 JOIN 鍵值連接、或限制條件寫在子查詢／WITH 內）；每種
+# kind 的判定結果（PASS／REVIEW／BLOCK）由 rules.yaml 的
+# R002.restriction_verdicts 決定，不寫死在程式碼裡。UPDATE/DELETE 仍只看
+# `has_where`（accept_join_on，未變動）。
 # ---------------------------------------------------------------------------
+# (label, note) 供 restriction_kind 為 PASS／REVIEW／BLOCK 時的白話說明。note
+# 只在最終判定為 PASS 時顯示於「說明」欄；BLOCK／REVIEW 一律沿用既有固定文案，
+# 避免對「不符合／請確認」的原因產生誤導性的正面措辭。
+_RESTRICTION_EVIDENCE_TEXT: dict[str, tuple[str, str]] = {
+    "source_where": (
+        "限制條件位於子查詢／WITH 內",
+        "外層未寫 WHERE，但主表來源已限制查詢範圍，實際效果等同查詢條件",
+    ),
+    "join_on_constant": (
+        "限制條件位於 JOIN ON（INNER JOIN 含常數條件）",
+        "未寫 WHERE，但 INNER JOIN 的 ON 條件已限縮結果，實際效果等同查詢條件",
+    ),
+    "join_on_outer_constant": (
+        "限制條件位於 JOIN ON（外部連接含常數條件）",
+        "未寫 WHERE，JOIN ON 已帶有條件，視同已設定查詢條件；惟該條件位於外部連接"
+        "（LEFT/RIGHT/FULL JOIN）的 ON，主要影響副表對應結果，不會縮小主表查詢範圍，"
+        "建議確認主表是否需另加查詢條件",
+    ),
+    "join_on_only": (
+        "以 JOIN 條件連接資料表（未寫 WHERE）",
+        "本次未寫 WHERE，但已以 JOIN ON 條件限定資料表對應關係，視同已設定查詢條件；"
+        "建議確認是否需再加上其他限制條件",
+    ),
+}
+
+
+def _restriction_verdict(kind: str, r002_cfg: dict[str, Any]) -> str:
+    verdicts = r002_cfg.get("restriction_verdicts", {})
+    # Unconfigured kind defaults to the conservative "review", never a
+    # silent "pass" — rules.yaml is expected to list all four kinds
+    # explicitly (see its own comment), this is only a safety net.
+    return str(verdicts.get(kind, "review")).lower()
+
+
+def _statement_where_status(s: ParsedStatement, r002_cfg: dict[str, Any]) -> tuple[str, str, str]:
+    """Per-statement (status, evidence_text, note_text) for R002, given one
+    where_applicable statement."""
+    if s.has_where is True:
+        return "PASS", "已設定", "已有限制查詢條件"
+    if s.has_where is None:
+        return "REVIEW", "SQL 結構較複雜，無法確認", "請人工確認是否已有適當查詢條件"
+
+    # has_where is False from here on.
+    if s.restriction_kind is None:
+        return "BLOCK", "缺少 WHERE 條件", "依中心規範，查詢須有 WHERE 查詢條件"
+
+    verdict = _restriction_verdict(s.restriction_kind, r002_cfg)
+    label, note = _RESTRICTION_EVIDENCE_TEXT[s.restriction_kind]
+    if verdict == "block":
+        return "BLOCK", f"{label}（依設定判定為不符合）", "依中心規範，查詢須有 WHERE 查詢條件"
+    if verdict == "review":
+        return "REVIEW", label, "請人工確認是否已有適當查詢條件"
+    return "PASS", label, note
+
+
 def _eval_where(statements: list[ParsedStatement], rules_config: dict[str, Any]) -> tuple[RuleRow, list[Finding]]:
     rdef = _rule_def(rules_config, "R002")
     if not rdef.get("enabled", True):
@@ -95,28 +157,46 @@ def _eval_where(statements: list[ParsedStatement], rules_config: dict[str, Any])
             rule_id="R002", name="WHERE 查詢條件", status="NA", evidence="不適用", note="此次 SQL 不需要 WHERE 條件"
         ), findings
 
-    missing = [s for s in applicable if s.has_where is False]
-    unknown = [s for s in applicable if s.has_where is None]
+    per_stmt = [(s, *_statement_where_status(s, rdef)) for s in applicable]
 
-    for s in missing:
-        findings.append(
-            Finding(rule_id="R002", status="BLOCK", fact="缺少 WHERE 條件", statement_index=s.index)
-        )
+    for s, status, evidence, _note in per_stmt:
+        if status == "PASS":
+            continue
+        if s.has_where is None:
+            # Pre-existing behavior, unchanged: a parse-uncertain statement
+            # ("SQL 結構較複雜，無法確認") only affects the RuleRow's overall
+            # REVIEW status, never produces a Finding — it was never scored
+            # via improvement_score.py's rule-findings component, and this
+            # restriction-evidence feature must not silently change that.
+            continue
+        findings.append(Finding(rule_id="R002", status=status, fact=evidence, statement_index=s.index))
 
-    if missing:
-        evidence = "、".join(f"{_seg_prefix(s, multi)}缺少 WHERE 條件" for s in missing)
+    blocked = [(s, ev) for s, status, ev, _ in per_stmt if status == "BLOCK"]
+    if blocked:
+        evidence = "、".join(f"{_seg_prefix(s, multi)}{ev}" for s, ev in blocked)
         return RuleRow(
             rule_id="R002", name="WHERE 查詢條件", status="BLOCK", evidence=evidence, note="依中心規範，查詢須有 WHERE 查詢條件"
         ), findings
 
-    if unknown:
-        evidence = "、".join(f"{_seg_prefix(s, multi)}SQL 結構較複雜，無法確認" for s in unknown)
+    reviewed = [(s, ev) for s, status, ev, _ in per_stmt if status == "REVIEW"]
+    if reviewed:
+        evidence = "、".join(f"{_seg_prefix(s, multi)}{ev}" for s, ev in reviewed)
         return RuleRow(
             rule_id="R002", name="WHERE 查詢條件", status="REVIEW", evidence=evidence, note="請人工確認是否已有適當查詢條件"
         ), findings
 
+    # Everything PASS — either a real WHERE, or restriction evidence
+    # configured to pass. Show every statement's own evidence text (not
+    # just "已設定") so multi-statement / evidence-based passes stay
+    # traceable, and de-dupe notes so the same explanation isn't repeated.
+    evidence_parts = [f"{_seg_prefix(s, multi)}{ev}" for s, _status, ev, _note in per_stmt]
+    notes = list(dict.fromkeys(note for _s, _status, _ev, note in per_stmt))
     return RuleRow(
-        rule_id="R002", name="WHERE 查詢條件", status="PASS", evidence="已設定", note="已有限制查詢條件"
+        rule_id="R002",
+        name="WHERE 查詢條件",
+        status="PASS",
+        evidence="、".join(evidence_parts) if multi else evidence_parts[0],
+        note="；".join(notes),
     ), findings
 
 

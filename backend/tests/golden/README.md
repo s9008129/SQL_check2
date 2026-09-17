@@ -40,6 +40,10 @@ safe shape, and do not commit output produced from real production cases — a
 - AI, few and explicit: no forbidden claims/vocabulary,
   `estimated_improvement_pct` sanity, plus each case's `expect_no_advice` /
   `expect_outcome_in` / `expect_candidate_allowed` declarations.
+  `expect_no_advice` is strict: a clean-SQL case passes only when
+  `advice == []` **and** `suggested_sql.outcome == "not_needed"`; a
+  "not_needed" answer that still carries advice is recorded as
+  `quiet_kind=not_needed_with_advice` and FAILS the case.
 
 Adding a case: extend `CASES` in `run_golden.py` with synthetic SQL, state the
 deterministic expectations (`expect_compliance`, `expect_finding_rule_ids`,

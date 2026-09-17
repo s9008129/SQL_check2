@@ -22,6 +22,12 @@ What it checks per case, against the PRD §56 acceptance criteria:
   declares via `expect_no_advice` / `expect_outcome_in` /
   `expect_candidate_allowed`.
 
+Clean-SQL cases (`expect_no_advice`) are strict (2026-09-17 round-1
+third-party review): BOTH `advice == []` AND
+`suggested_sql.outcome == "not_needed"` must hold. A contradictory state
+(outcome=not_needed with 1-3 advice items) is exactly the "hard-sell"
+behaviour this case exists to catch, so it is a FAIL, not a pass.
+
 Evidence / de-identification policy (2026-09-17, binding):
 golden cases must stay synthetic or de-identified. `--out` writes ONLY the
 per-case record built in `run_case` — case name, verdicts, rule
@@ -100,9 +106,10 @@ class GoldenCase:
     expect_complexity_flags: tuple[str, ...] | None = None
     # --- AI-behaviour expectations (live model; kept few and explicit) ---
     expect_candidate_allowed: bool | None = None
-    # Clean-SQL case: the model must not invent improvements. Either signal is
-    # accepted — `advice == []`, or `suggested_sql.outcome == "not_needed"` —
-    # and the evidence records which one was observed as `quiet_kind`.
+    # Clean-SQL case: the model must not invent improvements. Strict: both
+    # `advice == []` and `suggested_sql.outcome == "not_needed"` are required
+    # (a "not_needed" answer that still carries advice is a FAIL). The
+    # evidence records the observed state as `quiet_kind`.
     expect_no_advice: bool = False
     # When set, `suggested_sql.outcome` must be one of these values.
     expect_outcome_in: tuple[str, ...] | None = None
@@ -241,6 +248,28 @@ def _safe_stats(raw: Any) -> dict[str, Any]:
     return {key: raw[key] for key in _STATS_KEYS if key in raw}
 
 
+def evaluate_no_advice_expectation(outcome: str | None, advice_count: int) -> tuple[str | None, list[str]]:
+    """Strict judgement for `expect_no_advice` cases (clean SQL).
+
+    Both signals are required: no advice at all AND `not_needed`. The old
+    "either/or" logic let `outcome=not_needed` with fabricated advice through,
+    which is precisely the hard-sell behaviour these cases must catch.
+
+    Returns (quiet_kind, problems); `quiet_kind` is recorded in the evidence.
+    """
+    advice_empty = advice_count == 0
+    outcome_quiet = outcome == "not_needed"
+    if advice_empty and outcome_quiet:
+        return "not_needed", []
+    if outcome_quiet:  # contradictory: claims nothing to improve, yet advises
+        return "not_needed_with_advice", [
+            f"矛盾狀態：suggested_sql.outcome=not_needed 但同時回傳 {advice_count} 條建議（乾淨 SQL 不得硬湊建議）"
+        ]
+    if advice_empty:
+        return "advice_empty", [f"未回傳建議但 suggested_sql.outcome={outcome}（預期 not_needed）"]
+    return "neither", [f"此案例不應出現 AI 建議，但回傳 {advice_count} 條（outcome={outcome}）"]
+
+
 async def run_case(case: GoldenCase, settings) -> CaseResult:
     problems: list[str] = []
     parsed = parse_sql_text(case.sql)
@@ -316,13 +345,8 @@ async def run_case(case: GoldenCase, settings) -> CaseResult:
 
     quiet_kind: str | None = None
     if case.expect_no_advice:
-        if outcome == "not_needed":
-            quiet_kind = "not_needed"
-        elif not ai_result.advice:
-            quiet_kind = "advice_empty"
-        else:
-            quiet_kind = "neither"
-            problems.append(f"此案例不應出現 AI 建議，但回傳 {len(ai_result.advice)} 條（outcome={outcome}）")
+        quiet_kind, quiet_problems = evaluate_no_advice_expectation(outcome, len(ai_result.advice))
+        problems += quiet_problems
 
     if case.expect_outcome_in is not None and outcome not in case.expect_outcome_in:
         problems.append(f"預期 suggested_sql.outcome 為 {case.expect_outcome_in}，實際為 {outcome}")

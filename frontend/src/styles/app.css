@@ -194,6 +194,30 @@ mark.legend{margin:0 3px}
 .fragment-note{margin-top:6px;font-size:11px;color:#8b96ab}
 @media(max-width:820px){.diff-col-head,.diff-row,.fragment-grid{grid-template-columns:1fr}}
 
+/* 2026-09-17 user request: 預估改善效果 / SQL 寫法比較 text and all badge tags
+   scaled up ~20% for readability. Scoped overrides so the rest of the page keeps
+   its density. */
+.badge{font-size:13px;padding:6px 11px}
+.card-estimate .card-title,.card-compare .card-title{font-size:20px}
+.card-estimate .card-desc,.card-compare .card-desc{font-size:14px}
+.card-estimate .ai-note,.card-compare .ai-note{font-size:14px;padding:14px 17px}
+.card-estimate .estimate-value{font-size:50px}
+.card-estimate .estimate-label{font-size:14px}
+.card-estimate .estimate-copy h3{font-size:26px}
+.card-estimate .estimate-copy p{font-size:16px;max-width:740px}
+.card-estimate .estimate-note{font-size:14px}
+.card-estimate .estimate-chip{font-size:14px;padding:8px 12px}
+.card-estimate .estimate-ring{width:226px}.card-estimate .estimate-wrap{grid-template-columns:264px minmax(0,1fr)}
+.card-compare .sql-head{font-size:14px;height:50px}
+.card-compare .diff-table,.card-compare .diff-col-head{font-size:14px}
+.card-compare .diff-cell{min-height:28px}
+.card-compare .segment-list-title,.card-compare .fragment-title{font-size:16px}
+.card-compare .fragment-label,.card-compare .fragment-note{font-size:13px}
+.card-compare .fragment-cell code{font-size:14px}
+.card-compare .verdict-headline{font-size:15px}
+@media(max-width:820px){.card-estimate .estimate-wrap{grid-template-columns:1fr}}
+@media(max-width:520px){.card-estimate .estimate-ring{width:196px}.card-estimate .estimate-value{font-size:43px}}
+
 /* CodeMirror hosts: light variant matches the prototype textarea, dark
    variant fills the dark .sql-box code panels. */
 .editor-host{border-radius:13px;overflow:hidden}

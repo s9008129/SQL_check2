@@ -62,7 +62,7 @@ export default function EstimateCard({ ai }: EstimateCardProps) {
   }
 
   return (
-    <section className="card">
+    <section className="card card-estimate">
       <div className="card-head">
         <div>
           <div className="card-title">預估改善效果</div>

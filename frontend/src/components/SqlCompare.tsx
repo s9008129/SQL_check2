@@ -106,7 +106,7 @@ export default function SqlCompare({ originalSql, cost, ai }: SqlCompareProps) {
   }
 
   return (
-    <section className="card">
+    <section className="card card-compare">
       <div className="card-head">
         <div>
           <div className="card-title">SQL 寫法比較</div>

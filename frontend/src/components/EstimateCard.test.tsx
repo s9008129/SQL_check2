@@ -10,15 +10,14 @@ describe("EstimateCard (improvement-potential level, 2026-09-17)", () => {
         ai={makeAi({
           estimated_improvement_pct: 45,
           improvement_potential: "high",
-          improvement_potential_basis: ["規則檢核：1 項提醒", "AI 建議：高影響（系統已確認查詢結果不變）"],
+          improvement_potential_basis: ["規則檢核：1 項提醒"],
         })}
       />,
     );
     const block = screen.getByTestId("potential");
     expect(block.textContent).toContain("改善潛力：高");
     expect(block.textContent).toContain("規則檢核：1 項提醒");
-    expect(block.textContent).toContain("未經任何實際量測");
-    expect(block.textContent).toContain("測試機覆核與測試");
+    expect(block.textContent).toContain("此改善等級由程式規則檢核結果及 AI 推論綜合評估，未經測試機實際驗證。");
     expect(screen.queryByText(/%/)).toBeNull();
     expect(container.querySelector(".potential-high")).toBeTruthy();
   });

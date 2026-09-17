@@ -34,14 +34,14 @@ def test_block_finding_is_high():
 def test_confirmed_high_impact_fragment_is_high():
     level, basis = improvement_potential(_ok([_advice("high", "corrected")]), [])
     assert level == "high"
-    assert basis == ["AI 建議：高影響（系統已確認查詢結果不變）"]
+    assert basis == []  # per-advice breakdown is deliberately not listed
 
 
 def test_unconfirmed_high_impact_is_only_low():
     # A high-impact claim the system could not confirm is not evidence.
     level, basis = improvement_potential(_ok([_advice("high", "unverified")]), [])
     assert level == "low"
-    assert basis == ["AI 建議：高影響（系統無法確認查詢結果）"]
+    assert basis == []
 
 
 def test_notice_finding_is_medium():
@@ -76,5 +76,4 @@ def test_basis_lists_rules_rewrite_and_advice_in_order():
     assert basis == [
         "規則檢核：1 項不符合、2 項提醒",
         "已提供整段建議寫法，系統已確認查詢結果不變",
-        "AI 建議：高影響（系統已確認查詢結果不變）、低影響",
     ]

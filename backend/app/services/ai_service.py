@@ -51,7 +51,6 @@ logger = logging.getLogger(__name__)
 # PRD-mandated exact frontend copy for any AI failure path (§56).
 DEGRADE_MESSAGE = "智慧改善建議目前暫時無法使用，仍可依上方規則檢核結果進行確認。"
 
-_IMPACT_LABEL = {"high": "高", "medium": "中", "low": "低"}
 _VERIFIED = {"verified", "corrected"}
 
 
@@ -86,19 +85,8 @@ def improvement_potential(result: AiResult, findings: list[Finding]) -> tuple[st
         basis.append("規則檢核：" + "、".join(parts))
     if provided:
         basis.append("已提供整段建議寫法，系統已確認查詢結果不變")
-    if result.advice:
-        described = []
-        for a in result.advice:
-            if not a.impact:
-                continue
-            tag = _IMPACT_LABEL[a.impact] + "影響"
-            if a.verification in _VERIFIED:
-                tag += "（系統已確認查詢結果不變）"
-            elif a.verification == "unverified":
-                tag += "（系統無法確認查詢結果）"
-            described.append(tag)
-        if described:
-            basis.append("AI 建議：" + "、".join(described))
+    # 2026-09-17 user request: the per-advice impact/verification breakdown
+    # is NOT listed here (the advice cards already carry it).
 
     if blocks or confirmed_high or (provided and any_high):
         return "high", basis

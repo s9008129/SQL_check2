@@ -33,8 +33,7 @@ export const ESTIMATE_NOT_NEEDED_MESSAGE = "目前寫法良好，規則檢核與
 
 // 2026-09-17 user decision: the improvement "estimate" is a level derived
 // from rule findings and advice, never a measured number. Say so plainly.
-export const POTENTIAL_CAVEAT =
-  "此等級由規則檢核結果與 AI 建議推算，未經任何實際量測；系統人員採用前請於測試機覆核與測試。";
+export const POTENTIAL_CAVEAT = "此改善等級由程式規則檢核結果及 AI 推論綜合評估，未經測試機實際驗證。";
 export const POTENTIAL_LABEL: Record<"high" | "medium" | "low", string> = {
   high: "高",
   medium: "中",

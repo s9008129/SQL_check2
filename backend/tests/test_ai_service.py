@@ -591,7 +591,8 @@ async def test_candidate_not_allowed_also_nulls_estimated_pct_when_estimate_requ
     # builds its own settings override to exercise the true branch directly
     # rather than depending on the shipped default.
     strict_settings = dataclasses.replace(
-        settings, ai_gate={**settings.ai_gate, "estimate_requires_candidate": True}
+        settings,
+        ai_gate={**settings.ai_gate, "estimate_requires_candidate": True, "estimate_allowed_with_advice_fragments": False},
     )
     inner = _good_inner(estimated_improvement_pct=80)
     respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
@@ -600,6 +601,33 @@ async def test_candidate_not_allowed_also_nulls_estimated_pct_when_estimate_requ
         strict_settings, _multi_statement(), sql_text="SELECT * FROM T A WHERE A.X=1;\nSELECT * FROM T2 B WHERE B.Y=1;"
     )
 
+    assert result.estimated_improvement_pct is None
+    assert result.estimate_reason == ai_service.ESTIMATE_REASON_NOT_ALLOWED
+
+
+@respx.mock
+async def test_estimate_kept_when_no_findings_but_advice_has_fragments(settings, chat_url):
+    # 2026-09-17: rules all pass, rewrite gated by length, but the model gave
+    # concrete fragments (example) — that is a basis for an estimate.
+    inner = _good_inner(estimated_improvement_pct=35)
+    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
+    long_sql = "SELECT " + ", ".join(f"A.C{i} AS 稅種{i}稅額_減因C" for i in range(400)) + " FROM T A WHERE A.Y = 1"
+    result = await _call(settings, parse_sql_text(long_sql).statements, sql_text=long_sql)
+    assert result.suggested_sql.outcome == "gated"
+    assert any(a.example for a in result.advice)
+    assert result.estimated_improvement_pct == 35
+    assert result.estimate_reason is None
+
+
+@respx.mock
+async def test_estimate_dropped_when_no_findings_no_rewrite_and_no_fragments(settings, chat_url):
+    inner = _good_inner(estimated_improvement_pct=35)
+    for item in inner["advice"]:
+        item["example"] = None
+        item["before"] = None
+    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
+    long_sql = "SELECT " + ", ".join(f"A.C{i} AS 稅種{i}稅額_減因C" for i in range(400)) + " FROM T A WHERE A.Y = 1"
+    result = await _call(settings, parse_sql_text(long_sql).statements, sql_text=long_sql)
     assert result.estimated_improvement_pct is None
     assert result.estimate_reason == ai_service.ESTIMATE_REASON_NOT_ALLOWED
 

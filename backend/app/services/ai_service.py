@@ -54,7 +54,7 @@ DEGRADE_MESSAGE = "智慧改善建議目前暫時無法使用，仍可依上方�
 # Why estimated_improvement_pct is None on an otherwise-ok result (2026-09-17).
 # estimate_allowed is False exactly when the rule engine found nothing AND no
 # full rewrite was allowed (see _compute_gates) — there is nothing to measure.
-ESTIMATE_REASON_NOT_ALLOWED = "規則檢核沒有發現問題，且本次不整段改寫，沒有可據以估算改善幅度的依據。"
+ESTIMATE_REASON_NOT_ALLOWED = "規則檢核沒有發現問題、本次不整段改寫，AI 也沒有給出具體的片段建議，沒有可據以估算改善幅度的依據。"
 ESTIMATE_REASON_MODEL_NULL = "AI 認為目前資訊不足以估算改善幅度，例如改善方向需先由業務確認才能判斷效果。"
 
 _PROMPT_PATH = PROMPTS_DIR / "sql_review_zh_tw.txt"
@@ -632,6 +632,7 @@ def _finalize(
     important_tables_config: dict[str, Any],
     *,
     original_sql: str = "",
+    estimate_with_fragments: bool = False,
 ) -> AiResult:
     forbidden = ai_guard_cfg.get("forbidden_phrases", [])
     vocab = ai_guard_cfg.get("vocabulary_replacements", {})
@@ -655,12 +656,17 @@ def _finalize(
         rules_config,
         important_tables_config,
     )
-    pct = _clamp_round_pct(raw.estimated_improvement_pct, estimate_allowed)
+    # 2026-09-17: concrete advice fragments (example present) are a basis for
+    # an estimate even when the rule engine found nothing and no full rewrite
+    # was allowed (app.yaml ai_gate.estimate_allowed_with_advice_fragments).
+    has_fragments = any(item.example for item in advice)
+    effective_estimate_allowed = estimate_allowed or (estimate_with_fragments and has_fragments)
+    pct = _clamp_round_pct(raw.estimated_improvement_pct, effective_estimate_allowed)
     # 2026-09-17 user request: 「本次不提供效能改善幅度預估」 must always come
     # with a plain-language reason. Only two things can make pct None here.
     estimate_reason: str | None = None
     if pct is None:
-        estimate_reason = ESTIMATE_REASON_NOT_ALLOWED if not estimate_allowed else ESTIMATE_REASON_MODEL_NULL
+        estimate_reason = ESTIMATE_REASON_NOT_ALLOWED if not effective_estimate_allowed else ESTIMATE_REASON_MODEL_NULL
 
     # 2026-09-17: a `:STR_001` the model made up (not in the reverse map, not
     # in the user's SQL) must not reach the reviewer — see masking.py.
@@ -1006,6 +1012,11 @@ async def get_ai_result(
             sql_tokens,
         )
 
+        # The model must be asked for a number whenever fragments could later
+        # justify one; _finalize drops it again if they do not materialise.
+        estimate_with_fragments = bool(settings.ai_gate.get("estimate_allowed_with_advice_fragments", True))
+        estimate_requested = estimate_allowed or estimate_with_fragments
+
         def build(candidate: bool) -> dict[str, Any]:
             return _build_payload(
                 statement_type=statement_type,
@@ -1014,7 +1025,7 @@ async def get_ai_result(
                 compliance_status=compliance_status,
                 findings=findings,
                 candidate_allowed=candidate,
-                estimate_improvement_allowed=estimate_allowed,
+                estimate_improvement_allowed=estimate_requested,
                 literal_hints=mask_result.literal_hints,
                 where_evidence=where_evidence,
                 structure_flags=sorted(representative.complexity_flags) if representative else [],
@@ -1052,6 +1063,7 @@ async def get_ai_result(
             settings.rules_config,
             settings.important_tables_config,
             original_sql=sql_text,
+            estimate_with_fragments=estimate_with_fragments,
         )
     except Exception as exc:
         # PRD §50.4: exception type only, never a message/traceback that

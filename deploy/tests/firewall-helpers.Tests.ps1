@@ -48,9 +48,10 @@ if ($parseErrors.Count -gt 0) {
 
 $wanted = @(
     'Test-PortListContains', 'Test-WslInterfaceAlias', 'Test-AddressWithinRange',
-    'Test-BroadRemoteAddressEntry', 'Test-BroadRemoteAddressList', 'Test-OllamaRuleScoped',
-    'Test-BroadLanAllow', 'Get-OllamaFirewallAudit', 'Get-OllamaRuleRemediationText',
-    'Get-OllamaRuleMismatch', 'Stop-OllamaFirewallStep', 'Assert-OllamaFirewallRule'
+    'Test-BroadRemoteAddressEntry', 'Test-BroadRemoteAddressList', 'Test-RemoteAddressAnySentinel',
+    'Test-OllamaRuleScoped', 'Test-BroadLanAllow', 'Get-OllamaFirewallAudit',
+    'Get-OllamaRuleRemediationText', 'Get-OllamaRuleMismatch', 'Stop-OllamaFirewallStep',
+    'Assert-OllamaFirewallRule', 'Get-OllamaOwnedRulePlan'
 )
 $source = [System.Text.StringBuilder]::new()
 foreach ($f in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
@@ -144,13 +145,28 @@ Assert-True 'Any array'                            (Test-BroadRemoteAddressList 
 Assert-True 'mixed docker + LAN'                   (Test-BroadRemoteAddressList -Values @('172.18.0.0/16', '10.0.0.0/8') -DockerRange '172.16.0.0/12')
 Assert-True 'docker ranges only'                   (Test-BroadRemoteAddressList -Values @('172.18.0.0/16', '172.19.0.0/16') -DockerRange '172.16.0.0/12') $false
 
+Write-Host '== Test-RemoteAddressAnySentinel =='
+Assert-True "'Any'"                                (Test-RemoteAddressAnySentinel -Values 'Any')
+Assert-True "@('Any','Any')"                       (Test-RemoteAddressAnySentinel -Values @('Any', 'Any'))
+Assert-True "'  Any  ' (trimmed)"                  (Test-RemoteAddressAnySentinel -Values '  Any  ')
+Assert-True "'LocalSubnet'"                        (Test-RemoteAddressAnySentinel -Values 'LocalSubnet') $false
+Assert-True "empty string"                         (Test-RemoteAddressAnySentinel -Values '') $false
+Assert-True 'null'                                 (Test-RemoteAddressAnySentinel -Values $null) $false
+Assert-True 'empty array'                          (Test-RemoteAddressAnySentinel -Values @()) $false
+Assert-True "Any + docker CIDR"                    (Test-RemoteAddressAnySentinel -Values @('Any', '172.16.0.0/12')) $false
+
 Write-Host '== Test-OllamaRuleScoped =='
 Assert-True 'WSL interface, no address'            (Test-OllamaRuleScoped -InterfaceAlias 'vEthernet (WSL)' -RemoteAddress $null -DockerRemoteAddress '172.16.0.0/12')
+Assert-True 'WSL + Any sentinel'                   (Test-OllamaRuleScoped -InterfaceAlias 'vEthernet (WSL)' -RemoteAddress 'Any' -DockerRemoteAddress '172.16.0.0/12')
+Assert-True "WSL + @('Any') sentinel"              (Test-OllamaRuleScoped -InterfaceAlias 'vEthernet (WSL)' -RemoteAddress @('Any') -DockerRemoteAddress '172.16.0.0/12')
 Assert-True 'docker range, no interface'           (Test-OllamaRuleScoped -InterfaceAlias $null -RemoteAddress '172.18.0.0/16' -DockerRemoteAddress '172.16.0.0/12')
 Assert-True 'no interface + Any'                   (Test-OllamaRuleScoped -InterfaceAlias $null -RemoteAddress 'Any' -DockerRemoteAddress '172.16.0.0/12') $false
 Assert-True 'Ethernet + Any'                       (Test-OllamaRuleScoped -InterfaceAlias 'Ethernet' -RemoteAddress 'Any' -DockerRemoteAddress '172.16.0.0/12') $false
 Assert-True 'Ethernet + no address'                (Test-OllamaRuleScoped -InterfaceAlias 'Ethernet' -RemoteAddress @() -DockerRemoteAddress '172.16.0.0/12') $false
+Assert-True 'WSL + docker CIDR passes'             (Test-OllamaRuleScoped -InterfaceAlias 'vEthernet (WSL)' -RemoteAddress '172.18.0.0/16' -DockerRemoteAddress '172.16.0.0/12')
 Assert-True 'WSL + LAN range widens the scope'     (Test-OllamaRuleScoped -InterfaceAlias 'vEthernet (WSL)' -RemoteAddress '10.0.0.0/8' -DockerRemoteAddress '172.16.0.0/12') $false
+Assert-True 'WSL + LocalSubnet still fails'        (Test-OllamaRuleScoped -InterfaceAlias 'vEthernet (WSL)' -RemoteAddress 'LocalSubnet' -DockerRemoteAddress '172.16.0.0/12') $false
+Assert-True 'WSL + Any + wider CIDR fails'         (Test-OllamaRuleScoped -InterfaceAlias 'vEthernet (WSL)' -RemoteAddress @('Any', '10.0.0.0/8') -DockerRemoteAddress '172.16.0.0/12') $false
 
 Write-Host '== Test-BroadLanAllow =='
 Assert-True 'installer-style Allow/Any/Any'        (Test-BroadLanAllow -Enabled $true -Inbound $true -Allow $true -InterfaceAlias $null -RemoteAddress 'Any' -DockerRemoteAddress '172.16.0.0/12')
@@ -167,6 +183,9 @@ Write-Host '== Get-OllamaFirewallAudit (mocked firewall) =='
 $script:FakeOwnedAlias = 'vEthernet (WSL)'
 $script:FakeOwnedRemote = $null
 $script:FakeOwnedLocalPort = '11434'
+# When > 0, the mocked Get-NetFirewallPortFilter omits this many filters from
+# the full enumeration; used to prove the audit fails closed on a partial view.
+$script:FakePortFilterDrop = 0
 
 function New-FakeRule {
     param($id, $name, $alias, $remote, $port = '11434', $action = 'Allow', $enabled = 'True', $direction = 'Inbound')
@@ -190,6 +209,9 @@ function Get-NetFirewallPortFilter {
             [pscustomobject]@{ InstanceID = 'id-rogue'; LocalPort = '11434' },
             [pscustomobject]@{ InstanceID = 'id-443';   LocalPort = '443' }
         )
+        if ($script:FakePortFilterDrop -gt 0) {
+            $all = @($all | Select-Object -Skip $script:FakePortFilterDrop)
+        }
         if ($null -eq $InputObject) { return $all }
         return @($all | Where-Object { $_.InstanceID -eq $InputObject.InstanceID })
     }
@@ -230,6 +252,23 @@ Assert-Equal 'rogue remote address preserved'      $audit[1].RemoteAddress 'Loca
 Assert-True  'rogue rule is flagged as broad LAN'  (Test-BroadLanAllow -Enabled $audit[1].Enabled -Inbound ($audit[1].Direction -eq 'Inbound') -Allow ($audit[1].Action -eq 'Allow') -InterfaceAlias $audit[1].InterfaceAlias -RemoteAddress $audit[1].RemoteAddress -DockerRemoteAddress '172.16.0.0/12')
 Assert-True  'owned rule is not flagged'           (Test-BroadLanAllow -Enabled $audit[0].Enabled -Inbound ($audit[0].Direction -eq 'Inbound') -Allow ($audit[0].Action -eq 'Allow') -InterfaceAlias $audit[0].InterfaceAlias -RemoteAddress $audit[0].RemoteAddress -DockerRemoteAddress '172.16.0.0/12') $false
 
+Write-Host '== Get-OllamaFirewallAudit (fail-closed on partial enumeration) =='
+$threw = $false
+$auditError = $null
+$script:FakePortFilterDrop = 1
+try {
+    Get-OllamaFirewallAudit -LocalPort 11434 | Out-Null
+} catch {
+    $threw = $true
+    $auditError = $_.Exception.Message
+} finally {
+    $script:FakePortFilterDrop = 0
+}
+Assert-True  'missing port filter aborts the audit' $threw
+Assert-True  'abort message names the unjoinable rule' ($auditError -like '*沒有可關聯*')
+$auditRestored = @(Get-OllamaFirewallAudit -LocalPort 11434)
+Assert-Equal 'audit works again after the mock is restored' $auditRestored.Count 2
+
 Write-Host '== Assert-OllamaFirewallRule =='
 Assert-OllamaFirewallRule -DisplayName 'SQLCheck - Ollama API (container only)' -DockerRemoteAddress '172.16.0.0/12'
 Assert-True 'correctly scoped rule verifies' ($script:LastOk -like '*驗證通過*')
@@ -247,6 +286,36 @@ $m = Get-OllamaRuleMismatch -Rule ([pscustomobject]@{ Enabled = 'True'; Directio
 Assert-Equal 'valid rule has no mismatch' $m.Count 0
 $m2 = Get-OllamaRuleMismatch -Rule ([pscustomobject]@{ Enabled = 'True'; Direction = 'Inbound'; Action = 'Allow'; LocalPort = '443' }) -InterfaceAlias $null -RemoteAddress 'Any' -DockerRemoteAddress '172.16.0.0/12'
 Assert-Equal 'wrong port + wide scope => 2 mismatches' $m2.Count 2
+
+Write-Host '== Get-OllamaOwnedRulePlan =='
+$p0 = Get-OllamaOwnedRulePlan -ExistingRules @() -Validated $true
+Assert-Equal 'no rules -> Count 0'                       $p0.Count 0
+Assert-True  'no rules -> not ambiguous'                 $p0.Ambiguous $false
+Assert-Equal 'no rules -> no trusted IDs'                (@($p0.TrustedInstanceIds).Count) 0
+
+$oneRule = @([pscustomobject]@{ InstanceID = 'id-one' })
+$p1 = Get-OllamaOwnedRulePlan -ExistingRules $oneRule -Validated $false
+Assert-Equal 'single unvalidated rule -> Count 1'        $p1.Count 1
+Assert-True  'single unvalidated rule -> not ambiguous'  $p1.Ambiguous $false
+Assert-Equal 'single unvalidated rule -> nothing trusted' (@($p1.TrustedInstanceIds).Count) 0
+
+$p2 = Get-OllamaOwnedRulePlan -ExistingRules $oneRule -Validated $true
+Assert-Equal 'single validated rule -> Count 1'          $p2.Count 1
+Assert-Equal 'single validated rule -> trusted InstanceID' (@($p2.TrustedInstanceIds) -join ',') 'id-one'
+
+$threeRules = @(
+    [pscustomobject]@{ InstanceID = 'id-a' },
+    [pscustomobject]@{ InstanceID = 'id-b' },
+    [pscustomobject]@{ InstanceID = 'id-c' }
+)
+$p3 = Get-OllamaOwnedRulePlan -ExistingRules $threeRules -Validated $true
+Assert-Equal 'three same-name rules -> Count 3'          $p3.Count 3
+Assert-True  'three same-name rules -> ambiguous'        $p3.Ambiguous $true
+Assert-Equal 'three same-name rules -> nothing trusted'  (@($p3.TrustedInstanceIds).Count) 0
+
+$p4 = Get-OllamaOwnedRulePlan -ExistingRules @($null) -Validated $true
+Assert-Equal 'null-only rule list -> Count 0'            $p4.Count 0
+Assert-Equal 'null-only rule list -> nothing trusted'    (@($p4.TrustedInstanceIds).Count) 0
 
 Write-Host '== Stop-OllamaFirewallStep (fail-closed) =='
 $threw = $false

@@ -458,13 +458,36 @@ function Test-BroadRemoteAddressList {
     return $false
 }
 
+# True when a RemoteAddress filter list is nothing but Windows' "Any" sentinel.
+# Windows stores an address filter even for a rule that was created with only
+# -InterfaceAlias and no -RemoteAddress, and reports that filter as 'Any'.
+# Callers that have already confirmed the interface binding can use this to
+# tell "no source restriction was configured" apart from "the source range was
+# explicitly widened".
+function Test-RemoteAddressAnySentinel {
+    param([object]$Values)
+    if ($null -eq $Values) { return $false }
+    $items = @($Values)
+    if ($items.Count -eq 0) { return $false }
+    foreach ($item in $items) {
+        if ($null -eq $item) { return $false }
+        if (([string]$item).Trim() -ne 'Any') { return $false }
+    }
+    return $true
+}
+
 # Is the rule's source scope narrowed down to Docker-internal traffic?
 # Accepted scopes, in this order:
-#   1. RemoteAddress is present and every entry stays inside the Docker private
+#   1. The rule is bound to the WSL vEthernet interface alias (Docker Desktop's
+#      internal adapter, never a LAN-facing NIC). Windows reports the address
+#      filter of such a rule as the sentinel 'Any' even when the rule was
+#      created with only -InterfaceAlias (no -RemoteAddress), so with a WSL
+#      binding an empty/absent filter, or a filter holding only 'Any', is
+#      accepted: the interface filter is what actually limits the traffic.
+#      An explicitly wider address entry (LocalSubnet, '*' or a non-Docker
+#      CIDR) is still rejected.
+#   2. RemoteAddress is present and every entry stays inside the Docker private
 #      range (-DockerRemoteAddress).
-#   2. The rule is bound to the WSL vEthernet interface alias (Docker Desktop's
-#      internal adapter, never a LAN-facing NIC) and its RemoteAddress does not
-#      additionally widen the source to the whole network.
 # Anything else counts as "not narrowed"; the audit never guesses in favour of
 # a rule it cannot prove is limited to Docker.
 function Test-OllamaRuleScoped {
@@ -474,11 +497,13 @@ function Test-OllamaRuleScoped {
         [string]$DockerRemoteAddress
     )
     $hasAddressFilter = ($null -ne $RemoteAddress) -and (@($RemoteAddress).Count -gt 0)
-    if ($hasAddressFilter) {
+    if (Test-WslInterfaceAlias -Values $InterfaceAlias) {
+        if (-not $hasAddressFilter) { return [bool]$true }
+        if (Test-RemoteAddressAnySentinel -Values $RemoteAddress) { return [bool]$true }
         return [bool](-not (Test-BroadRemoteAddressList -Values $RemoteAddress -DockerRange $DockerRemoteAddress))
     }
-    if (Test-WslInterfaceAlias -Values $InterfaceAlias) { return [bool]$true }
-    return [bool]$false
+    if (-not $hasAddressFilter) { return [bool]$false }
+    return [bool](-not (Test-BroadRemoteAddressList -Values $RemoteAddress -DockerRange $DockerRemoteAddress))
 }
 
 # The risky case this audit exists for: an enabled Allow rule on TCP 11434 that
@@ -504,29 +529,38 @@ function Test-BroadLanAllow {
 # The raw filter objects are fetched in batch and joined by InstanceID because
 # calling the Get-NetFirewall*Filter cmdlets once per rule is noticeably slow
 # on hosts with hundreds of rules.
-# Throws on enumeration failure: the caller must not continue on a partial view.
+# Fail-closed: the enumerations deliberately use -ErrorAction Stop, and a rule
+# whose port filter cannot be joined aborts the audit instead of being skipped.
+# A provider/permission/filter-enumeration failure must never downgrade the
+# audit to a partial view that silently omits a rule - the caller must not
+# continue on anything less than the full picture.
 function Get-OllamaFirewallAudit {
     param([int]$LocalPort = 11434)
     $audit = @()
     try {
-        $rules = @(Get-NetFirewallRule -Direction Inbound -ErrorAction SilentlyContinue)
+        $rules = @(Get-NetFirewallRule -Direction Inbound -ErrorAction Stop)
         $portFilters = @{}
-        foreach ($filter in @(Get-NetFirewallPortFilter -ErrorAction SilentlyContinue)) {
+        foreach ($filter in @(Get-NetFirewallPortFilter -ErrorAction Stop)) {
             if ($filter.InstanceID) { $portFilters[[string]$filter.InstanceID] = $filter }
         }
         $interfaceFilters = @{}
-        foreach ($filter in @(Get-NetFirewallInterfaceFilter -ErrorAction SilentlyContinue)) {
+        foreach ($filter in @(Get-NetFirewallInterfaceFilter -ErrorAction Stop)) {
             if ($filter.InstanceID) { $interfaceFilters[[string]$filter.InstanceID] = $filter }
         }
         $addressFilters = @{}
-        foreach ($filter in @(Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue)) {
+        foreach ($filter in @(Get-NetFirewallAddressFilter -ErrorAction Stop)) {
             if ($filter.InstanceID) { $addressFilters[[string]$filter.InstanceID] = $filter }
         }
         foreach ($rule in $rules) {
             $key = [string]$rule.InstanceID
             $portFilter = $portFilters[$key]
-            if ($null -eq $portFilter) { continue }
+            if ($null -eq $portFilter) {
+                throw "規則 '$($rule.DisplayName)' (InstanceID $($rule.InstanceID)) 沒有可關聯的 TCP 埠 filter，無法確認是否開放 $LocalPort；依 fail-closed 政策中止。"
+            }
             if (-not (Test-PortListContains -PortList $portFilter.LocalPort -Port $LocalPort)) { continue }
+            # A missing interface/address filter is treated as unset, which
+            # means "Any / 所有介面" -> NOT scoped. The audit must never trust
+            # a rule just because its filters could not be read.
             $interfaceAlias = $null
             if ($interfaceFilters.ContainsKey($key)) { $interfaceAlias = $interfaceFilters[$key].InterfaceAlias }
             $remoteAddress = $null
@@ -691,6 +725,32 @@ function Assert-OllamaFirewallRule {
     Write-Ok "防火牆規則 '$DisplayName' 驗證通過 (Inbound/Allow/TCP $localPort，限定 $scopeText，Profile $($verified.Profile))。"
 }
 
+# Ownership plan for the SQLCheck-owned 11434 rule. The DisplayName alone is
+# never a trust boundary: only a rule that was re-read from the firewall and
+# validated (Validated=$true) - or one this script just created and verified -
+# may be excluded from the risky audit. More than one rule sharing the name is
+# ambiguous and must fail closed, so TrustedInstanceIds stays empty.
+function Get-OllamaOwnedRulePlan {
+    param(
+        [object[]]$ExistingRules,
+        [bool]$Validated
+    )
+    $rules = @()
+    if ($null -ne $ExistingRules) {
+        $rules = @($ExistingRules | Where-Object { $null -ne $_ })
+    }
+    $count = $rules.Count
+    $trusted = @()
+    if ($count -eq 1 -and $Validated) {
+        $trusted = @([string]$rules[0].InstanceID)
+    }
+    return [pscustomobject]@{
+        Count              = $count
+        Ambiguous          = ($count -gt 1)
+        TrustedInstanceIds = $trusted
+    }
+}
+
 # ============================================================================
 # Step 3/6: Firewall (skipped entirely under -CheckOnly by caller)
 # ============================================================================
@@ -717,10 +777,16 @@ function Set-FirewallRules {
     $interfaceAlias = $null
     if ($wslAdapter) { $interfaceAlias = @($wslAdapter)[0].Name }
 
-    $existingRules = @(Get-NetFirewallRule -DisplayName $ollamaRuleName -ErrorAction SilentlyContinue)
-    $ownedInstanceIds = @($existingRules | ForEach-Object { [string]$_.InstanceID })
-    if ($existingRules.Count -gt 0) {
-        Write-Info "找到既有防火牆規則 '$ollamaRuleName' ($($existingRules.Count) 條)，將逐條驗證屬性 (不再只因名稱存在就略過)..."
+    $existingRules = @(Get-NetFirewallRule -DisplayName $ollamaRuleName -ErrorAction SilentlyContinue |
+        Where-Object { $null -ne $_ })
+    # Trust boundary: the DisplayName proves nothing. $ownedInstanceIds starts
+    # empty and only ever receives an InstanceID that was re-read from the
+    # firewall and validated (or created and verified by this script); every
+    # other same-name rule stays visible to the risky audit below.
+    $ownedInstanceIds = @()
+    $rulePlan = Get-OllamaOwnedRulePlan -ExistingRules $existingRules -Validated $false
+    if ($rulePlan.Count -gt 0) {
+        Write-Info "找到既有防火牆規則 '$ollamaRuleName' ($($rulePlan.Count) 條)，將逐條驗證屬性 (不再只因名稱存在就略過)..."
     }
 
     $createHint = @(
@@ -731,10 +797,32 @@ function Set-FirewallRules {
         "  Remove-NetFirewallRule -DisplayName '$ollamaRuleName'"
     ) -join [System.Environment]::NewLine
 
-    $existing = $null
-    if ($existingRules.Count -gt 0) { $existing = @($existingRules)[0] }
-
-    if ($null -ne $existing) {
+    if ($rulePlan.Ambiguous) {
+        # More than one rule carries the DisplayName, so none of them can be
+        # trusted by name. Fail closed instead of validating one arbitrary
+        # rule and leaving its siblings out of the risky audit.
+        $ambiguousLines = @(
+            "偵測到 $($rulePlan.Count) 條同名防火牆規則 '$ollamaRuleName'，無法確認哪一條可信任 (顯示名稱不是信任邊界)。",
+            '目前同名規則 (請逐條確認用途，只保留一條正確的 SQLCheck 規則)：'
+        )
+        $ambiguousLines += @($existingRules | ForEach-Object {
+                "  - InstanceID $($_.InstanceID) (Enabled=$($_.Enabled) / Direction=$($_.Direction) / Action=$($_.Action) / Profile=$($_.Profile))"
+            })
+        $ambiguousLines += @(
+            '',
+            "  檢視： Get-NetFirewallRule -DisplayName '$ollamaRuleName' | Format-List DisplayName,InstanceID,Enabled,Direction,Action,Profile",
+            "  刪除多餘規則： Remove-NetFirewallRule -InstanceID '<要刪除的 InstanceID>'",
+            "  或全部刪除後重新執行本腳本： Remove-NetFirewallRule -DisplayName '$ollamaRuleName'"
+        )
+        Stop-OllamaFirewallStep `
+            -Problem "找到 $($rulePlan.Count) 條同名防火牆規則 '$ollamaRuleName'，無法確認任何一條可信任；為避免漏審未經驗證的規則，依 fail-closed 政策中止。" `
+            -Remediation ($ambiguousLines -join [System.Environment]::NewLine) `
+            -BreakGlass:$BreakGlassFirewall `
+            -LogHint "同名規則的 InstanceID： $((@($existingRules | ForEach-Object { [string]$_.InstanceID }) -join ', '))"
+        # Break-glass continuation: $ownedInstanceIds stays empty, so the risky
+        # audit below evaluates every same-name rule as untrusted.
+    } elseif ($rulePlan.Count -eq 1) {
+        $existing = @($existingRules)[0]
         try {
             $portFilter = $existing | Get-NetFirewallPortFilter
             $interfaceFilter = $existing | Get-NetFirewallInterfaceFilter
@@ -763,8 +851,12 @@ function Set-FirewallRules {
                     -BreakGlass:$BreakGlassFirewall `
                     -LogHint "規則詳細內容： Get-NetFirewallRule -DisplayName '$ollamaRuleName' | Format-List *"
             }
-            Write-Ok "防火牆規則 '$ollamaRuleName' 已存在且屬性符合預期 (未建立新規則)。"
             Assert-OllamaFirewallRule -DisplayName $ollamaRuleName -DockerRemoteAddress $DockerRemoteAddress
+            Write-Ok "防火牆規則 '$ollamaRuleName' 已存在且屬性符合預期 (未建立新規則)。"
+            # Only a fully re-read + validated rule becomes "owned"; if the
+            # validation above threw (or break-glass continued past a mismatch)
+            # this line is never reached and the rule stays untrusted.
+            $ownedInstanceIds = @((Get-OllamaOwnedRulePlan -ExistingRules $existingRules -Validated $true).TrustedInstanceIds)
         } catch {
             if ($_.Exception -is [OllamaFirewallCheckException]) { throw }
             Stop-OllamaFirewallStep `
@@ -774,9 +866,21 @@ function Set-FirewallRules {
                 -LogHint "規則詳細內容： Get-NetFirewallRule -DisplayName '$ollamaRuleName' | Format-List *"
         }
     } else {
+        # Count is exactly 0 here (duplicates were rejected above), so a newly
+        # created rule cannot collide with an unvalidated same-name sibling.
+        $createdPlan = $null
         try {
             New-OllamaFirewallRuleVerified -DisplayName $ollamaRuleName -InterfaceAlias $interfaceAlias `
                 -DockerRemoteAddress $DockerRemoteAddress
+            # Resolve the InstanceID from the firewall instead of trusting the
+            # creation output; the rule only counts as "owned" once this
+            # read-back shows exactly the one rule that was just verified.
+            $createdRules = @(Get-NetFirewallRule -DisplayName $ollamaRuleName -ErrorAction Stop |
+                Where-Object { $null -ne $_ })
+            $createdPlan = Get-OllamaOwnedRulePlan -ExistingRules $createdRules -Validated $true
+            if ($createdPlan.Count -ne 1 -or $createdPlan.TrustedInstanceIds.Count -ne 1) {
+                throw "建立後重新讀取防火牆規則 '$ollamaRuleName' 得到 $($createdPlan.Count) 條，無法確認唯一可信任的規則。"
+            }
         } catch {
             if ($_.Exception -is [OllamaFirewallCheckException]) { throw }
             Stop-OllamaFirewallStep `
@@ -784,6 +888,12 @@ function Set-FirewallRules {
                 -Remediation $createHint `
                 -BreakGlass:$BreakGlassFirewall
         }
+        if ($null -ne $createdPlan -and $createdPlan.Count -eq 1 -and $createdPlan.TrustedInstanceIds.Count -eq 1) {
+            $ownedInstanceIds = @($createdPlan.TrustedInstanceIds)
+        }
+        # If the read-back did not produce exactly one trusted rule (break-glass
+        # continuation), $ownedInstanceIds stays empty and the audit below
+        # re-checks every same-name rule as untrusted.
     }
 
     if ($interfaceAlias) {

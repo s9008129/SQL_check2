@@ -37,12 +37,50 @@ def _ok(advice: list[AdviceItem], outcome: str = "advice_only") -> AiResult:
 
 
 # --- deterministic non-compliance -----------------------------------------
+# 2026-09-17 round-1 third-party review: a BLOCK is deterministic
+# non-compliance, but on its own it is NOT a server-verified improvement
+# evidence, so it can never promote the potential to high. It stays visible
+# through the 中心規範 verdict + 改善優先指數, and the potential stays at
+# "low" (never high, never None / 「目前寫法良好」).
 
 
-def test_block_finding_is_high():
+def test_block_finding_alone_is_low_never_high():
     level, basis = improvement_potential(_ok([]), [_finding("BLOCK", rule_id="R002")])
-    assert level == "high"
+    assert level == "low"
     assert basis == ["規則檢核：1 項不符合"]
+
+
+def test_block_finding_plus_governance_notice_stays_low_not_notice_only():
+    # A BLOCK is a concrete finding about the SQL itself: unlike a pure R007
+    # governance reminder it must never fall back to "notice_only".
+    level, basis = improvement_potential(
+        _ok([], outcome="not_needed"),
+        [_finding("BLOCK", rule_id="R002"), _finding("NOTICE", rule_id="R007")],
+    )
+    assert level == "low"
+    assert basis == ["規則檢核：1 項不符合、1 項提醒"]
+
+
+def test_block_finding_with_one_verified_evidence_is_medium():
+    level, _ = improvement_potential(
+        _ok([_advice("high", "verified")], outcome="advice_only"),
+        [_finding("BLOCK", rule_id="R002")],
+    )
+    assert level == "medium"
+
+
+def test_block_finding_with_two_verified_evidences_is_high():
+    level, _ = improvement_potential(
+        _ok([_advice("high", "verified"), _advice("low", "corrected")], outcome="advice_only"),
+        [_finding("BLOCK", rule_id="R002")],
+    )
+    assert level == "high"
+
+
+def test_block_finding_with_validated_full_rewrite_is_medium():
+    # The rewrite itself is exactly one verified evidence.
+    level, _ = improvement_potential(_ok([], outcome="provided"), [_finding("BLOCK", rule_id="R002")])
+    assert level == "medium"
 
 
 # --- R007 governance reminder: reminder shown, but no level ---------------

@@ -73,19 +73,24 @@ _STATS_NUMERIC_KEYS = ("eval_count", "prompt_eval_count", "total_duration_ms")
 
 
 def improvement_potential(result: AiResult, findings: list[Finding]) -> tuple[str | None, list[str]]:
-    """2026-09-17 user decision: the level is derived ONLY from facts the
-    server can observe for itself. The model's own `impact` rating is a
-    self-assessment — it has no Oracle execution plan, no real index, no
-    statistics and no cardinality — so it is shown on the advice card for
-    reference but can never raise (or lower) this level. The old percentage
-    was never measured, and the old "any NOTICE => medium" rule wrongly
-    promoted pure governance reminders.
+    """2026-09-17 user decision (tightened by the round-1 third-party review):
+    the level is derived ONLY from facts the server can observe for itself.
+    The model's own `impact` rating is a self-assessment — it has no Oracle
+    execution plan, no real index, no statistics and no cardinality — so it
+    is shown on the advice card for reference but can never raise (or lower)
+    this level. The old percentage was never measured, and the old "any
+    NOTICE => medium" rule wrongly promoted pure governance reminders.
 
-      high          — a BLOCK finding (deterministic non-compliance), or two
-                      or more server-verified improvement evidences;
+      high          — two or more server-verified improvement evidences (a
+                      full validated rewrite counts as one of them);
       medium        — exactly one server-verified improvement evidence;
-      low           — concrete SQL-writing findings (R004/R005/R006) or
-                      advisory prose, with no verified rewrite to back it;
+      low           — a BLOCK finding, concrete SQL-writing findings
+                      (R004/R005/R006) or advisory prose, with no verified
+                      rewrite to back it. A BLOCK is deterministic
+                      non-compliance and is already shown by the 中心規範
+                      verdict and the 改善優先指數; on its own it is *not*
+                      proof that an improved SQL writing exists, so it must
+                      not promote the potential to high;
       "notice_only" — only governance reminders (e.g. R007 重要資料表): worth
                       a human look, but no concrete SQL-writing improvement
                       point was confirmed. The UI must NOT render this as
@@ -125,11 +130,14 @@ def improvement_potential(result: AiResult, findings: list[Finding]) -> tuple[st
     # 2026-09-17 user request: the per-advice impact/verification breakdown
     # is NOT listed here (the advice cards already carry it).
 
-    if blocks or evidence_count >= 2:
+    # Order matters: the potential never exceeds what the *server* verified.
+    # A BLOCK (or any unverified advice) can only ever justify "low": it stays
+    # visible through the compliance verdict / 改善優先指數 instead.
+    if evidence_count >= 2:
         return "high", basis
     if evidence_count == 1:
         return "medium", basis
-    if write_style_notices or result.advice:
+    if blocks or write_style_notices or result.advice:
         return "low", basis
     if governance_notices:
         return "notice_only", basis

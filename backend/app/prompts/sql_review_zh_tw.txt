@@ -74,6 +74,18 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
      猜要怎麼改。若這個改法需要業務上的假設才能成立（例如欄位串接要怎麼切分、欄位的
      資料格式），請在 example 裡把假設寫出來，例如：
      `若 TAX_CD 為 2 碼：WHERE W.TAX_CD = '55' AND W.SUBTAX_CD = '1'`。
+   - **before（原寫法片段）**：只要 example 是「把某段 SQL 文字改成另一種寫法」，就必須
+     同時填 before——從 sanitized_sql **原封不動複製**被取代的那一段（同樣的大小寫、
+     空白、佔位符），例如 before 為 `substr(w.coll_b_date, 1, 3) = '107'`、example 為
+     `w.coll_b_date >= '107' AND w.coll_b_date < '108'`。系統會用 before／example 做
+     逐字對照，把差異標示給同仁看，所以 before 一定要能在原始 SQL 裡逐字找到；example
+     也請只放改寫後的 SQL 片段本身，說明文字（如「若 TAX_CD 為 2 碼：」）放在
+     explanation。**before 與 example 必須成對出現**：有 before 就一定要有 example
+     （改寫後的片段），只給 before 不給 example 等於沒有建議。純提醒類的建議（例如
+     「確認查詢範圍」）before 留空、example 填空字串 ""。
+   - 一項建議只處理**一個**改寫點；若有多處要改（例如三個條件各套了函數），請拆成多項
+     advice（最多 3 項，超過的挑影響最大的），不要把好幾個「將 X 改為 Y」塞在同一個
+     example 裡。
    - 若這段 SQL 真的沒有值得調整之處，advice 可以只有 1 項甚至 0 項，**不要為了湊
      數而給空泛的建議**（例如「確認關聯欄位資料類型」「評估是否移除 DISTINCT」這類沒有
      具體依據的通用提醒）。重要資料表的「請確認查詢範圍」提醒（important_table_notices

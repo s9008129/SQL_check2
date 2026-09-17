@@ -30,3 +30,47 @@ describe("computeSqlLineDiff", () => {
     expect(diff.originalLineClasses.size).toBe(0);
   });
 });
+
+import { computeAlignedDiff, computeWordDiff, locateOriginalFragment } from "./sqlDiff";
+
+describe("computeWordDiff", () => {
+  it("marks only the changed tokens", () => {
+    const { left, right } = computeWordDiff("WHERE TRUNC(A.D) = :X", "WHERE A.D >= :X AND A.D < :X + 1");
+    expect(left.some((t) => t.kind === "removed" && t.value.includes("TRUNC"))).toBe(true);
+    expect(right.some((t) => t.kind === "added" && t.value.includes("AND A.D <"))).toBe(true);
+    expect(right.filter((t) => t.kind === "same").map((t) => t.value).join("")).toContain("WHERE");
+  });
+
+  it("ignores case-only differences", () => {
+    const { right } = computeWordDiff("select a from t", "SELECT a FROM t");
+    expect(right.every((t) => t.kind === "same")).toBe(true);
+  });
+});
+
+describe("computeAlignedDiff", () => {
+  it("pairs a rewritten line and word-diffs it, keeping unchanged lines on both sides", () => {
+    const rows = computeAlignedDiff("SELECT A\nFROM T\nWHERE TRUNC(D) = :X", "SELECT A\nFROM T\nWHERE D >= :X");
+    expect(rows).toHaveLength(3);
+    expect(rows[0].kind).toBe("same");
+    expect(rows[2].kind).toBe("changed");
+    expect(rows[2].left?.lineNo).toBe(3);
+    expect(rows[2].right?.tokens.some((t) => t.kind === "added")).toBe(true);
+  });
+
+  it("renders an extra suggested line as an added row with an empty left side", () => {
+    const rows = computeAlignedDiff("SELECT A\nFROM T", "SELECT A\nFROM T\nWHERE X = 1");
+    expect(rows[2].kind).toBe("added");
+    expect(rows[2].left).toBeNull();
+  });
+});
+
+describe("locateOriginalFragment", () => {
+  it("finds the original line sharing the most tokens with the example", () => {
+    const original = "select a\nfrom t\nwhere substr(w.coll_b_date, 1, 3) = '107'\n  and w.tax_cd = '55'";
+    expect(locateOriginalFragment(original, "w.coll_b_date >= '107' AND w.coll_b_date < '108'")).toContain("substr(w.coll_b_date");
+  });
+
+  it("returns null when nothing plausible matches", () => {
+    expect(locateOriginalFragment("select a from t", "確認查詢範圍")).toBeNull();
+  });
+});

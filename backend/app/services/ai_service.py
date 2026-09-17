@@ -72,9 +72,16 @@ RESPONSE_SCHEMA: dict[str, Any] = {
                     "title": {"type": "string"},
                     "explanation": {"type": "string"},
                     "example": {"type": "string"},
+                    # The original fragment `example` replaces (verbatim),
+                    # for a precise per-advice before/after diff in the UI.
+                    "before": {"type": "string"},
                     "impact": {"type": "string", "enum": ["low", "medium", "high"]},
                 },
-                "required": ["title", "explanation"],
+                # `example` is required (empty string for prose-only advice):
+                # once `before` was added, the model started returning
+                # `before` *instead of* `example` (confirmed live), leaving
+                # nothing to diff against.
+                "required": ["title", "explanation", "example"],
             },
         },
         "suggested_sql": {
@@ -298,7 +305,10 @@ def _contains_forbidden(text: str, forbidden: list[str]) -> bool:
 
 
 def _filter_advice(
-    advice: list[AdviceItem], forbidden: list[str], vocab: dict[str, str]
+    advice: list[AdviceItem],
+    forbidden: list[str],
+    vocab: dict[str, str],
+    reverse_map: dict[str, str] | None = None,
 ) -> list[AdviceItem]:
     kept: list[AdviceItem] = []
     dropped = 0
@@ -308,8 +318,18 @@ def _filter_advice(
         if _contains_forbidden(title, forbidden) or _contains_forbidden(explanation, forbidden):
             dropped += 1
             continue
+        # 2026-09-17: code fragments are shown to the reviewer who owns the
+        # data, so restore masked literals there too (previously `:STR_002`
+        # leaked through into the advice card — confirmed in a production
+        # printout). Prose fields are never un-masked.
+        example = unmask_sql(item.example, reverse_map or {}) if item.example else None
+        before = unmask_sql(item.before, reverse_map or {}) if item.before else None
+        if before and not example:
+            # A "before" with nothing to compare against is useless to the
+            # diff view and misleading in the card — drop it.
+            before = None
         kept.append(
-            AdviceItem(title=title, explanation=explanation, example=item.example, impact=item.impact)
+            AdviceItem(title=title, explanation=explanation, example=example, impact=item.impact, before=before)
         )
     if dropped:
         # PRD: log a counter on a forbidden-phrase hit, never the content
@@ -555,7 +575,7 @@ def _finalize(
         logger.info("ai_service: summary discarded on forbidden-phrase match")
         summary = None
 
-    advice = _filter_advice(raw.advice, forbidden, vocab)
+    advice = _filter_advice(raw.advice, forbidden, vocab, reverse_map)
     suggested_sql = _finalize_suggested_sql(
         raw.suggested_sql,
         reverse_map,

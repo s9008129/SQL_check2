@@ -116,6 +116,14 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
 - 待辦：正式主機 `git pull` + `deploy.ps1` 後，用 6 份檔案重測，預期「無需改寫」綠色呈現；
   用含 TRUNC 的 SQL 確認仍能拿到建議寫法。（2026-09-17 上午已完成驗證）
 
+## 2026-09-17 傍晚：SQL 寫法比較改為逐字 diff、逐段對照、紅色警語
+- 完成：advice 新增 `before`（原寫法片段，模型逐字複製）、example／before 送回前還原遮罩；
+  前端新增 `SqlDiffView`（完整改寫：逐行對齊＋逐字黃底標示；每項建議：原寫法／建議寫法
+  左右對照），`SqlCompare` 副標改為紅色警語「AI 建議寫法僅供參考，採用前務必先於測試機
+  驗證」；列印樣式強制保留黃底。後端 286、前端 65 測試全過。
+- 使用者人工驗證（test_01～03.pdf）三案皆符合預期；小瑕疵：案例 A 漏提 `coll_yr = 107`
+  引號一致性、TO_CHAR 範例假設了 'YYYYMMDD' 格式（民國日期字串）。
+
 ## 2026-09-17 下午：關閉思考模式、結構事實入 payload、寫法良好需附檢查清單
 - 完成：`ollama.think_default=false`（OLLAMA_THINK 可覆寫）；payload 新增 structure_flags；
   prompt 新增 not_needed 前檢查清單、reason 需列檢查項目、結構變更一律 advice_only、

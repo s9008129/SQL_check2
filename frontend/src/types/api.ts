@@ -106,6 +106,9 @@ export interface AdviceItem {
   explanation: string;
   example: string | null;
   impact: ImpactLevel | null;
+  // Original fragment that `example` replaces (verbatim); optional on the
+  // wire for backward compatibility with an older backend.
+  before?: string | null;
 }
 
 export type RewriteOutcome = "provided" | "not_needed" | "advice_only" | "gated" | "rejected";

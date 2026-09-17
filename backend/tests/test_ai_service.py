@@ -318,6 +318,34 @@ async def test_outcome_rejected_when_revalidation_fails(settings, chat_url):
     assert result.suggested_sql.available is False
 
 
+@respx.mock
+async def test_advice_example_and_before_are_unmasked(settings, chat_url):
+    inner = _good_inner(
+        advice=[
+            {
+                "title": "改為範圍比對",
+                "explanation": "e",
+                "before": "A.Y = :STR_001",
+                "example": "A.Y >= :STR_001",
+                "impact": "high",
+            }
+        ]
+    )
+    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
+    result = await _call(settings, _clean_select_statement())
+    assert result.advice[0].before == "A.Y = 'A123456789'"
+    assert result.advice[0].example == "A.Y >= 'A123456789'"
+
+
+def test_response_schema_has_advice_before_field():
+    props = ai_service.RESPONSE_SCHEMA["properties"]["advice"]["items"]["properties"]
+    assert "before" in props
+
+
+def test_system_prompt_requires_before_fragment():
+    assert "before（原寫法片段）" in ai_service.SYSTEM_PROMPT
+
+
 def test_response_schema_requires_rewrite_outcome():
     props = ai_service.RESPONSE_SCHEMA["properties"]["suggested_sql"]
     assert "rewrite_outcome" in props["required"]

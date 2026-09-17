@@ -75,4 +75,23 @@
   .estimate-ring::before {
     box-shadow: inset 0 0 0 1px #d0d7e2;
   }
+
+  /* Diff marks must survive "print backgrounds off" — the yellow IS the
+     information the reviewer prints this page for. */
+  mark.diff-add,
+  mark.diff-del,
+  .diff-row-changed .diff-cell,
+  .diff-row-added .diff-cell,
+  .diff-row-removed .diff-cell,
+  .fragment-after {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .card-warning {
+    color: #b83139 !important;
+  }
+  .diff-row,
+  .fragment-diff {
+    break-inside: avoid;
+  }
 }

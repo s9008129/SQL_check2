@@ -131,6 +131,11 @@ class AdviceItem(BaseModel):
     explanation: str
     example: str | None = None
     impact: ImpactLevel | None = None
+    # 2026-09-17: the exact original fragment `example` replaces (verbatim
+    # from the SQL), so the UI can render a precise before/after diff per
+    # advice item instead of only a free-floating snippet. Placeholders are
+    # un-masked server-side before the response is returned.
+    before: str | None = None
 
 
 RewriteOutcome = Literal["provided", "not_needed", "advice_only", "gated", "rejected"]

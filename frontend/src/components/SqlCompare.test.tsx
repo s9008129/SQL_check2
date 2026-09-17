@@ -19,7 +19,7 @@ describe("SqlCompare", () => {
     render(
       <SqlCompare
         originalSql="SELECT 1 FROM DUAL;"
-        cost={68420}
+       
         ai={makeAi({ advice: [], suggested_sql: { available: false, reason: "r", sql: null, outcome: "not_needed" } })}
       />,
     );
@@ -27,30 +27,37 @@ describe("SqlCompare", () => {
     expect(screen.getByTestId("compare-verdict").textContent).toContain("不需要改寫");
   });
 
-  it("shows the aligned diff with COST when there is a full rewrite", () => {
-    render(<SqlCompare originalSql="SELECT 1 FROM DUAL;" cost={68420} ai={makeAi()} />);
-    expect(screen.getByRole("table", { name: "原始 SQL 與建議寫法逐行對照" })).toBeTruthy();
-    expect(screen.getByText(/COST 68,420/)).toBeTruthy();
+  it("shows the aligned diff without repeating the COST when there is a full rewrite", () => {
+    render(<SqlCompare originalSql="SELECT 1 FROM DUAL;" ai={makeAi()} />);
+    expect(screen.getByRole("table", { name: "原始 SQL 與 AI 建議寫法逐行對照" })).toBeTruthy();
+    expect(screen.queryByText(/COST/)).toBeNull();
     expect(screen.queryByText("複製建議寫法")).toBeNull();
+  });
+
+  it("is titled 優化前後比較 and labels the right-hand side as AI 建議寫法", () => {
+    render(<SqlCompare originalSql="SELECT 1 FROM DUAL;" ai={makeAi()} />);
+    expect(screen.getByText("優化前後比較")).toBeTruthy();
+    expect(screen.queryByText("SQL 寫法比較")).toBeNull();
+    expect(screen.getAllByText("AI 建議寫法").length).toBeGreaterThan(0);
   });
 
   it("renders a line-aligned word-highlighted diff when a suggestion is available", () => {
     render(
       <SqlCompare
         originalSql="SELECT A.X FROM T A WHERE TRUNC(A.D) = :X"
-        cost={68420}
+       
         ai={makeAi({
           suggested_sql: { available: true, reason: "r", sql: "SELECT A.X FROM T A WHERE A.D >= :X AND A.D < :X + 1", outcome: "provided" },
         })}
       />,
     );
-    expect(screen.getByRole("table", { name: "原始 SQL 與建議寫法逐行對照" })).toBeTruthy();
+    expect(screen.getByRole("table", { name: "原始 SQL 與 AI 建議寫法逐行對照" })).toBeTruthy();
     const marks = document.querySelectorAll("mark.diff-add");
     expect(marks.length).toBeGreaterThan(1); // legend + at least one real change
   });
 
   it("shows the red warning that suggestions must be tested first", () => {
-    render(<SqlCompare originalSql="SELECT 1 FROM DUAL;" cost={68420} ai={makeAi()} />);
+    render(<SqlCompare originalSql="SELECT 1 FROM DUAL;" ai={makeAi()} />);
     expect(screen.getByRole("note").textContent).toContain("測試機");
   });
 
@@ -58,7 +65,7 @@ describe("SqlCompare", () => {
     render(
       <SqlCompare
         originalSql="select a\nfrom t w\nwhere substr(w.coll_b_date, 1, 3) = '107'\n  and w.tax_cd||w.subtax_cd = '551'"
-        cost={68420}
+       
         ai={makeAi({
           advice: [
             {
@@ -87,7 +94,7 @@ describe("SqlCompare", () => {
     render(
       <SqlCompare
         originalSql="select a from t w where w.tax_cd||w.subtax_cd = '551'"
-        cost={1}
+       
         ai={makeAi({
           advice: [
             {
@@ -111,7 +118,7 @@ describe("SqlCompare", () => {
     render(
       <SqlCompare
         originalSql="SELECT A.X FROM T A WHERE A.Y = 1"
-        cost={68420}
+       
         ai={makeAi({
           suggested_sql: { available: false, reason: "目前寫法已良好。", sql: null, outcome: "not_needed" },
         })}
@@ -125,13 +132,13 @@ describe("SqlCompare", () => {
     render(
       <SqlCompare
         originalSql="SELECT A.X FROM T A WHERE A.C||A.D = '551'"
-        cost={68420}
+       
         ai={makeAi({
           suggested_sql: { available: false, reason: "需確認切分方式。", sql: null, outcome: "advice_only" },
         })}
       />,
     );
-    expect(screen.getByText(/改善方向已列於上方/)).toBeTruthy();
+    expect(screen.getByText(/改善方向請見上方/)).toBeTruthy();
     expect(screen.getByText("需確認切分方式。")).toBeTruthy();
   });
 
@@ -139,7 +146,7 @@ describe("SqlCompare", () => {
     render(
       <SqlCompare
         originalSql="UPDATE T SET X = 1;"
-        cost={68420}
+       
         ai={makeAi({
           suggested_sql: {
             available: false,
@@ -165,7 +172,7 @@ describe("SqlCompare", () => {
     render(
       <SqlCompare
         originalSql="SELECT A.X FROM T A WHERE A.Y = 1;"
-        cost={68420}
+       
         ai={makeAi({
           suggested_sql: {
             available: false,
@@ -184,7 +191,7 @@ describe("SqlCompare", () => {
     render(
       <SqlCompare
         originalSql="SELECT 1 FROM DUAL;"
-        cost={68420}
+       
         ai={makeAi({
           status: "unavailable",
           advice: [],
@@ -206,7 +213,7 @@ describe("SqlCompare", () => {
     render(
       <SqlCompare
         originalSql="SELECT 1 FROM DUAL;"
-        cost={68420}
+       
         ai={makeAi({ status: "pending", advice: [], suggested_sql: null, estimated_improvement_pct: null })}
       />,
     );

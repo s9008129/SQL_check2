@@ -11,14 +11,11 @@ export interface EstimateCardProps {
   ai: AiResult;
 }
 
-type Band = "gray" | "blue" | "green";
-
-/** PRD §18.4 — colour expresses improvement potential, not risk; UI-only banding. */
-function bandFor(pct: number): Band {
-  if (pct >= 50) return "green";
-  if (pct >= 20) return "blue";
-  return "gray";
-}
+// PRD §18.4 — the gauge expresses improvement potential, not risk. 2026-09-17
+// user decision: the whole block is rendered in one light-green palette
+// (see `.estimate-*` in app.css) instead of the old gray/blue/green bands;
+// only the 「預估有改善空間」 chip still depends on the percentage.
+const CHIP_MIN_PCT = 20;
 
 /** 預估改善效果區 (PRD §18 / §32): 單一大型視覺化元件，只顯示一個百分比，絕不顯示第二個 COST。 */
 export default function EstimateCard({ ai }: EstimateCardProps) {
@@ -36,25 +33,22 @@ export default function EstimateCard({ ai }: EstimateCardProps) {
   } else if (pct === null || pct === undefined) {
     body = <div className="ai-note">{ESTIMATE_NOT_AVAILABLE_MESSAGE}</div>;
   } else {
-    const band = bandFor(pct);
     body = (
       <div className="estimate-wrap">
         <div
-          className={`estimate-ring tone-${band}`}
+          className="estimate-ring"
           style={{ "--pct": pct } as React.CSSProperties}
           aria-label={`AI 預估效能改善幅度 ${pct}%`}
         >
           <div className="estimate-center">
-            <div className={`estimate-value tone-${band}`}>{pct}%</div>
+            <div className="estimate-value">{pct}%</div>
             <div className="estimate-label">預估改善幅度</div>
           </div>
         </div>
         <div className="estimate-copy">
           <h3>AI 預估效能改善幅度約 {pct}%</h3>
           <p>依目前 SQL 寫法與改善建議進行整體判斷，這個數字用來快速呈現可能的改善效果。</p>
-          {band !== "gray" && (
-            <div className={`estimate-chip tone-${band}`}>↑ 預估有改善空間</div>
-          )}
+          {pct >= CHIP_MIN_PCT && <div className="estimate-chip">↑ 預估有改善空間</div>}
           <div className="estimate-note">{ESTIMATE_FOOTNOTE}</div>
         </div>
       </div>

@@ -9,6 +9,17 @@ describe("EstimateCard", () => {
     expect(screen.getByText("45%")).toBeTruthy();
   });
 
+  it("uses one light-green palette (no per-band tone classes) and shows the chip from 20% up", () => {
+    const { container, unmount } = render(<EstimateCard ai={makeAi({ estimated_improvement_pct: 40 })} />);
+    expect(container.querySelector(".estimate-ring.tone-blue")).toBeNull();
+    expect(container.querySelector(".estimate-ring.tone-green")).toBeNull();
+    expect(screen.getByText("↑ 預估有改善空間")).toBeTruthy();
+    unmount();
+
+    render(<EstimateCard ai={makeAi({ estimated_improvement_pct: 10 })} />);
+    expect(screen.queryByText("↑ 預估有改善空間")).toBeNull();
+  });
+
   it("shows the fixed not-available copy when estimated_improvement_pct is null", () => {
     render(<EstimateCard ai={makeAi({ estimated_improvement_pct: null })} />);
     expect(screen.getByText("本次不提供效能改善幅度預估")).toBeTruthy();

@@ -132,20 +132,50 @@ def compute(
 
     level, label, color = _level_for_score(score, levels_cfg)
 
+    # 2026-09-17 user feedback: the old labels ("COST 佔規範門檻約 69%") were
+    # not understandable by the reviewers. Every component now has a short
+    # label plus a plain-language `detail` that states what is measured, the
+    # actual value for this case and the maximum points it can contribute.
+    st_max = int(st_cfg.get("max", 15))
+    cr_max = int(cr_cfg.get("max", 15))
+    ai_max = int(ai_cfg.get("max", 10))
+    ratio_pct = round(ratio * 100)
     breakdown = [
         ImprovementBreakdownItem(
-            component="rule_findings", label="規則發現分數（含 COST 是否超標）", score=round(winning_f, 1)
+            component="rule_findings",
+            label="規則檢核發現的問題",
+            score=round(winning_f, 1),
+            detail=f"依中心規範各項檢核（含 COST 是否超標）命中的項目加分，命中越多、越嚴重分數越高，最多 {int(rf_max)} 分。",
         ),
-        ImprovementBreakdownItem(component="structure", label="SQL 結構複雜度", score=round(winning_s, 1)),
         ImprovementBreakdownItem(
-            component="cost_ratio", label=f"COST 佔規範門檻約 {round(ratio * 100)}%", score=round(cost_score, 1)
+            component="structure",
+            label="SQL 寫法複雜程度",
+            score=round(winning_s, 1),
+            detail=f"多表關聯、笛卡兒積、多層子查詢、SELECT *、DISTINCT 等寫法會加分，最多 {st_max} 分。",
         ),
-        ImprovementBreakdownItem(component="ai_adjustment", label="AI 建議影響程度", score=round(ai_score, 1)),
+        ImprovementBreakdownItem(
+            component="cost_ratio",
+            label="COST 接近門檻的程度",
+            score=round(cost_score, 1),
+            detail=(
+                f"目前 COST {cost:,} 約為規範門檻 {r001_threshold:,} 的 {ratio_pct}%，"
+                f"越接近或超過門檻加分越多，最多 {cr_max} 分。"
+            ),
+        ),
+        ImprovementBreakdownItem(
+            component="ai_adjustment",
+            label="AI 建議的影響程度",
+            score=round(ai_score, 1),
+            detail=f"依 AI 每一項改善建議標示的影響高低加分，最多 {ai_max} 分。",
+        ),
     ]
     if floor_applied:
         breakdown.append(
             ImprovementBreakdownItem(
-                component="block_floor", label="偵測到不符合中心規範項目，指數至少為 80", score=float(block_floor)
+                component="block_floor",
+                label="不符合中心規範的最低指數",
+                score=float(block_floor),
+                detail=f"只要有任何一項不符合中心規範，指數一律至少為 {block_floor}。",
             )
         )
 

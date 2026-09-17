@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import type { AdviceItem, AiResult } from "../types/api";
 import { FragmentDiff, FullSqlDiff } from "./SqlDiffView";
 import { locateOriginalFragment } from "../lib/sqlDiff";
-import { formatCost } from "../lib/cost";
 import {
   AI_PENDING_MESSAGE,
   AI_UNAVAILABLE_MESSAGE,
@@ -14,7 +13,6 @@ import {
 
 export interface SqlCompareProps {
   originalSql: string;
-  cost: number;
   ai: AiResult;
 }
 
@@ -59,14 +57,16 @@ function toSegments(originalSql: string, advice: AdviceItem[]): Segment[] {
 }
 
 /**
- * SQL 寫法比較區 (PRD §33), 2026-09-17 layout: a one-line AI verdict, then
- * — when a full rewrite exists — the whole statement as a line-aligned,
- * word-highlighted diff, then every advice item with a SQL fragment as its
- * own before/after diff. The old side-by-side editor panes were removed
- * (user request): the segment diffs already show the original fragments,
- * and the original statement is visible in the input panel.
+ * 優化前後比較區 (PRD §33 「SQL 寫法比較」), 2026-09-17 layout: a one-line AI
+ * verdict, then — when a full rewrite exists — the whole statement as a
+ * line-aligned, word-highlighted diff, then every advice item with a SQL
+ * fragment as its own before/after diff. The old side-by-side editor panes
+ * were removed (user request): the segment diffs already show the original
+ * fragments, and the original statement is visible in the input panel. The
+ * COST is deliberately not repeated here (user request; it lives in the
+ * summary cards and the rule table).
  */
-export default function SqlCompare({ originalSql, cost, ai }: SqlCompareProps) {
+export default function SqlCompare({ originalSql, ai }: SqlCompareProps) {
   const suggestedSql =
     ai.status === "ok" && ai.suggested_sql?.available && ai.suggested_sql.sql
       ? ai.suggested_sql.sql
@@ -109,7 +109,7 @@ export default function SqlCompare({ originalSql, cost, ai }: SqlCompareProps) {
     <section className="card card-compare">
       <div className="card-head">
         <div>
-          <div className="card-title">SQL 寫法比較</div>
+          <div className="card-title">優化前後比較</div>
           <div className="card-desc card-warning" role="note">
             ⚠ {SUGGESTED_SQL_WARNING}
           </div>
@@ -123,7 +123,7 @@ export default function SqlCompare({ originalSql, cost, ai }: SqlCompareProps) {
           <div className="sql-box sql-box-light">
             <div className="sql-head">
               <span>
-                原始 SQL（COST {formatCost(cost)}）與建議寫法逐行對照 · <mark className="diff-add legend">黃底</mark> 為建議修改處
+                原始 SQL 與 AI 建議寫法逐行對照 · <mark className="diff-add legend">黃底</mark> 為建議修改處
               </span>
             </div>
             <FullSqlDiff original={originalSql} suggested={suggestedSql} />
@@ -132,7 +132,7 @@ export default function SqlCompare({ originalSql, cost, ai }: SqlCompareProps) {
 
         {segments.length > 0 && (
           <div className="segment-list">
-            <div className="segment-list-title">逐段對照（每一項建議的原寫法 → 建議寫法）</div>
+            <div className="segment-list-title">逐段對照（每一項建議的原寫法 → AI 建議寫法）</div>
             {segments.map((seg, i) =>
               seg.before ? (
                 <FragmentDiff key={i} title={`${i + 1}. ${seg.title}`} before={seg.before} after={seg.after} note={seg.note} />

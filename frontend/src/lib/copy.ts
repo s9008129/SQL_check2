@@ -23,8 +23,10 @@ export const SUGGESTED_SQL_WARNING = "AI 建議寫法僅供參考，採用前務
 // 2026-09-17 — the three genuinely different "no rewrite" situations get
 // their own copy, so "SQL is already fine" never reads like a refusal.
 export const SUGGESTED_SQL_NOT_NEEDED_MESSAGE = "AI 檢視後認為目前寫法已良好，本次不需要改寫。";
+// 2026-09-17 user feedback: keep this plain and short — the model's own
+// `reason` (rendered right under it) states the concrete point to confirm.
 export const SUGGESTED_SQL_ADVICE_ONLY_MESSAGE =
-  "改善方向已列於上方「智慧改善建議」（含示範片段），因涉及業務判斷，本次不自動改寫：";
+  "改善方向請見上方「智慧改善建議」與下方逐段對照，採用前請先確認：";
 
 // PRD §17.5 / §32.3 — shown instead of a percentage/gauge when
 // ai.estimated_improvement_pct is null.

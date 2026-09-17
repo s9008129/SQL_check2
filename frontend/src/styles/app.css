@@ -141,15 +141,12 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .estimate-wrap{display:grid;grid-template-columns:220px minmax(0,1fr);gap:26px;align-items:center;padding:10px 4px 4px}
 .estimate-ring{--pct:0;--ring-color:#8a97ab;position:relative;width:188px;aspect-ratio:1;border-radius:50%;background:conic-gradient(var(--ring-color) calc(var(--pct)*1%),#e8eef3 0);display:grid;place-items:center;margin:auto}
 .estimate-ring::before{content:"";position:absolute;inset:16px;border-radius:50%;background:#fff;box-shadow:inset 0 0 0 1px #eef1f5}
-.estimate-ring.tone-gray{--ring-color:#8a97ab}.estimate-ring.tone-blue{--ring-color:#0a84ff}.estimate-ring.tone-green{--ring-color:#22a06b}
 .estimate-center{position:relative;z-index:1;text-align:center}
 .estimate-value{font-size:42px;font-weight:860;line-height:1;letter-spacing:-.035em}
-.estimate-value.tone-gray{color:#5b6577}.estimate-value.tone-blue{color:#0b6fd8}.estimate-value.tone-green{color:#16834f}
 .estimate-label{margin-top:7px;font-size:12px;color:#6f7b8c;font-weight:730}
 .estimate-copy h3{font-size:22px;margin:0 0 8px;font-weight:830;letter-spacing:-.02em}.estimate-copy p{margin:0;color:#667085;font-size:13px;max-width:620px}
 .estimate-note{margin-top:14px;padding:12px 14px;border-radius:13px;background:#f8fafc;border:1px solid #edf0f4;color:#667085;font-size:12px}
 .estimate-chip{display:inline-flex;align-items:center;gap:7px;margin-top:14px;padding:7px 10px;border-radius:999px;font-size:12px;font-weight:800}
-.estimate-chip.tone-blue{background:var(--blue-soft);color:#0b6fd8}.estimate-chip.tone-green{background:var(--green-soft);color:#16784a}
 
 .sql-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .sql-box{border:1px solid #e6eaf0;border-radius:16px;overflow:hidden;background:#0f1724}
@@ -262,6 +259,42 @@ mark.legend{margin:0 3px}
 .footer-note{font-size:13px;color:var(--muted)}
 .sql-fallback-reason,.fragment-note{color:var(--muted) !important}
 .diff-ln{color:#8592a6}
+
+/* ---------------------------------------------------------------------
+   2026-09-17 evening — user feedback on the printed report.
+   --------------------------------------------------------------------- */
+/* 1. Every 「符合」 card is green, not just its corner icon. */
+.metric.tone-green{background:#f0faf4;border-color:#c9e9d6}
+.metric.tone-green .m-value{color:#15733f}
+.metric.tone-green .m-sub{color:#2f7a52}
+.metric.tone-green .m-icon{background:#22a06b;color:#fff}
+/* 4. Corner icons +20% (34→41px); the improvement card's icon is now the
+   level wording (建議改善…), so it grows into a pill instead of a square. */
+.m-icon{width:41px;height:41px;font-size:15px;border-radius:12px}
+.m-icon-text{width:auto;min-width:41px;padding:0 12px;font-size:14px;letter-spacing:.02em;white-space:nowrap}
+/* 2. Plain-language score breakdown. Opening it must not stretch the other
+   three cards to the same height. */
+.summary{align-items:start}
+.breakdown-intro{margin:0 0 6px;font-size:12px;color:var(--muted);line-height:1.55}
+.breakdown-row{display:block;padding:6px 0;border-top:1px solid #eef1f5}
+.breakdown-head{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:#2b3445;font-weight:720}
+.breakdown-score{white-space:nowrap;color:#0b6fd8}
+.breakdown-detail{margin-top:2px;font-size:12px;color:var(--muted);line-height:1.55}
+/* 5. 預估改善效果 in one light-green palette (the old gray/blue/green bands
+   confused readers: 40% rendered blue, 55% green). */
+.estimate-wrap{background:#f0faf4;border:1px solid #cfead9;border-radius:18px;padding:20px 22px}
+.estimate-ring{--ring-color:#4cc48a;background:conic-gradient(var(--ring-color) calc(var(--pct)*1%),#d9efe2 0)}
+.estimate-value{color:#15733f}
+.estimate-label{color:#2f7a52}
+.estimate-copy h3{color:#14532d}
+.estimate-copy p{color:#2f4a3c}
+.estimate-chip{background:#d7f3e3;color:#15733f}
+.estimate-note{background:rgba(255,255,255,.75);border-color:#cfead9;color:#3b5a48}
+/* 6. The compare-card warning must be red on screen too: `.card-desc` in the
+   visual pass above is declared later with the same specificity, so it was
+   silently overriding `.card-warning` (print.css won with !important, which
+   is why the PDF was red while the browser was grey). */
+.card-desc.card-warning{color:#b83139}
 
 /* CodeMirror hosts: light variant matches the prototype textarea, dark
    variant fills the dark .sql-box code panels. */

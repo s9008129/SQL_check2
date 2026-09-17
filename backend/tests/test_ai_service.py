@@ -367,6 +367,32 @@ def test_system_prompt_requires_checklist_before_not_needed():
     assert "前綴上下界" in ai_service.SYSTEM_PROMPT
 
 
+def test_system_prompt_tells_model_how_to_word_advice_only_reason():
+    # 2026-09-17 user feedback: plain language, state the fact to confirm,
+    # no 「故不自動產生建議寫法」 closing clause (the UI already says that).
+    assert "advice_only 的 reason 寫法" in ai_service.SYSTEM_PROMPT
+    assert "故不自動產生建議寫法" in ai_service.SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (
+            "DISTINCT 的移除需由業務確認 JOIN 後的資料唯一性，否則會改變查詢結果，故不自動產生建議寫法。",
+            "DISTINCT 的移除需由業務確認 JOIN 後的資料唯一性，否則會改變查詢結果。",
+        ),
+        ("欄位切分方式需要業務確認，因此本次不提供完整改寫。", "欄位切分方式需要業務確認。"),
+        ("日期格式不明，本次不自動改寫", "日期格式不明。"),
+        # Nothing to strip — returned unchanged.
+        ("移除 DISTINCT 前，請先確認 JOIN 後的資料是否已經唯一。", "移除 DISTINCT 前，請先確認 JOIN 後的資料是否已經唯一。"),
+        # The whole reason IS the clause — keep it rather than return "".
+        ("本次不自動產生建議寫法。", "本次不自動產生建議寫法。"),
+    ],
+)
+def test_tidy_advice_only_reason(raw, expected):
+    assert ai_service._tidy_advice_only_reason(raw) == expected
+
+
 def test_chat_request_disables_thinking_by_default(settings):
     body = ai_service._chat_request_body(settings, {"statement_type": "SELECT"})
     assert body["think"] is False

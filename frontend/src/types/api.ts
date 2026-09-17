@@ -84,6 +84,8 @@ export interface ImprovementBreakdownItem {
   component: ImprovementBreakdownComponent;
   label: string;
   score: number;
+  /** Plain-language explanation of what this component measures (optional for older payloads). */
+  detail?: string | null;
 }
 
 export interface ImprovementResult {

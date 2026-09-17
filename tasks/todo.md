@@ -136,3 +136,11 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
   `Get-NetFirewallRule | Where-Object {$_.Enabled -eq 'True'} | Get-NetFirewallPortFilter | Where-Object LocalPort -eq 11434`
   查出來源）。建議加一條 Block 規則限制 LocalSubnet 來源，並在 deploy.ps1 加入自動驗證
   與回滾（容器內 curl host.docker.internal:11434 成功才保留）。
+
+## 2026-09-17 晚：依列印報告回饋的 7 點畫面調整
+- 完成：符合卡片淺綠底、COST 低於門檻顯示「符合中心規範」、改善指數改名與等級文字圖示、
+  指數組成白話（後端 `detail` 欄位）、智慧改善建議卡＋AI 圖示、圖示放大 20%、預估改善效果
+  淺綠色系、優化前後比較（移除 COST、AI 建議寫法、警語網頁上改紅）、advice_only 說明白話化
+  （prompt＋`_tidy_advice_only_reason`）。後端 294、前端 71 測試、ruff、build 全過；本機直連
+  正式主機 Gemma4 兩案（DISTINCT＋JOIN、TRUNC）截圖驗證符合預期。
+- 待辦：正式主機 `git pull` + `deploy.ps1`，請同仁用列印 PDF 確認淺綠底與警語紅色都有印出。

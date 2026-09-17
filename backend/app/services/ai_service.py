@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections import Counter
 from typing import Any
 
@@ -550,8 +551,34 @@ def _finalize_suggested_sql(
         available = False
         outcome = "advice_only"
 
+    if outcome == "advice_only":
+        reason = _tidy_advice_only_reason(reason)
+
     logger.info("ai_service: rewrite outcome=%s", outcome)
     return SuggestedSql(available=available, reason=reason, sql=sql, outcome=outcome)
+
+
+# 2026-09-17 user feedback: the advice_only reason must state the business
+# fact to confirm, not end in a "therefore no rewrite" clause — the UI already
+# says the rewrite was not produced. The prompt asks the model not to write
+# it; this regex is the deterministic safety net for when it does anyway.
+_NO_REWRITE_TAIL_RE = re.compile(
+    r"[，,；;、\s]*(?:故|因此|所以|因而)?(?:本次|此次|這次)?(?:先)?"
+    r"(?:不|未|無法|暫不)(?:自動)?(?:產生|提供|給出|進行|做)?(?:完整)?(?:的)?"
+    r"(?:建議寫法|改寫結果|改寫|SQL\s*改寫)[。.！!]?\s*$"
+)
+
+
+def _tidy_advice_only_reason(reason: str) -> str:
+    """Strip a trailing 「…，故不自動產生建議寫法。」 style clause from a
+    model-written advice_only reason. Returns the input unchanged when the
+    clause is absent or when stripping would leave nothing."""
+    stripped = _NO_REWRITE_TAIL_RE.sub("", reason).strip()
+    if not stripped or stripped == reason.strip():
+        return reason
+    if stripped[-1] not in "。.！!？?":
+        stripped += "。"
+    return stripped
 
 
 def _finalize(

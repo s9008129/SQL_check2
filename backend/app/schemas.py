@@ -109,6 +109,9 @@ class ImprovementBreakdownItem(BaseModel):
     ]
     label: str
     score: float
+    # 2026-09-17: one plain-language sentence per component ("目前 COST 約為
+    # 門檻的 69%…") so the UI can explain the score without knowing rules.yaml.
+    detail: str | None = None
 
 
 class ImprovementResult(BaseModel):

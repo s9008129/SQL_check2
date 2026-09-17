@@ -201,7 +201,7 @@ export default function App() {
               />
               <ImprovementAdvice ai={result.ai} />
               <EstimateCard ai={result.ai} />
-              <SqlCompare originalSql={submittedSql} cost={result.cost} ai={result.ai} />
+              <SqlCompare originalSql={submittedSql} ai={result.ai} />
               <PrintFooter applicationNo={result.application_no} onScrollToInput={scrollToInput} />
             </>
           )}

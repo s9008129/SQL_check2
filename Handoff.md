@@ -52,7 +52,7 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 | `backend/app/config/app.yaml` | Ollama 參數（`num_predict 3072`、`timeout 180`、`think_default false`）、`ai_gate`、`ai_guard`、`masking`、`archive` |
 | `backend/app/config/rules.yaml` | 規則開關、R002 `restriction_verdicts`、改善指數權重 |
 | `backend/app/schemas.py` | API 契約：`SuggestedSql.outcome`、`AdviceItem.before` 等 |
-| `frontend/src/components/SummaryCards.tsx` | 4 張摘要卡（中心規範／COST／改善優先指數／改善建議） |
+| `frontend/src/components/SummaryCards.tsx` | 4 張摘要卡（中心規範／COST／改善指數／智慧改善建議），含白話「指數組成」展開 |
 | `frontend/src/components/SqlCompare.tsx` + `SqlDiffView.tsx` + `lib/sqlDiff.ts` | SQL 寫法比較：判定文字 → 完整改寫逐行對照 → 逐段對照（每項建議 before/example 逐字 diff） |
 | `frontend/src/components/ImprovementAdvice.tsx` | 建議卡片，底色依 impact（高紅／中黃／低藍） |
 | `frontend/src/lib/copy.ts` | 所有固定文案 |
@@ -94,6 +94,27 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 - 摘要列改 4 張卡（移除建議寫法卡）；COST 卡依 R001 顯示 ✓ 綠或 ✕ 紅（無「C」）；所有不符合語意紅色（補上原本缺漏的 `.tone-red .m-icon`）。
 - 字級：預估／比較區放大約 20%、徽章 13px；全頁字級階層 13/14/15/19–20/28/32，次要文字統一 #5b6577，最重字重 800；建議卡片底色依 impact。
 
+### 2026-09-17 晚：依列印報告回饋的畫面調整（使用者逐點指定）
+- 摘要卡：所有「符合」卡片整張淺綠底（`.metric.tone-green`）；COST 低於門檻時不再顯示數字，
+  直接顯示「符合中心規範」（超標仍顯示紅色數字）；「改善優先指數」改名「改善指數」，右上角
+  圖示改為等級文字（目前良好／建議改善／優先改善）而非重複數字；第 4 張卡改名「智慧改善建議」、
+  圖示固定「AI」；右上角圖示放大 20%（34→41px）。
+- 指數組成改白話：後端 `ImprovementBreakdownItem` 新增選填 `detail`，每一分項說明「量什麼、
+  本案數值、最多幾分」（上限值從 `rules.yaml` 讀，不寫死），例如「目前 COST 68,888 約為規範
+  門檻 100,000 的 69%，越接近或超過門檻加分越多，最多 15 分」；前端展開時另有一句總說明。
+- 預估改善效果：整區改單一淺綠色系（移除 gray/blue/green 分帶），「預估有改善空間」晶片
+  仍只在 ≥20% 時顯示。
+- 「SQL 寫法比較」改名「優化前後比較」；逐行對照標題不再重複 COST；右欄與片段標籤改
+  「AI 建議寫法」；警語在網頁上也是紅色（根因：`.card-desc` 在全頁視覺段落後宣告、特異性
+  相同蓋掉 `.card-warning`，print.css 用 `!important` 才會在 PDF 變紅；已改用
+  `.card-desc.card-warning` 提高特異性）。
+- advice_only 的說明改白話：前端標題句改為「改善方向請見上方「智慧改善建議」與下方逐段
+  對照，採用前請先確認：」；prompt 新增「advice_only 的 reason 寫法」（1～2 句、直指需業務
+  確認的事與後果、不可加「故不自動產生建議寫法」結語）；`ai_service._tidy_advice_only_reason`
+  以正則剝除句尾「故／因此／本次 不自動產生建議寫法」類結語作為確定性防線。已用本機程式碼
+  直連正式主機 Gemma4 驗證（DISTINCT＋JOIN 案例回「移除 DISTINCT 前，請先確認 JOIN 後的
+  資料是否已經唯一；若不是，拿掉 DISTINCT 會改變查詢結果…」）。
+
 ## 4. 「AI 沒給建議寫法」的判讀順序（接手後最常被問）
 
 1. 看 API 回應或畫面的 outcome：
@@ -107,8 +128,8 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 
 ## 5. 目前狀態與驗證數據
 
-- 最新 commit `815c056`（main，已推送）。後端 286 項測試、前端 66 項測試、ruff、build 全過。
-- 正式主機最後一次由使用者部署的版本在 `6a7294c` 之前；**`80f78e8`（放大字級）與 `815c056`（全頁視覺）尚未部署**，需 `git pull` + `deploy\deploy.ps1`。
+- 最新狀態：後端 294 項測試、前端 71 項測試、ruff、build 全過（2026-09-17 晚，畫面調整 commit）。
+- 正式主機最後一次由使用者部署的版本在 `6a7294c` 之前；**`80f78e8`（放大字級）、`815c056`（全頁視覺）與本次畫面調整尚未部署**，需 `git pull` + `deploy\deploy.ps1`。
 - 使用者人工驗證（test_01～03.pdf）：多重缺陷 SQL、笛卡兒積 SQL、乾淨 SQL 三案皆符合預期。
 - 報告：`E2E_TEST_report_20260917.md`、`E2E_TEST_report_20260917_round2.md`、`SQLCheck2_E2E_test_report_20260916.md`。
 

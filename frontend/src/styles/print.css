@@ -76,6 +76,17 @@
     box-shadow: inset 0 0 0 1px #d0d7e2;
   }
 
+  /* 2026-09-17: the green tint on 「符合」 cards and the estimate block is
+     part of the message — keep it when "print backgrounds" is off. */
+  .metric.tone-green,
+  .estimate-wrap,
+  .estimate-ring,
+  .estimate-chip,
+  .m-icon {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
   /* Diff marks must survive "print backgrounds off" — the yellow IS the
      information the reviewer prints this page for. */
   mark.diff-add,

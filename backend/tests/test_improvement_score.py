@@ -99,3 +99,31 @@ def test_cost_over_threshold_alone_still_scores_even_with_no_statements(rules_cf
     _, _, findings = rule_engine.evaluate(parsed, 150000, rules_cfg, tables_cfg)
     result = improvement_score.compute(parsed.statements, findings, 150000, rules_cfg)
     assert result.score >= 0
+
+
+def test_breakdown_explains_each_component_in_plain_language(rules_cfg, tables_cfg):
+    # 2026-09-17 user feedback: "COST 佔規範門檻約 69%" was not understandable.
+    # Every component must carry a `detail` sentence; the COST one must state
+    # the actual COST, the threshold, the percentage and the max points.
+    parsed = parse_sql_text("SELECT A.X FROM T A WHERE A.Y = 1")
+    _, _, findings = rule_engine.evaluate(parsed, 68888, rules_cfg, tables_cfg)
+    result = improvement_score.compute(parsed.statements, findings, 68888, rules_cfg)
+    by_component = {b.component: b for b in result.breakdown}
+    assert set(by_component) == {"rule_findings", "structure", "cost_ratio", "ai_adjustment"}
+    for item in result.breakdown:
+        assert item.detail and "分" in item.detail
+        assert "佔規範門檻" not in item.label
+    cost_item = by_component["cost_ratio"]
+    assert cost_item.label == "COST 接近門檻的程度"
+    assert "68,888" in cost_item.detail
+    assert "100,000" in cost_item.detail
+    assert "69%" in cost_item.detail
+    assert "最多 15 分" in cost_item.detail
+
+
+def test_block_floor_breakdown_item_has_detail(rules_cfg, tables_cfg):
+    parsed = parse_sql_text("SELECT * FROM T A")
+    _, _, findings = rule_engine.evaluate(parsed, 1000, rules_cfg, tables_cfg)
+    result = improvement_score.compute(parsed.statements, findings, 1000, rules_cfg)
+    floor = next(b for b in result.breakdown if b.component == "block_floor")
+    assert floor.detail and "80" in floor.detail

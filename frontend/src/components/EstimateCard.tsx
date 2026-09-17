@@ -2,60 +2,55 @@ import type { AiResult } from "../types/api";
 import {
   AI_PENDING_MESSAGE,
   AI_UNAVAILABLE_MESSAGE,
-  ESTIMATE_FOOTNOTE,
-  ESTIMATE_NOT_AVAILABLE_MESSAGE,
   ESTIMATE_NOT_NEEDED_MESSAGE,
+  POTENTIAL_CAVEAT,
+  POTENTIAL_HINT,
+  POTENTIAL_LABEL,
 } from "../lib/copy";
 
 export interface EstimateCardProps {
   ai: AiResult;
 }
 
-// PRD §18.4 — the gauge expresses improvement potential, not risk. 2026-09-17
-// user decision: the whole block is rendered in one light-green palette
-// (see `.estimate-*` in app.css) instead of the old gray/blue/green bands;
-// only the 「預估有改善空間」 chip still depends on the percentage.
-const CHIP_MIN_PCT = 20;
-
-/** 預估改善效果區 (PRD §18 / §32): 單一大型視覺化元件，只顯示一個百分比，絕不顯示第二個 COST。 */
+/**
+ * 預估改善效果區. 2026-09-17 user decision: the model's percentage was never
+ * measured (no plan, no statistics, no rewritten COST), so the card now shows
+ * the server-derived improvement-potential LEVEL (高／中／低), the facts it
+ * was derived from, and a plain caveat. No number is rendered.
+ */
 export default function EstimateCard({ ai }: EstimateCardProps) {
-  const pct = ai.estimated_improvement_pct;
+  const level = ai.improvement_potential ?? null;
+  const basis = ai.improvement_potential_basis ?? [];
 
   let body: React.ReactNode;
   if (ai.status === "pending") {
     body = <div className="ai-note">{AI_PENDING_MESSAGE}</div>;
   } else if (ai.status === "unavailable") {
     body = <div className="ai-note">{ai.message?.trim() ? ai.message : AI_UNAVAILABLE_MESSAGE}</div>;
-  } else if (ai.suggested_sql?.outcome === "not_needed" && !pct) {
-    // AI judged the SQL already good: say so positively instead of the
-    // "not provided" copy, which reads like a refusal.
-    body = <div className="ai-note ai-note-good">{ESTIMATE_NOT_NEEDED_MESSAGE}</div>;
-  } else if (pct === null || pct === undefined) {
-    // 2026-09-17 user request: never show 「本次不提供」 without saying why.
+  } else if (level === null) {
     body = (
-      <div className="ai-note" data-testid="estimate-not-available">
-        <p className="verdict-headline">{ESTIMATE_NOT_AVAILABLE_MESSAGE}</p>
-        {ai.estimate_reason && <p className="verdict-reason">{ai.estimate_reason}</p>}
+      <div className="ai-note ai-note-good" data-testid="potential-none">
+        {ESTIMATE_NOT_NEEDED_MESSAGE}
       </div>
     );
   } else {
     body = (
-      <div className="estimate-wrap">
-        <div
-          className="estimate-ring"
-          style={{ "--pct": pct } as React.CSSProperties}
-          aria-label={`AI 預估效能改善幅度 ${pct}%`}
-        >
-          <div className="estimate-center">
-            <div className="estimate-value">{pct}%</div>
-            <div className="estimate-label">預估改善幅度</div>
-          </div>
+      <div className="estimate-wrap potential-wrap" data-testid="potential">
+        <div className={`potential-badge potential-${level}`} aria-label={`改善潛力 ${POTENTIAL_LABEL[level]}`}>
+          <div className="potential-value">{POTENTIAL_LABEL[level]}</div>
+          <div className="estimate-label">改善潛力</div>
         </div>
         <div className="estimate-copy">
-          <h3>AI 預估效能改善幅度約 {pct}%</h3>
-          <p>依目前 SQL 寫法與改善建議進行整體判斷，這個數字用來快速呈現可能的改善效果。</p>
-          {pct >= CHIP_MIN_PCT && <div className="estimate-chip">↑ 預估有改善空間</div>}
-          <div className="estimate-note">{ESTIMATE_FOOTNOTE}</div>
+          <h3>改善潛力：{POTENTIAL_LABEL[level]}</h3>
+          <p>{POTENTIAL_HINT[level]}</p>
+          {basis.length > 0 && (
+            <ul className="potential-basis" aria-label="推算依據">
+              {basis.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          )}
+          <div className="estimate-note potential-caveat">⚠ {POTENTIAL_CAVEAT}</div>
         </div>
       </div>
     );
@@ -66,9 +61,9 @@ export default function EstimateCard({ ai }: EstimateCardProps) {
       <div className="card-head">
         <div>
           <div className="card-title">預估改善效果</div>
-          <div className="card-desc">以 AI 建議方向估算可能的效能改善幅度</div>
+          <div className="card-desc">依規則檢核結果與 AI 建議推算的改善潛力等級</div>
         </div>
-        <span className="badge green">AI 預估</span>
+        <span className="badge green">改善潛力</span>
       </div>
       <div className="card-body">{body}</div>
     </section>

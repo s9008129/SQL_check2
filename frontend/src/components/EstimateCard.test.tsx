@@ -3,54 +3,30 @@ import { render, screen } from "@testing-library/react";
 import EstimateCard from "./EstimateCard";
 import { makeAi } from "../test/fixtures";
 
-describe("EstimateCard", () => {
-  it("renders the percentage when a value is present", () => {
-    render(<EstimateCard ai={makeAi({ estimated_improvement_pct: 45 })} />);
-    expect(screen.getByText("45%")).toBeTruthy();
-  });
-
-  it("uses one light-green palette (no per-band tone classes) and shows the chip from 20% up", () => {
-    const { container, unmount } = render(<EstimateCard ai={makeAi({ estimated_improvement_pct: 40 })} />);
-    expect(container.querySelector(".estimate-ring.tone-blue")).toBeNull();
-    expect(container.querySelector(".estimate-ring.tone-green")).toBeNull();
-    expect(screen.getByText("↑ 預估有改善空間")).toBeTruthy();
-    unmount();
-
-    render(<EstimateCard ai={makeAi({ estimated_improvement_pct: 10 })} />);
-    expect(screen.queryByText("↑ 預估有改善空間")).toBeNull();
-  });
-
-  it("shows the fixed not-available copy when estimated_improvement_pct is null", () => {
-    render(<EstimateCard ai={makeAi({ estimated_improvement_pct: null })} />);
-    expect(screen.getByText("本次不提供效能改善幅度預估")).toBeTruthy();
+describe("EstimateCard (improvement-potential level, 2026-09-17)", () => {
+  it("renders the level, its basis and the caveat, never a percentage", () => {
+    const { container } = render(
+      <EstimateCard
+        ai={makeAi({
+          estimated_improvement_pct: 45,
+          improvement_potential: "high",
+          improvement_potential_basis: ["規則檢核：1 項提醒", "AI 建議：高影響（系統已確認查詢結果不變）"],
+        })}
+      />,
+    );
+    const block = screen.getByTestId("potential");
+    expect(block.textContent).toContain("改善潛力：高");
+    expect(block.textContent).toContain("規則檢核：1 項提醒");
+    expect(block.textContent).toContain("未經任何實際量測");
+    expect(block.textContent).toContain("測試機覆核與測試");
     expect(screen.queryByText(/%/)).toBeNull();
+    expect(container.querySelector(".potential-high")).toBeTruthy();
   });
 
-  it("shows the backend's plain-language reason under the not-available copy", () => {
-    render(
-      <EstimateCard
-        ai={makeAi({
-          estimated_improvement_pct: null,
-          estimate_reason: "規則檢核沒有發現問題，且本次不整段改寫，沒有可據以估算改善幅度的依據。",
-        })}
-      />,
-    );
-    const note = screen.getByTestId("estimate-not-available");
-    expect(note.textContent).toContain("本次不提供效能改善幅度預估");
-    expect(note.textContent).toContain("沒有可據以估算改善幅度的依據");
-  });
-
-  it("shows the positive 'no room for improvement' copy when outcome is not_needed and pct is 0", () => {
-    render(
-      <EstimateCard
-        ai={makeAi({
-          estimated_improvement_pct: 0,
-          suggested_sql: { available: false, reason: "目前寫法已良好。", sql: null, outcome: "not_needed" },
-        })}
-      />,
-    );
-    expect(screen.getByText("目前寫法良好，AI 未發現明顯的改善空間。")).toBeTruthy();
-    expect(screen.queryByText("本次不提供效能改善幅度預估")).toBeNull();
+  it("says the SQL is fine when no level was derived", () => {
+    render(<EstimateCard ai={makeAi({ improvement_potential: null, improvement_potential_basis: [] })} />);
+    expect(screen.getByTestId("potential-none").textContent).toContain("目前寫法良好");
+    expect(screen.queryByTestId("potential")).toBeNull();
   });
 
   it("shows the pending copy while ai.status is pending", () => {
@@ -62,7 +38,7 @@ describe("EstimateCard", () => {
     expect(screen.getByText("AI 分析中，約需數十秒。")).toBeTruthy();
   });
 
-  it("shows the fixed unavailable copy when ai.status is unavailable", () => {
+  it("shows the backend's specific unavailable message when ai.status is unavailable", () => {
     render(
       <EstimateCard
         ai={makeAi({

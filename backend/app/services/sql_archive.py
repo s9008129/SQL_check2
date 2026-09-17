@@ -123,6 +123,7 @@ def build_record(
             "rewrite_outcome": ai_result.suggested_sql.outcome if ai_result.suggested_sql else None,
             "suggested_sql_deidentified": suggested_sql_deidentified,
             "estimated_improvement_pct": ai_result.estimated_improvement_pct,
+            "improvement_potential": ai_result.improvement_potential,
         },
     }
 

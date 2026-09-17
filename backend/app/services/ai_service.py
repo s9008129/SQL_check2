@@ -51,11 +51,62 @@ logger = logging.getLogger(__name__)
 # PRD-mandated exact frontend copy for any AI failure path (§56).
 DEGRADE_MESSAGE = "智慧改善建議目前暫時無法使用，仍可依上方規則檢核結果進行確認。"
 
-# Why estimated_improvement_pct is None on an otherwise-ok result (2026-09-17).
-# estimate_allowed is False exactly when the rule engine found nothing AND no
-# full rewrite was allowed (see _compute_gates) — there is nothing to measure.
-ESTIMATE_REASON_NOT_ALLOWED = "規則檢核沒有發現問題、本次不整段改寫，AI 也沒有給出具體的片段建議，沒有可據以估算改善幅度的依據。"
-ESTIMATE_REASON_MODEL_NULL = "AI 認為目前資訊不足以估算改善幅度，例如改善方向需先由業務確認才能判斷效果。"
+_IMPACT_LABEL = {"high": "高", "medium": "中", "low": "低"}
+_VERIFIED = {"verified", "corrected"}
+
+
+def improvement_potential(result: AiResult, findings: list[Finding]) -> tuple[str | None, list[str]]:
+    """2026-09-17 user decision: the percentage the model used to give was
+    never measured (no plan, no stats, no rewritten COST), so it is replaced
+    by a level the server derives from things it actually knows:
+      high   — any BLOCK finding, or a high-impact advice whose fragment the
+               system confirmed result-preserving, or a full rewrite that
+               passed re-validation together with a high-impact advice;
+      medium — any NOTICE finding, or a passed full rewrite, or a medium-
+               impact advice with a confirmed fragment;
+      low    — any other advice (unconfirmed fragment, low impact, prose);
+      None   — nothing found (UI says 「目前寫法良好」).
+    Returns (level, basis lines) so the UI can show what it was derived from."""
+    if result.status != "ok":
+        return None, []
+    blocks = sum(1 for f in findings if f.status == "BLOCK")
+    notices = sum(1 for f in findings if f.status == "NOTICE")
+    provided = bool(result.suggested_sql and result.suggested_sql.outcome == "provided")
+    confirmed_high = [a for a in result.advice if a.impact == "high" and a.verification in _VERIFIED]
+    confirmed_medium = [a for a in result.advice if a.impact == "medium" and a.verification in _VERIFIED]
+    any_high = any(a.impact == "high" for a in result.advice)
+
+    basis: list[str] = []
+    if blocks or notices:
+        parts = []
+        if blocks:
+            parts.append(f"{blocks} 項不符合")
+        if notices:
+            parts.append(f"{notices} 項提醒")
+        basis.append("規則檢核：" + "、".join(parts))
+    if provided:
+        basis.append("已提供整段建議寫法，系統已確認查詢結果不變")
+    if result.advice:
+        described = []
+        for a in result.advice:
+            if not a.impact:
+                continue
+            tag = _IMPACT_LABEL[a.impact] + "影響"
+            if a.verification in _VERIFIED:
+                tag += "（系統已確認查詢結果不變）"
+            elif a.verification == "unverified":
+                tag += "（系統無法確認查詢結果）"
+            described.append(tag)
+        if described:
+            basis.append("AI 建議：" + "、".join(described))
+
+    if blocks or confirmed_high or (provided and any_high):
+        return "high", basis
+    if notices or provided or confirmed_medium:
+        return "medium", basis
+    if result.advice:
+        return "low", basis
+    return None, basis
 
 _PROMPT_PATH = PROMPTS_DIR / "sql_review_zh_tw.txt"
 SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
@@ -690,11 +741,6 @@ def _finalize(
     has_fragments = any(item.example for item in advice)
     effective_estimate_allowed = estimate_allowed or (estimate_with_fragments and has_fragments)
     pct = _clamp_round_pct(raw.estimated_improvement_pct, effective_estimate_allowed)
-    # 2026-09-17 user request: 「本次不提供效能改善幅度預估」 must always come
-    # with a plain-language reason. Only two things can make pct None here.
-    estimate_reason: str | None = None
-    if pct is None:
-        estimate_reason = ESTIMATE_REASON_NOT_ALLOWED if not effective_estimate_allowed else ESTIMATE_REASON_MODEL_NULL
 
     # 2026-09-17: a `:STR_001` the model made up (not in the reverse map, not
     # in the user's SQL) must not reach the reviewer — see masking.py.
@@ -725,7 +771,6 @@ def _finalize(
         advice=advice,
         suggested_sql=suggested_sql,
         estimated_improvement_pct=pct,
-        estimate_reason=estimate_reason,
     )
 
 
@@ -1078,7 +1123,7 @@ async def get_ai_result(
                 1 for f in findings if f.status == "NOTICE" and f.statement_index == representative.index
             )
 
-        return _finalize(
+        result = _finalize(
             raw,
             mask_result.reverse_map,
             candidate_allowed,
@@ -1093,6 +1138,8 @@ async def get_ai_result(
             original_sql=sql_text,
             estimate_with_fragments=estimate_with_fragments,
         )
+        level, basis = improvement_potential(result, findings)
+        return result.model_copy(update={"improvement_potential": level, "improvement_potential_basis": basis})
     except Exception as exc:
         # PRD §50.4: exception type only, never a message/traceback that
         # could embed SQL text (see _revalidate_suggested_sql's comment).

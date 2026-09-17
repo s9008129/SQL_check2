@@ -175,10 +175,16 @@ class AiResult(BaseModel):
     summary: str | None = None
     advice: list[AdviceItem] = Field(default_factory=list)
     suggested_sql: SuggestedSql | None = None
+    # Kept for the archive/analytics only; the UI no longer shows a
+    # percentage (2026-09-17 user decision: the number was never measured).
     estimated_improvement_pct: int | None = None
-    # 2026-09-17: plain-language reason whenever estimated_improvement_pct is
-    # None on a status="ok" result (shown under 「本次不提供效能改善幅度預估」).
-    estimate_reason: str | None = None
+    # 2026-09-17: deterministic improvement-potential level derived by the
+    # server from facts (rule findings, advice impact × verification, whether
+    # a full rewrite passed) — see ai_service.improvement_potential. None
+    # means "nothing to improve was found".
+    improvement_potential: Literal["high", "medium", "low"] | None = None
+    # Plain-language lines explaining what the level was derived from.
+    improvement_potential_basis: list[str] = Field(default_factory=list)
     message: str | None = None
     # 2026-09-17: why status is "unavailable" (output_truncated /
     # prompt_truncated / timeout / connection / http / invalid_response).

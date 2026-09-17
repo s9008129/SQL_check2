@@ -249,8 +249,6 @@ async def test_estimated_improvement_pct_missing_key_is_null(settings, chat_url)
     result = await _call(settings, _clean_select_statement())
 
     assert result.estimated_improvement_pct is None
-    # 2026-09-17: a null estimate always carries a plain-language reason.
-    assert result.estimate_reason == ai_service.ESTIMATE_REASON_MODEL_NULL
 
 
 @respx.mock
@@ -628,7 +626,6 @@ async def test_candidate_not_allowed_also_nulls_estimated_pct_when_estimate_requ
     )
 
     assert result.estimated_improvement_pct is None
-    assert result.estimate_reason == ai_service.ESTIMATE_REASON_NOT_ALLOWED
 
 
 @respx.mock
@@ -642,7 +639,6 @@ async def test_estimate_kept_when_no_findings_but_advice_has_fragments(settings,
     assert result.suggested_sql.outcome == "gated"
     assert any(a.example for a in result.advice)
     assert result.estimated_improvement_pct == 35
-    assert result.estimate_reason is None
 
 
 @respx.mock
@@ -655,7 +651,8 @@ async def test_estimate_dropped_when_no_findings_no_rewrite_and_no_fragments(set
     long_sql = "SELECT " + ", ".join(f"A.C{i} AS 稅種{i}稅額_減因C" for i in range(400)) + " FROM T A WHERE A.Y = 1"
     result = await _call(settings, parse_sql_text(long_sql).statements, sql_text=long_sql)
     assert result.estimated_improvement_pct is None
-    assert result.estimate_reason == ai_service.ESTIMATE_REASON_NOT_ALLOWED
+    # No findings, no rewrite, no fragments — only prose advice → level 低.
+    assert result.improvement_potential == "low"
 
 
 @respx.mock

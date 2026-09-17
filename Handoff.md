@@ -138,6 +138,10 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 - 整段改寫：`_revalidate_suggested_sql` 最後一步 `verify_predicate_changes`，任何條件變動都必須是規則可推導的，否則退回（原因句講「查詢結果可能改變」，不用「等價」字眼）。
 - 加新規則的方法：在 `rewrite_rules._RULES` 加一個函式，回傳 `Rewrite(rule, canonical, accepted, assumption)`，並在 `tests/test_rewrite_rules.py` 寫正反例。
 
+### 2026-09-17 深夜（四）：預估改善效果改為「改善潛力」等級
+- 使用者決定：百分比從未經量測（AI 不看執行計畫／統計／改後 COST），改為伺服器依事實推算的高／中／低（`ai_service.improvement_potential`），附推算依據句與警語「未經任何實際量測；系統人員採用前請於測試機覆核與測試」。推算表：BLOCK 或已確認的高影響片段或（整段改寫通過＋高影響）→高；NOTICE 或整段改寫通過或已確認的中影響片段→中；其餘任何建議→低；無→None（畫面「目前寫法良好」）。
+- `estimated_improvement_pct` 仍在 API 與蒐集檔（分析用），畫面不顯示；`estimate_reason` 已移除。
+
 ## 4. 「AI 沒給建議寫法」的判讀順序（接手後最常被問）
 
 1. 看 API 回應或畫面的 outcome：
@@ -151,7 +155,7 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 
 ## 5. 目前狀態與驗證數據
 
-- 最新狀態：後端 333 項測試、前端 76 項測試、ruff、build 全過（2026-09-17 深夜，條件改寫等價驗證 commit）。docx 三層巢狀真實案例已用本機程式碼直連正式主機 Gemma4 驗證（num_ctx 16384、43 秒、中文 advice_only）。
+- 最新狀態：後端 342 項測試、前端 73 項測試、ruff、build 全過（2026-09-17 深夜，改善潛力等級 commit）。docx 三層巢狀真實案例已用本機程式碼直連正式主機 Gemma4 驗證（num_ctx 16384、43 秒、中文 advice_only）。
 - 正式主機最後一次由使用者部署的版本在 `6a7294c` 之前；**`80f78e8`（放大字級）、`815c056`（全頁視覺）與本次畫面調整尚未部署**，需 `git pull` + `deploy\deploy.ps1`。
 - 使用者人工驗證（test_01～03.pdf）：多重缺陷 SQL、笛卡兒積 SQL、乾淨 SQL 三案皆符合預期。
 - 報告：`E2E_TEST_report_20260917.md`、`E2E_TEST_report_20260917_round2.md`、`SQLCheck2_E2E_test_report_20260916.md`。

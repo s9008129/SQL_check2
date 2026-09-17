@@ -128,14 +128,19 @@ export interface SuggestedSql {
   outcome?: RewriteOutcome;
 }
 
+export type ImprovementPotential = "high" | "medium" | "low";
+
 export interface AiResult {
   status: AiStatus;
   summary: string | null;
   advice: AdviceItem[];
   suggested_sql: SuggestedSql | null;
+  /** Archive-only; the UI shows `improvement_potential` instead (never measured). */
   estimated_improvement_pct: number | null;
-  /** Plain-language reason when estimated_improvement_pct is null on an ok result. */
-  estimate_reason?: string | null;
+  /** Server-derived improvement-potential level; null = nothing to improve found. */
+  improvement_potential?: ImprovementPotential | null;
+  /** What the level was derived from, one plain sentence per line. */
+  improvement_potential_basis?: string[];
   message: string | null;
   /** Why status is "unavailable" (diagnostic; `message` is what to show). */
   degrade_code?: string | null;

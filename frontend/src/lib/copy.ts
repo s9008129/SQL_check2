@@ -28,15 +28,23 @@ export const SUGGESTED_SQL_NOT_NEEDED_MESSAGE = "AI 檢視後認為目前寫法�
 export const SUGGESTED_SQL_ADVICE_ONLY_MESSAGE =
   "改善方向請見上方「智慧改善建議」與下方逐段對照，採用前請先確認：";
 
-// PRD §17.5 / §32.3 — shown instead of a percentage/gauge when
-// ai.estimated_improvement_pct is null.
-export const ESTIMATE_NOT_AVAILABLE_MESSAGE = "本次不提供效能改善幅度預估";
-// Shown when the AI judged the SQL already good (outcome not_needed).
-export const ESTIMATE_NOT_NEEDED_MESSAGE = "目前寫法良好，AI 未發現明顯的改善空間。";
+// Shown when nothing to improve was found (level null / outcome not_needed).
+export const ESTIMATE_NOT_NEEDED_MESSAGE = "目前寫法良好，規則檢核與 AI 建議都沒有發現明顯的改善空間。";
 
-// PRD §18.3 — the one allowed caption line under the estimate gauge.
-export const ESTIMATE_FOOTNOTE =
-  "AI 依目前 SQL 寫法與改善建議進行預估，實際效果仍以後續執行結果為準。";
+// 2026-09-17 user decision: the improvement "estimate" is a level derived
+// from rule findings and advice, never a measured number. Say so plainly.
+export const POTENTIAL_CAVEAT =
+  "此等級由規則檢核結果與 AI 建議推算，未經任何實際量測；系統人員採用前請於測試機覆核與測試。";
+export const POTENTIAL_LABEL: Record<"high" | "medium" | "low", string> = {
+  high: "高",
+  medium: "中",
+  low: "低",
+};
+export const POTENTIAL_HINT: Record<"high" | "medium" | "low", string> = {
+  high: "有明確且已確認可行的改善點，建議優先處理。",
+  medium: "有值得調整的地方，可安排時間評估。",
+  low: "改善空間有限，或改法尚需人工確認。",
+};
 
 // Lightweight loading copy while ai.status === "pending" (PRD §51's spirit:
 // AI is never a single point of failure, so the rest of the page is fully

@@ -43,3 +43,4 @@ Thumbs.db
 *.log
 coverage/
 htmlcov/
+.playwright-mcp/

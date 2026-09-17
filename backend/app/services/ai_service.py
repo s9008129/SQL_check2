@@ -51,6 +51,12 @@ logger = logging.getLogger(__name__)
 # PRD-mandated exact frontend copy for any AI failure path (§56).
 DEGRADE_MESSAGE = "智慧改善建議目前暫時無法使用，仍可依上方規則檢核結果進行確認。"
 
+# Why estimated_improvement_pct is None on an otherwise-ok result (2026-09-17).
+# estimate_allowed is False exactly when the rule engine found nothing AND no
+# full rewrite was allowed (see _compute_gates) — there is nothing to measure.
+ESTIMATE_REASON_NOT_ALLOWED = "規則檢核沒有發現問題，且本次不整段改寫，沒有可據以估算改善幅度的依據。"
+ESTIMATE_REASON_MODEL_NULL = "AI 認為目前資訊不足以估算改善幅度，例如改善方向需先由業務確認才能判斷效果。"
+
 _PROMPT_PATH = PROMPTS_DIR / "sql_review_zh_tw.txt"
 SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
 
@@ -650,6 +656,11 @@ def _finalize(
         important_tables_config,
     )
     pct = _clamp_round_pct(raw.estimated_improvement_pct, estimate_allowed)
+    # 2026-09-17 user request: 「本次不提供效能改善幅度預估」 must always come
+    # with a plain-language reason. Only two things can make pct None here.
+    estimate_reason: str | None = None
+    if pct is None:
+        estimate_reason = ESTIMATE_REASON_NOT_ALLOWED if not estimate_allowed else ESTIMATE_REASON_MODEL_NULL
 
     # 2026-09-17: a `:STR_001` the model made up (not in the reverse map, not
     # in the user's SQL) must not reach the reviewer — see masking.py.
@@ -674,7 +685,14 @@ def _finalize(
 
     # Still "ok" even if advice ended up empty after filtering — the model
     # did respond and validate; there is no separate "degraded but ok" state.
-    return AiResult(status="ok", summary=summary, advice=advice, suggested_sql=suggested_sql, estimated_improvement_pct=pct)
+    return AiResult(
+        status="ok",
+        summary=summary,
+        advice=advice,
+        suggested_sql=suggested_sql,
+        estimated_improvement_pct=pct,
+        estimate_reason=estimate_reason,
+    )
 
 
 # 2026-09-17: one fixed, SQL-free sentence per failure class so the reviewer

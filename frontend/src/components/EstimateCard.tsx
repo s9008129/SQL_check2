@@ -31,7 +31,13 @@ export default function EstimateCard({ ai }: EstimateCardProps) {
     // "not provided" copy, which reads like a refusal.
     body = <div className="ai-note ai-note-good">{ESTIMATE_NOT_NEEDED_MESSAGE}</div>;
   } else if (pct === null || pct === undefined) {
-    body = <div className="ai-note">{ESTIMATE_NOT_AVAILABLE_MESSAGE}</div>;
+    // 2026-09-17 user request: never show 「本次不提供」 without saying why.
+    body = (
+      <div className="ai-note" data-testid="estimate-not-available">
+        <p className="verdict-headline">{ESTIMATE_NOT_AVAILABLE_MESSAGE}</p>
+        {ai.estimate_reason && <p className="verdict-reason">{ai.estimate_reason}</p>}
+      </div>
+    );
   } else {
     body = (
       <div className="estimate-wrap">

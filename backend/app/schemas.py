@@ -167,6 +167,9 @@ class AiResult(BaseModel):
     advice: list[AdviceItem] = Field(default_factory=list)
     suggested_sql: SuggestedSql | None = None
     estimated_improvement_pct: int | None = None
+    # 2026-09-17: plain-language reason whenever estimated_improvement_pct is
+    # None on a status="ok" result (shown under 「本次不提供效能改善幅度預估」).
+    estimate_reason: str | None = None
     message: str | None = None
     # 2026-09-17: why status is "unavailable" (output_truncated /
     # prompt_truncated / timeout / connection / http / invalid_response).

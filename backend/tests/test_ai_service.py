@@ -244,6 +244,8 @@ async def test_estimated_improvement_pct_missing_key_is_null(settings, chat_url)
     result = await _call(settings, _clean_select_statement())
 
     assert result.estimated_improvement_pct is None
+    # 2026-09-17: a null estimate always carries a plain-language reason.
+    assert result.estimate_reason == ai_service.ESTIMATE_REASON_MODEL_NULL
 
 
 @respx.mock
@@ -599,6 +601,7 @@ async def test_candidate_not_allowed_also_nulls_estimated_pct_when_estimate_requ
     )
 
     assert result.estimated_improvement_pct is None
+    assert result.estimate_reason == ai_service.ESTIMATE_REASON_NOT_ALLOWED
 
 
 @respx.mock

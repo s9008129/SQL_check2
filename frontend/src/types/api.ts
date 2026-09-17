@@ -130,6 +130,8 @@ export interface AiResult {
   advice: AdviceItem[];
   suggested_sql: SuggestedSql | null;
   estimated_improvement_pct: number | null;
+  /** Plain-language reason when estimated_improvement_pct is null on an ok result. */
+  estimate_reason?: string | null;
   message: string | null;
   /** Why status is "unavailable" (diagnostic; `message` is what to show). */
   degrade_code?: string | null;

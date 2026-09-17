@@ -26,6 +26,20 @@ describe("EstimateCard", () => {
     expect(screen.queryByText(/%/)).toBeNull();
   });
 
+  it("shows the backend's plain-language reason under the not-available copy", () => {
+    render(
+      <EstimateCard
+        ai={makeAi({
+          estimated_improvement_pct: null,
+          estimate_reason: "規則檢核沒有發現問題，且本次不整段改寫，沒有可據以估算改善幅度的依據。",
+        })}
+      />,
+    );
+    const note = screen.getByTestId("estimate-not-available");
+    expect(note.textContent).toContain("本次不提供效能改善幅度預估");
+    expect(note.textContent).toContain("沒有可據以估算改善幅度的依據");
+  });
+
   it("shows the positive 'no room for improvement' copy when outcome is not_needed and pct is 0", () => {
     render(
       <EstimateCard

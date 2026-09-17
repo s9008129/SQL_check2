@@ -133,10 +133,24 @@ class AdviceItem(BaseModel):
     impact: ImpactLevel | None = None
 
 
+RewriteOutcome = Literal["provided", "not_needed", "advice_only", "gated", "rejected"]
+
+
 class SuggestedSql(BaseModel):
     available: bool
     reason: str
     sql: str | None = None
+    # 2026-09-17: *why* there is (or isn't) a rewrite, so the UI can say
+    # different things for genuinely different situations instead of one
+    # fixed "declined" sentence:
+    #   provided    – a validated rewrite is in `sql`
+    #   not_needed  – the model judged the SQL already good; nothing to rewrite
+    #   advice_only – improvements exist but an equivalent rewrite needs a
+    #                 business assumption (see advice examples)
+    #   gated       – server gate (multi-statement / non-SELECT / parse /
+    #                 forbidden complexity) — model never asked to rewrite
+    #   rejected    – model proposed a rewrite, server re-validation refused it
+    outcome: RewriteOutcome = "advice_only"
 
 
 class AiResult(BaseModel):

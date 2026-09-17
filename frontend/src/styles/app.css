@@ -158,6 +158,8 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .sql-fallback{padding:20px;color:#c9d3e4;font-size:13px;line-height:1.75}
 .sql-fallback p{margin:0}
 .sql-fallback-reason{margin-top:8px !important;color:#8b96ab !important;font-size:12px}
+.sql-fallback-good{color:#7fd1a0}
+.ai-note-good{background:#ecfdf3;border-color:#c6efd5;color:#16784a}
 
 /* CodeMirror hosts: light variant matches the prototype textarea, dark
    variant fills the dark .sql-box code panels. */

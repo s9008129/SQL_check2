@@ -100,6 +100,19 @@ def test_build_record_includes_expected_top_level_fields():
         assert key in record
 
 
+def test_build_record_includes_rewrite_outcome():
+    kwargs = _base_kwargs("SELECT A.X FROM T A WHERE A.Y = 1")
+    kwargs["ai_result"] = AiResult(
+        status="ok",
+        summary="s",
+        advice=[],
+        suggested_sql=SuggestedSql(available=False, reason="r", outcome="not_needed"),
+        estimated_improvement_pct=0,
+    )
+    record = sql_archive.build_record(**kwargs)
+    assert record["ai"]["rewrite_outcome"] == "not_needed"
+
+
 def test_build_record_suggested_sql_deidentified_when_available():
     kwargs = _base_kwargs("SELECT A.X FROM T A WHERE A.Y = 1")
     kwargs["ai_result"] = AiResult(

@@ -4,6 +4,7 @@ import {
   AI_UNAVAILABLE_MESSAGE,
   ESTIMATE_FOOTNOTE,
   ESTIMATE_NOT_AVAILABLE_MESSAGE,
+  ESTIMATE_NOT_NEEDED_MESSAGE,
 } from "../lib/copy";
 
 export interface EstimateCardProps {
@@ -28,6 +29,10 @@ export default function EstimateCard({ ai }: EstimateCardProps) {
     body = <div className="ai-note">{AI_PENDING_MESSAGE}</div>;
   } else if (ai.status === "unavailable") {
     body = <div className="ai-note">{ai.message?.trim() ? ai.message : AI_UNAVAILABLE_MESSAGE}</div>;
+  } else if (ai.suggested_sql?.outcome === "not_needed" && !pct) {
+    // AI judged the SQL already good: say so positively instead of the
+    // "not provided" copy, which reads like a refusal.
+    body = <div className="ai-note ai-note-good">{ESTIMATE_NOT_NEEDED_MESSAGE}</div>;
   } else if (pct === null || pct === undefined) {
     body = <div className="ai-note">{ESTIMATE_NOT_AVAILABLE_MESSAGE}</div>;
   } else {

@@ -43,6 +43,9 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
   const aiPending = ai.status === "pending";
   const aiUnavailable = ai.status === "unavailable";
   const suggestedAvailable = ai.status === "ok" && !!ai.suggested_sql?.available;
+  const outcome = ai.status === "ok" ? ai.suggested_sql?.outcome : undefined;
+  const notNeeded = !suggestedAvailable && outcome === "not_needed";
+  const adviceOnly = !suggestedAvailable && outcome === "advice_only";
 
   return (
     <section className="summary" aria-label="檢核摘要">
@@ -131,10 +134,32 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
       />
 
       <Metric
-        tone={aiPending ? "purple" : aiUnavailable ? "gray" : suggestedAvailable ? "green" : "gray"}
-        icon={suggestedAvailable ? "✓" : "·"}
+        tone={
+          aiPending
+            ? "purple"
+            : aiUnavailable
+              ? "gray"
+              : suggestedAvailable || notNeeded
+                ? "green"
+                : adviceOnly
+                  ? "yellow"
+                  : "gray"
+        }
+        icon={suggestedAvailable || notNeeded ? "✓" : "·"}
         label="建議寫法"
-        value={aiPending ? "AI 分析中" : aiUnavailable ? "暫不提供" : suggestedAvailable ? "可供參考" : "本次不提供"}
+        value={
+          aiPending
+            ? "AI 分析中"
+            : aiUnavailable
+              ? "暫不提供"
+              : suggestedAvailable
+                ? "可供參考"
+                : notNeeded
+                  ? "無需改寫"
+                  : adviceOnly
+                    ? "僅提供方向"
+                    : "本次不提供"
+        }
         valueStyle={{ fontSize: 21 }}
         sub={
           aiPending
@@ -143,7 +168,9 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
               ? "AI 智慧建議暫時無法使用"
               : suggestedAvailable
                 ? "原始 SQL 完整保留"
-                : (ai.suggested_sql?.reason ?? "本次先提供改善方向")
+                : notNeeded
+                  ? "目前寫法已良好"
+                  : (ai.suggested_sql?.reason ?? "本次先提供改善方向")
         }
       />
     </section>

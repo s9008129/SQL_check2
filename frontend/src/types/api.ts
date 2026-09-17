@@ -108,10 +108,15 @@ export interface AdviceItem {
   impact: ImpactLevel | null;
 }
 
+export type RewriteOutcome = "provided" | "not_needed" | "advice_only" | "gated" | "rejected";
+
 export interface SuggestedSql {
   available: boolean;
   reason: string;
   sql: string | null;
+  // Why there is / isn't a rewrite (mirrors backend RewriteOutcome). Optional
+  // on the wire for backward compatibility with a not-yet-redeployed backend.
+  outcome?: RewriteOutcome;
 }
 
 export interface AiResult {

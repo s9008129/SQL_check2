@@ -71,6 +71,26 @@ describe("SummaryCards — AI-dependent cards", () => {
     expect(screen.getByText("本次不提供")).toBeTruthy();
   });
 
+  it("shows 無需改寫 on 建議寫法 when outcome is not_needed", () => {
+    const result = makeResult({
+      ai: makeAi({
+        suggested_sql: { available: false, reason: "目前寫法已良好。", sql: null, outcome: "not_needed" },
+      }),
+    });
+    render(<SummaryCards result={result} />);
+    expect(screen.getByText("無需改寫")).toBeTruthy();
+  });
+
+  it("shows 僅提供方向 on 建議寫法 when outcome is advice_only", () => {
+    const result = makeResult({
+      ai: makeAi({
+        suggested_sql: { available: false, reason: "需確認切分方式。", sql: null, outcome: "advice_only" },
+      }),
+    });
+    render(<SummaryCards result={result} />);
+    expect(screen.getByText("僅提供方向")).toBeTruthy();
+  });
+
   it("shows 可供參考 on 建議寫法 when a suggestion is available", () => {
     const result = makeResult();
     render(<SummaryCards result={result} />);

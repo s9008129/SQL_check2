@@ -8,7 +8,9 @@ import { formatCost } from "../lib/cost";
 import {
   AI_PENDING_MESSAGE,
   AI_UNAVAILABLE_MESSAGE,
+  SUGGESTED_SQL_ADVICE_ONLY_MESSAGE,
   SUGGESTED_SQL_NOT_AVAILABLE_MESSAGE,
+  SUGGESTED_SQL_NOT_NEEDED_MESSAGE,
 } from "../lib/copy";
 
 export interface SqlCompareProps {
@@ -97,13 +99,21 @@ export default function SqlCompare({ originalSql, cost, ai }: SqlCompareProps) {
                 {ai.message?.trim() ? ai.message : AI_UNAVAILABLE_MESSAGE}
               </div>
             ) : suggestedSql === null ? (
-              <div className="sql-fallback">
-                <p>{SUGGESTED_SQL_NOT_AVAILABLE_MESSAGE}</p>
-                {/* The backend sets `reason` to this exact fixed copy
-                    whenever *it* is the one declining (server-side gate or
-                    safety re-validation, not the model itself) — only show
-                    it as a second line when it actually adds information
-                    (e.g. the model's own stated reason). */}
+              <div className={`sql-fallback${ai.suggested_sql?.outcome === "not_needed" ? " sql-fallback-good" : ""}`}>
+                {/* Three genuinely different situations, three messages
+                    (2026-09-17): the SQL is already fine; improvements
+                    exist but need a business assumption (advice only);
+                    or the server gated / rejected a rewrite (PRD §25.4
+                    fixed copy). */}
+                <p>
+                  {ai.suggested_sql?.outcome === "not_needed"
+                    ? SUGGESTED_SQL_NOT_NEEDED_MESSAGE
+                    : ai.suggested_sql?.outcome === "advice_only"
+                      ? SUGGESTED_SQL_ADVICE_ONLY_MESSAGE
+                      : SUGGESTED_SQL_NOT_AVAILABLE_MESSAGE}
+                </p>
+                {/* Only show the backend's reason as a second line when it
+                    actually adds information (never repeat the fixed copy). */}
                 {ai.suggested_sql?.reason && ai.suggested_sql.reason !== SUGGESTED_SQL_NOT_AVAILABLE_MESSAGE && (
                   <p className="sql-fallback-reason">{ai.suggested_sql.reason}</p>
                 )}

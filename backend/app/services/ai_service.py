@@ -83,8 +83,12 @@ RESPONSE_SCHEMA: dict[str, Any] = {
                 "available": {"type": "boolean"},
                 "reason": {"type": "string"},
                 "sql": {"type": "string"},
+                # 2026-09-17: the model must say *which kind* of "no rewrite"
+                # this is, so the UI never shows the same fixed sentence for
+                # "SQL is already fine" and "needs a business assumption".
+                "rewrite_outcome": {"type": "string", "enum": ["provided", "not_needed", "advice_only"]},
             },
-            "required": ["available", "reason"],
+            "required": ["available", "reason", "rewrite_outcome"],
         },
         "estimated_improvement_pct": {"type": ["integer", "null"]},
     },
@@ -92,15 +96,24 @@ RESPONSE_SCHEMA: dict[str, Any] = {
 }
 
 
+class _RawSuggestedSql(BaseModel):
+    """The model's own view of suggested_sql. `rewrite_outcome` is optional
+    here (a schema-constrained Ollama reply always has it, but a mocked or
+    older reply may not) — `_finalize_suggested_sql` falls back to
+    "advice_only", the conservative reading."""
+
+    available: bool
+    reason: str
+    sql: str | None = None
+    rewrite_outcome: str | None = None
+
+
 class _AiRawResponse(BaseModel):
-    """Mirrors RESPONSE_SCHEMA for validating the model's raw JSON reply.
-    Reuses AdviceItem/SuggestedSql from app.schemas for the nested pieces
-    per this module's spec (they already match the schema's required/
-    optional fields exactly)."""
+    """Mirrors RESPONSE_SCHEMA for validating the model's raw JSON reply."""
 
     summary: str
     advice: list[AdviceItem] = Field(default_factory=list)
-    suggested_sql: SuggestedSql
+    suggested_sql: _RawSuggestedSql
     estimated_improvement_pct: int | None = None
 
 
@@ -409,7 +422,7 @@ def _revalidate_suggested_sql(
 
 
 def _finalize_suggested_sql(
-    raw: SuggestedSql,
+    raw: _RawSuggestedSql,
     reverse_map: dict[str, str],
     candidate_allowed: bool,
     decline_code: str | None,
@@ -427,18 +440,29 @@ def _finalize_suggested_sql(
     # claims.
     available = bool(raw.available) and candidate_allowed
 
-    if raw.available and not candidate_allowed:
-        # The model's own `reason` was almost certainly written to justify
-        # *providing* a rewrite (available=true), so surfacing it verbatim
-        # once we flip available to false would read as self-contradictory.
-        # Replace it with a reason specific to *why* candidate_allowed is
-        # false (decline_code) instead of always the same fixed sentence.
-        reason = _decline_reason_text(decline_code)
+    # Outcome classification (see schemas.RewriteOutcome). The model only
+    # chooses between not_needed / advice_only; gated / rejected / provided
+    # are decided here from facts it cannot influence.
+    outcome: str = "advice_only"
+    if raw.rewrite_outcome == "not_needed" and not raw.available:
+        outcome = "not_needed"
+
+    if not candidate_allowed:
+        outcome = "gated"
+        if raw.available:
+            # The model's own `reason` was almost certainly written to
+            # justify *providing* a rewrite (available=true), so surfacing it
+            # verbatim once we flip available to false would read as
+            # self-contradictory. Replace it with a reason specific to *why*
+            # candidate_allowed is false (decline_code).
+            reason = _decline_reason_text(decline_code)
 
     if _contains_forbidden(reason, forbidden):
         logger.info("ai_service: suggested_sql.reason discarded on forbidden-phrase match")
         available = False
         reason = "建議寫法說明暫不提供。"
+        if outcome == "not_needed":
+            outcome = "advice_only"
 
     sql: str | None = None
     if available and raw.sql:
@@ -449,6 +473,7 @@ def _finalize_suggested_sql(
             )
             if ok:
                 sql = unmasked
+                outcome = "provided"
                 logger.info("ai_service: revalidation ok")
             else:
                 # Rejection reasons are all fixed, structure-only Chinese
@@ -457,6 +482,7 @@ def _finalize_suggested_sql(
                 # reviewer and logging it at INFO are safe.
                 logger.info("ai_service: revalidation rejected: %s", rejection)
                 available = False
+                outcome = "rejected"
                 reason = (
                     f"AI 提出的建議寫法未通過系統安全複核（{rejection}），"
                     "為避免改變原本查詢內容，本次不顯示建議寫法。"
@@ -466,9 +492,15 @@ def _finalize_suggested_sql(
             # left after unmasking — conservative: decline rather than show
             # an unvalidated rewrite.
             available = False
+            outcome = "rejected"
             reason = _NO_REWRITE_REASON
+    elif available and not raw.sql:
+        # Model said available=true but sent no SQL — nothing to show.
+        available = False
+        outcome = "advice_only"
 
-    return SuggestedSql(available=available, reason=reason, sql=sql)
+    logger.info("ai_service: rewrite outcome=%s", outcome)
+    return SuggestedSql(available=available, reason=reason, sql=sql, outcome=outcome)
 
 
 def _finalize(

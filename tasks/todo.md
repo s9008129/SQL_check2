@@ -108,3 +108,10 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
   建議寫法（開發機用 fake_ollama 模擬，無法驗證 Gemma 4 本身是否會依照新
   system prompt 指示給出改寫，需正式主機真實 Ollama 驗證）。
 - 確認 `./data` 掛載在正式主機可寫入（deploy.ps1 已加探測，但正式主機從未跑過）。
+
+## 2026-09-17：建議寫法三態呈現（rewrite_outcome）
+- 完成：`SuggestedSql.outcome`（provided／not_needed／advice_only／gated／rejected）、
+  Ollama schema 必填 `rewrite_outcome`、prompt 要求 example 片段與假設、前端三種文案、
+  蒐集檔記錄 outcome。後端 277 測試、前端 57 測試、build 全過。
+- 待辦：正式主機 `git pull` + `deploy.ps1` 後，用 6 份檔案重測，預期「無需改寫」綠色呈現；
+  用含 TRUNC 的 SQL 確認仍能拿到建議寫法。

@@ -60,8 +60,20 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
 1. summary：用平實的繁體中文（台灣用語）簡短說明這段 SQL 目前的狀況與規則引擎發現了
    什麼，讓不熟悉技術的同仁也看得懂。
 2. advice：最多 3 項具體改善建議，每項包含 title（標題）、explanation（說明原因）、
-   可選的 example（示範寫法片段）、可選的 impact（low/medium/high，代表你主觀認為此
-   建議的影響程度）。內容需針對這段 SQL 的實際寫法給建議，不要給空泛的通用建議。
+   example（示範寫法片段）、可選的 impact（low/medium/high，代表你主觀認為此建議的
+   影響程度）。內容需針對這段 SQL 的實際寫法給建議，不要給空泛的通用建議。
+   - **只要建議涉及 SQL 文字的調整，example 就必須填寫**具體的片段（例如
+     `WHERE A.TXN_DATE >= :STR_001 AND A.TXN_DATE < :STR_001 + 1`），讓同仁不用自己
+     猜要怎麼改。若這個改法需要業務上的假設才能成立（例如欄位串接要怎麼切分、欄位的
+     資料格式），請在 example 裡把假設寫出來，例如：
+     `若 TAX_CD 為 2 碼：WHERE W.TAX_CD = '55' AND W.SUBTAX_CD = '1'`。
+   - 若這段 SQL 真的沒有值得調整之處，advice 可以只有 1 項甚至 0 項，**不要為了湊
+     數而給空泛的建議**（例如「確認關聯欄位資料類型」「評估是否移除 DISTINCT」這類沒有
+     具體依據的通用提醒）。重要資料表的「請確認查詢範圍」提醒（important_table_notices
+     有內容時）是例外，仍應提出。
+   - 後置萬用字元的 LIKE（例如 `LIKE '114%'`、`LIKE '07%'`）在 Oracle 中本來就能以
+     範圍方式處理，**不是**需要改善的寫法，不要建議把它改成日期範圍；只有前置萬用字元
+     （`LIKE '%xxx'`）才值得提醒。
 3. suggested_sql（建議寫法）：
    - **candidate_allowed 為 true 時的預設行為：只要你的任何一項改善建議會實際改變 SQL
      文字（例如把 LIKE 前置萬用字元改成範圍查詢、把條件欄位的函數移除、調整日期比對寫
@@ -69,8 +81,17 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
      advice 文字裡描述改法卻不實際給出改寫**。只有在以下情況才可以把 available 設為
      false：(a) 你認為這段 SQL 目前的寫法已經沒有值得調整之處、或所有建議都不涉及改變
      SQL 文字本身（例如純粹建議「請確認查詢範圍」這類與寫法無關的提醒）；或 (b) 你判斷
-     任何改寫都可能改變原本的查詢結果（例如你不確定某個條件是否可以安全地改成範圍寫
-     法）。這兩種情況下 reason 都必須寫出具體原因，不可以只抄同一句固定說法。
+     任何改寫都需要業務假設才能成立、否則可能改變原本的查詢結果（例如欄位串接的切分
+     方式、欄位的資料格式不明）。這兩種情況下 reason 都必須寫出具體原因，不可以只抄同
+     一句固定說法。
+   - **rewrite_outcome（必填）**：明確告訴系統這次屬於哪一種情況，系統會依此顯示不同
+     的畫面文字：
+     - "provided"：available 為 true，sql 欄位有完整改寫。
+     - "not_needed"：對應上面的 (a)——目前寫法已良好、沒有文字層面需要改的地方。此時
+       summary 要明確寫出「目前寫法良好」，estimated_improvement_pct 填 0。
+     - "advice_only"：對應上面的 (b)——有改善方向，但需要業務確認才能等價改寫，因此只
+       在 advice 的 example 給片段與假設，不產生完整改寫。
+     不要把「其實沒東西可改」說成 advice_only，也不要把「需要假設」說成 not_needed。
    - 若 candidate_allowed 為 false，available 必須是 false。reason 請具體說明「為什麼
      這次不提供改寫」（例如「此語句包含集合運算」「無法解析此 SQL 結構」），而不是每次
      都輸出同一句話；若找不到更具體的原因，才使用這句固定說法：「為避免改變原本查詢內
@@ -100,22 +121,22 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
      a. 原始：`WHERE TRUNC(A.TXN_DATE) = :STR_001`
         建議：`WHERE A.TXN_DATE >= :STR_001 AND A.TXN_DATE < :STR_001 + 1`
         （把「對欄位套函數再比較」改成「欄位本身的範圍比較」，欄位數與資料表都不變。）
-     b. 原始：`WHERE A.APPR_DATE LIKE :STR_001`，且該佔位符的 literal_hints 顯示
-        wildcard 為 "trailing"（代表原始內容類似 '114%' 這種年度前綴樣式）
-        建議：無法得知確切的年度數字時，不要臆測其內容或直接改寫成範圍比較；改為在
-        advice 中建議「可評估將年度前綴的 LIKE 條件改成日期範圍寫法」，並將
-        available 設為 false，reason 說明「不確定實際年度值，避免誤改查詢範圍」。
-     c. 原始：`WHERE A.CODE || A.SUBCODE = :STR_001`
-        建議：若能確定 :STR_001 的組成方式（例如已知固定切分位數），可改寫成
-        `WHERE A.CODE = :STR_001_PART1 AND A.SUBCODE = :STR_001_PART2` 這類分開比對；
-        但由於系統不會提供切分後的佔位符，這類改寫通常無法安全進行，應優先選擇只給文字
-        建議、不提供改寫（available=false），除非欄位串接方式明確且無歧義。
+     b. 原始：`WHERE TO_CHAR(A.D,'YYYYMMDD') = '20240101' AND NVL(A.S,'N') = 'N'`
+        建議：`WHERE A.D >= TO_DATE('20240101','YYYYMMDD') AND A.D < TO_DATE('20240101','YYYYMMDD') + 1
+        AND (A.S = 'N' OR A.S IS NULL)`（兩個「欄位套函數」都改成直接比對欄位，語意完全
+        相同，rewrite_outcome 為 "provided"。）
+     c. 原始：`WHERE W.TAX_CD || W.SUBTAX_CD = '551'`
+        這種串接比對要拆成兩欄才能讓資料庫直接用欄位比對，但 '551' 要切成 '55'+'1' 還是
+        '5'+'51' 需要業務確認——這就是 rewrite_outcome 為 "advice_only" 的典型情況：
+        available 設為 false，在 advice 的 example 寫「若 TAX_CD 為 2 碼：
+        WHERE W.TAX_CD = '55' AND W.SUBTAX_CD = '1'」，reason 說明需要確認切分方式。
 4. estimated_improvement_pct：
    - 只有當 estimate_improvement_allowed 為 true 時才給數值，是一個 0 到 100 的整數，
      代表你主觀評估「這段 SQL 若採納建議、可能帶來的改善空間」，純粹是經驗法則的參考
      指標，不是任何實際量測或 COST 計算結果。
    - 當 estimate_improvement_allowed 為 false，或你認為沒有足夠依據估算時，請填
-     null，不要硬給數字。
+     null，不要硬給數字。rewrite_outcome 為 "not_needed" 時請填 0（代表沒有明顯改善
+     空間），不要填 null。
 
 【用詞規範（繁體中文，台灣在地稅務機關用語，避免中國大陸用語）】
 請使用「資料庫」而非「數據庫」、「資料表」、「欄位」而非「字段」、「查詢條件」、

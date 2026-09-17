@@ -265,6 +265,72 @@ async def test_candidate_not_allowed_forces_suggested_sql_unavailable(settings, 
     assert result.suggested_sql.reason == ai_service._DECLINE_REASON_TEXT["multi_statement"]
 
 
+# ---------------------------------------------------------------------------
+# rewrite outcome classification (2026-09-17)
+# ---------------------------------------------------------------------------
+@respx.mock
+async def test_outcome_provided_when_rewrite_passes_revalidation(settings, chat_url):
+    inner = _good_inner(
+        suggested_sql={"available": True, "reason": "改用範圍比較。", "sql": "SELECT A.X FROM T A WHERE A.Y >= :STR_001", "rewrite_outcome": "provided"}
+    )
+    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
+    result = await _call(settings, _clean_select_statement())
+    assert result.suggested_sql.outcome == "provided"
+
+
+@respx.mock
+async def test_outcome_not_needed_keeps_model_reason(settings, chat_url):
+    inner = _good_inner(
+        suggested_sql={"available": False, "reason": "目前寫法已良好。", "rewrite_outcome": "not_needed"},
+        estimated_improvement_pct=0,
+    )
+    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
+    result = await _call(settings, _clean_select_statement())
+    assert result.suggested_sql.outcome == "not_needed"
+    assert result.suggested_sql.reason == "目前寫法已良好。"
+    assert result.estimated_improvement_pct == 0
+
+
+@respx.mock
+async def test_outcome_advice_only_is_the_default_when_model_declines(settings, chat_url):
+    inner = _good_inner(suggested_sql={"available": False, "reason": "需業務確認切分方式。"})
+    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
+    result = await _call(settings, _clean_select_statement())
+    assert result.suggested_sql.outcome == "advice_only"
+
+
+@respx.mock
+async def test_outcome_gated_when_candidate_not_allowed(settings, chat_url):
+    inner = _good_inner(suggested_sql={"available": False, "reason": "多段。", "rewrite_outcome": "not_needed"})
+    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
+    result = await _call(settings, _multi_statement(), sql_text="SELECT * FROM T A WHERE A.X=1;\nSELECT * FROM T2 B WHERE B.Y=1;")
+    assert result.suggested_sql.outcome == "gated"
+
+
+@respx.mock
+async def test_outcome_rejected_when_revalidation_fails(settings, chat_url):
+    inner = _good_inner(
+        suggested_sql={"available": True, "reason": "改。", "sql": "SELECT A.X FROM T A", "rewrite_outcome": "provided"}
+    )
+    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
+    result = await _call(settings, _clean_select_statement())
+    assert result.suggested_sql.outcome == "rejected"
+    assert result.suggested_sql.available is False
+
+
+def test_response_schema_requires_rewrite_outcome():
+    props = ai_service.RESPONSE_SCHEMA["properties"]["suggested_sql"]
+    assert "rewrite_outcome" in props["required"]
+    assert set(props["properties"]["rewrite_outcome"]["enum"]) == {"provided", "not_needed", "advice_only"}
+
+
+def test_system_prompt_explains_rewrite_outcome_and_examples():
+    assert "rewrite_outcome" in ai_service.SYSTEM_PROMPT
+    assert "not_needed" in ai_service.SYSTEM_PROMPT
+    assert "advice_only" in ai_service.SYSTEM_PROMPT
+    assert "example 就必須填寫" in ai_service.SYSTEM_PROMPT
+
+
 @respx.mock
 async def test_candidate_not_allowed_model_already_agreeing_keeps_its_own_reason(settings, chat_url):
     # When the model itself already said available=False (agreeing with the

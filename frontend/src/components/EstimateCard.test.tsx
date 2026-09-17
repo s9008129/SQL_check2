@@ -15,6 +15,19 @@ describe("EstimateCard", () => {
     expect(screen.queryByText(/%/)).toBeNull();
   });
 
+  it("shows the positive 'no room for improvement' copy when outcome is not_needed and pct is 0", () => {
+    render(
+      <EstimateCard
+        ai={makeAi({
+          estimated_improvement_pct: 0,
+          suggested_sql: { available: false, reason: "目前寫法已良好。", sql: null, outcome: "not_needed" },
+        })}
+      />,
+    );
+    expect(screen.getByText("目前寫法良好，AI 未發現明顯的改善空間。")).toBeTruthy();
+    expect(screen.queryByText("本次不提供效能改善幅度預估")).toBeNull();
+  });
+
   it("shows the pending copy while ai.status is pending", () => {
     render(
       <EstimateCard

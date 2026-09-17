@@ -120,6 +120,7 @@ def build_record(
                 {"title": a.title, "explanation": a.explanation, "impact": a.impact} for a in ai_result.advice
             ],
             "suggested_available": bool(ai_result.suggested_sql and ai_result.suggested_sql.available),
+            "rewrite_outcome": ai_result.suggested_sql.outcome if ai_result.suggested_sql else None,
             "suggested_sql_deidentified": suggested_sql_deidentified,
             "estimated_improvement_pct": ai_result.estimated_improvement_pct,
         },

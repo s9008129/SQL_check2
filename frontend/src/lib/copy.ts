@@ -16,9 +16,17 @@ export const SUGGESTED_SQL_NOT_AVAILABLE_MESSAGE =
 export const AI_UNAVAILABLE_MESSAGE =
   "智慧改善建議目前暫時無法使用，仍可依上方規則檢核結果進行確認。";
 
+// 2026-09-17 — the three genuinely different "no rewrite" situations get
+// their own copy, so "SQL is already fine" never reads like a refusal.
+export const SUGGESTED_SQL_NOT_NEEDED_MESSAGE = "AI 檢視後認為目前寫法已良好，本次不需要改寫。";
+export const SUGGESTED_SQL_ADVICE_ONLY_MESSAGE =
+  "改善方向已列於上方「智慧改善建議」（含示範片段），因涉及業務判斷，本次不自動改寫：";
+
 // PRD §17.5 / §32.3 — shown instead of a percentage/gauge when
 // ai.estimated_improvement_pct is null.
 export const ESTIMATE_NOT_AVAILABLE_MESSAGE = "本次不提供效能改善幅度預估";
+// Shown when the AI judged the SQL already good (outcome not_needed).
+export const ESTIMATE_NOT_NEEDED_MESSAGE = "目前寫法良好，AI 未發現明顯的改善空間。";
 
 // PRD §18.3 — the one allowed caption line under the estimate gauge.
 export const ESTIMATE_FOOTNOTE =

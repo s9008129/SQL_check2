@@ -26,6 +26,34 @@ describe("SqlCompare", () => {
     expect(screen.getByTestId("sql-editor-建議寫法")).toBeTruthy();
   });
 
+  it("shows the positive 'not needed' message when outcome is not_needed", () => {
+    render(
+      <SqlCompare
+        originalSql="SELECT A.X FROM T A WHERE A.Y = 1"
+        cost={68420}
+        ai={makeAi({
+          suggested_sql: { available: false, reason: "目前寫法已良好。", sql: null, outcome: "not_needed" },
+        })}
+      />,
+    );
+    expect(screen.getByText("AI 檢視後認為目前寫法已良好，本次不需要改寫。")).toBeTruthy();
+    expect(screen.queryByText("為避免改變原本查詢內容，本次先提供改善方向，不自動產生建議寫法。")).toBeNull();
+  });
+
+  it("shows the advice-only message plus the reason when outcome is advice_only", () => {
+    render(
+      <SqlCompare
+        originalSql="SELECT A.X FROM T A WHERE A.C||A.D = '551'"
+        cost={68420}
+        ai={makeAi({
+          suggested_sql: { available: false, reason: "需確認切分方式。", sql: null, outcome: "advice_only" },
+        })}
+      />,
+    );
+    expect(screen.getByText(/改善方向已列於上方/)).toBeTruthy();
+    expect(screen.getByText("需確認切分方式。")).toBeTruthy();
+  });
+
   it("shows the fixed not-available-by-design message when suggested_sql.available is false", () => {
     render(
       <SqlCompare

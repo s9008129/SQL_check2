@@ -74,6 +74,7 @@ def _advice_payload() -> dict:
             "available": True,
             "reason": "（假資料）僅示範用途，可提供簡單改寫供參考。",
             "sql": "SELECT * FROM T A WHERE A.COL = :STR_001",
+            "rewrite_outcome": "provided",
         },
         "estimated_improvement_pct": 25,
     }

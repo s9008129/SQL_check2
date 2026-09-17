@@ -210,8 +210,11 @@ _DECLINE_REASON_TEXT: dict[str, str] = {
     "multi_statement": "本次送出包含多段 SQL，系統設定為不自動改寫多段查詢，本次先提供改善方向，不自動產生建議寫法。",
     "not_select": "此語句不是 SELECT 查詢，系統設定僅對 SELECT 查詢提供建議寫法，本次先提供改善方向，不自動產生建議寫法。",
     "parse_failed": "此 SQL 結構較複雜，系統無法完整解析，本次先提供改善方向，不自動產生建議寫法。",
-    "too_long_for_rewrite": "此 SQL 內容較長，超過 AI 單次可完整改寫的範圍，本次先提供改善方向與片段建議，不自動產生完整改寫。",
-    "rewrite_truncated": "AI 嘗試完整改寫時超出回覆長度上限，本次改為只提供改善方向與片段建議。",
+    # 2026-09-17 wording: say what the reviewer WILL get (per-segment
+    # suggestions right below), not only what they will not — the old
+    # "不自動產生建議寫法" read as if nothing followed.
+    "too_long_for_rewrite": "這份 SQL 較長，AI 不整段重寫，改為針對可改善的地方逐段提供建議寫法。",
+    "rewrite_truncated": "AI 嘗試整段重寫時超出回覆長度上限，改為針對可改善的地方逐段提供建議寫法。",
 }
 
 

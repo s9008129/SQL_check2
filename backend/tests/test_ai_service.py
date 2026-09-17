@@ -1004,6 +1004,7 @@ async def test_output_truncation_retries_once_in_advice_only_mode(settings, chat
     assert result.suggested_sql.available is False
     assert result.suggested_sql.outcome == "gated"
     assert "超出回覆長度上限" in result.suggested_sql.reason
+    assert "逐段提供建議寫法" in result.suggested_sql.reason
     assert len(result.advice) >= 1  # the advice from the second attempt survives
 
 
@@ -1052,7 +1053,7 @@ async def test_long_sql_is_gated_too_long_for_rewrite(settings, chat_url):
     # Model claimed available=true; server-side gate wins and explains why.
     assert result.suggested_sql.available is False
     assert result.suggested_sql.outcome == "gated"
-    assert "超過 AI 單次可完整改寫" in result.suggested_sql.reason
+    assert "AI 不整段重寫" in result.suggested_sql.reason
 
 
 @respx.mock
@@ -1066,7 +1067,7 @@ async def test_length_gate_reason_overrides_model_generic_reason(settings, chat_
     long_sql = "SELECT " + ", ".join(f"A.C{i} AS 稅種{i}稅額_減因C" for i in range(400)) + " FROM T A WHERE A.Y = 1"
     result = await _call(settings, parse_sql_text(long_sql).statements, sql_text=long_sql)
     assert result.suggested_sql.outcome == "gated"
-    assert "超過 AI 單次可完整改寫" in result.suggested_sql.reason
+    assert "AI 不整段重寫" in result.suggested_sql.reason
 
 
 def test_rewrite_would_not_fit_uses_config_knobs():

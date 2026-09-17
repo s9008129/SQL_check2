@@ -163,23 +163,26 @@ describe("SqlCompare", () => {
     expect(screen.getByText("需確認切分方式。")).toBeTruthy();
   });
 
-  it("shows the fixed not-available-by-design message when suggested_sql.available is false", () => {
+  it("shows only the backend's specific reason when it declined (gated) with one", () => {
     render(
       <SqlCompare
         originalSql="UPDATE T SET X = 1;"
-       
         ai={makeAi({
           suggested_sql: {
             available: false,
-            reason: "MVP 只允許 SELECT 建議寫法。",
+            reason: "這份 SQL 較長，AI 不整段重寫，改為針對可改善的地方逐段提供建議寫法。",
             sql: null,
+            outcome: "gated",
           },
         })}
       />,
     );
-    expect(
-      screen.getByText("為避免改變原本查詢內容，本次先提供改善方向，不自動產生建議寫法。"),
-    ).toBeTruthy();
+    const verdict = screen.getByTestId("compare-verdict");
+    expect(verdict.textContent).toContain("AI 不整段重寫");
+    // The generic PRD sentence must not be stacked above it (it contradicted
+    // the 建議寫法 list that follows).
+    expect(verdict.textContent).not.toContain("不自動產生建議寫法");
+    expect(verdict.querySelectorAll("p")).toHaveLength(1);
     expect(screen.queryByTestId("sql-editor-建議寫法")).toBeNull();
   });
 

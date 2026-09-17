@@ -98,10 +98,18 @@ export default function SqlCompare({ originalSql, ai }: SqlCompareProps) {
       ai.suggested_sql?.reason && ai.suggested_sql.reason !== SUGGESTED_SQL_NOT_AVAILABLE_MESSAGE
         ? ai.suggested_sql.reason
         : null;
+    // 2026-09-17: when the backend declined (gated/rejected) with a specific
+    // reason, that reason IS the message — showing the generic PRD sentence
+    // above it read as two contradicting statements ("不自動產生建議寫法" right
+    // before a list of 建議寫法). advice_only / not_needed keep their own
+    // headline because their reason is the model's supporting detail.
+    const serverDeclined = outcome !== "not_needed" && outcome !== "advice_only";
+    const headlineText = serverDeclined && reason ? reason : headline;
+    const detailText = serverDeclined ? null : reason;
     verdict = (
       <div className={`ai-note${outcome === "not_needed" ? " ai-note-good" : ""}`} data-testid="compare-verdict">
-        <p className="verdict-headline">{headline}</p>
-        {reason && <p className="verdict-reason">{reason}</p>}
+        <p className="verdict-headline">{headlineText}</p>
+        {detailText && <p className="verdict-reason">{detailText}</p>}
       </div>
     );
   }

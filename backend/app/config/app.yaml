@@ -30,7 +30,11 @@ ollama:
   # （中文 summary + 3 條建議 + SQL 改寫）實測需要更多時間，120 秒偏緊。
   timeout_seconds_default: 180
   num_ctx_env: OLLAMA_NUM_CTX
-  num_ctx_default: 8192
+  # 2026-09-17 由 8192 改 16384：實測 system prompt 約 5,700 token，加上完整
+  # num_predict 3072 已超過 8192；正式主機 gemma4:31b 以 16384 可正常執行。
+  # ai_service 只會在 num_ctx_default 的 2 倍、4 倍…（≤ num_ctx_max）之間切換，
+  # 因為每個不同的 num_ctx 值都會讓 Ollama 重新載入模型。
+  num_ctx_default: 16384
   # 2026-09-17 新增：一份三層巢狀、含大量中文別名的正式 SQL（約 6,000 字）加上約
   # 4,000 token 的 system prompt 超過 8192，Ollama 會「靜默截斷 prompt」
   # （log 可見 prompt_eval_count 恰等於 num_ctx），模型失去系統指令後改用英文回答、
@@ -62,6 +66,14 @@ ollama:
 ai_gate:
   # candidate_allowed：單一段、SELECT、parser 成功解析、且不含下列任何複雜度旗標時
   # 才允許 AI 給建議寫法。
+  #
+  # 2026-09-17 新增「長度」守門：完整改寫要把整段 SQL 再輸出一次，估算
+  # sql_tokens × rewrite_token_ratio + rewrite_reply_overhead_tokens（summary 與最多
+  # 3 條建議的固定開銷）若超過 ollama.num_predict，就不允許改寫（decline_code
+  # too_long_for_rewrite），只提供方向與片段。正式主機實測：約 6,000 字的三層巢狀
+  # SQL 讓模型嘗試改寫時撞到 3072 token 上限，JSON 被截斷、整份回覆作廢。
+  rewrite_token_ratio: 1.2
+  rewrite_reply_overhead_tokens: 900
   #
   # 2026-09-16 業務決定移除 outer_join / group_by_aggregate / distinct：
   # 開發機重現使用者昨天用 6 份真實稅務 SQL 測試的結果，發現這 3 個旗標涵蓋了

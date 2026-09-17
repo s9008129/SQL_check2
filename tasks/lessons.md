@@ -290,3 +290,11 @@
   **預防規則**：切段與 `_trim_trailing_prose` 皆改為括號深度感知（`_paren_depth`，忽略註解與字串常數）：括號未閉合前不切段、不視為尾隨散文。回歸測試 `test_nested_subquery_with_blank_lines_is_one_statement`。
 - **附帶盲點（已修）**：COST 剛好等於門檻時說明寫「超過」（改「達到或超過」）；模型自創的 `:STR_001` 綁定變數會原樣顯示給同仁（`scrub_invented_placeholders` 改為 `:VALUE`，但使用者 SQL 本來就有的同名綁定不動）；模型把中文散文放進 `example` 時前端會拿去逐字 diff（`looksLikeSqlFragment` 過濾）。
 - **未修的模型品質限制**：`SUBSTR(MANAGE_CD,6,3)='551'` 被建議成 `LIKE '__%551%'`（應為 `'_____551%'`）；引號不一致（`COLL_YR = 107`）仍偶爾漏提。
+
+## 2026-09-17 深夜：輸出截斷 ≠ 輸入截斷 — 長 SQL 讓 AI 三區全部「暫時無法使用」
+
+- **失敗模式**：正式主機用三層巢狀 docx SQL 實測，AI 三區全降級。log 為 `num_ctx raised to 16384` 後 107 秒 `model output truncated (done_reason=length, eval_count=3072)`。
+- **判讀**：`eval_count == num_predict` 是**輸出**撞上限；`prompt_eval_count == num_ctx` 才是**輸入**被截斷。兩者的修法完全不同，先看哪個數字等於哪個上限。
+- **根因**：守門只看「單段／SELECT／可解析／無禁止旗標」，沒看長度；6,000 字的 SQL 完整改寫需 6–8k token，物理上放不進 3,072 的輸出上限。模型嘗試改寫 → JSON 半途被切 → 無法解析 → 連 summary 與 advice 一起丟掉。開發機那次成功只是模型剛好選了 advice_only（機率）。
+- **預防規則**：(1) 長度是確定性事實，由程式守門（`too_long_for_rewrite`：`sql_tokens × 1.2 + 900 > num_predict`），不交給模型判斷；(2) 輸出截斷且原本允許改寫時，在剩餘時間 ≥ 60 秒的前提下用 advice-only payload 重試一次（換參數的重試）；(3) 所有降級都要有類別（`degrade_code`）與專屬訊息，不可全壓成同一句；(4) 整次分析用單一總期限（180 秒），任何重試都在其內，前端看門狗（200 秒）恆大於它；(5) num_ctx 只用倍數分級，避免每個不同值都讓 Ollama 重載模型。
+- **不要做**：把 num_predict 調到能容納整段改寫——正式主機輸出約 29 token/s，8k token 要 280 秒。

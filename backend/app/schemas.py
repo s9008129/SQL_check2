@@ -168,6 +168,10 @@ class AiResult(BaseModel):
     suggested_sql: SuggestedSql | None = None
     estimated_improvement_pct: int | None = None
     message: str | None = None
+    # 2026-09-17: why status is "unavailable" (output_truncated /
+    # prompt_truncated / timeout / connection / http / invalid_response).
+    # Diagnostic only; `message` already carries the reviewer-facing text.
+    degrade_code: str | None = None
 
 
 class AnalyzeResponse(BaseModel):

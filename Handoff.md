@@ -122,20 +122,29 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 - 其他盲點：R001 等於門檻時說明改「達到或超過規範門檻」；模型自創的 `:STR_NNN` 綁定改顯示 `:VALUE`（`masking.scrub_invented_placeholders`，只動原始 SQL 沒有的名稱）；前端 `looksLikeSqlFragment` 讓中文散文型 example 不進逐段對照。
 - 已確認為設計而非 bug：R008 在 `forbidden_operations` 空清單時對 UPDATE 重要資料表只給 R007 提醒；改善指數可在「符合中心規範」下仍達 80+（優先改善），因 NOTICE 權重加總所致。
 
+### 2026-09-17 深夜（二）：長 SQL 輸出截斷 → 三區全降級的根因修復
+- 正式主機 log：`model output truncated (done_reason=length, eval_count=3072)`。**輸出**撞上 num_predict（不是輸入被截斷）：守門沒看長度，模型嘗試把 6,000 字 SQL 完整改寫進 JSON，半途被切、整份作廢。
+- 守門新增長度維度：`_compute_gates(..., sql_tokens, num_predict)`，`sql_tokens × ai_gate.rewrite_token_ratio(1.2) + ai_gate.rewrite_reply_overhead_tokens(900) > num_predict` → `decline_code=too_long_for_rewrite`，只給方向與片段。gate log 多了 `sql_tokens=`。
+- 輸出截斷的有界補救：原本允許改寫且剩餘時間 ≥ 60 秒時，用 `candidate_allowed=false` 的 payload 重試一次（`decline_code=rewrite_truncated`）；`get_ai_result` 以單一 `deadline`（timeout_seconds=180）涵蓋所有嘗試。
+- 降級分類：`AiResult.degrade_code` ∈ output_truncated／prompt_truncated／timeout／connection／http／invalid_response，`message` 對應專屬中文句（`DEGRADE_MESSAGES`）；前端三張卡直接顯示 `ai.message`，不需改版面。
+- 長度守門或 rewrite_truncated 時，伺服器的原因一律覆蓋模型自己的 reason（模型常照抄通用句）。
+- `num_ctx_default` 8192→16384；`_num_ctx_for` 只在倍數分級間切換（避免 Ollama 反覆重載模型）。
+- 驗證：docx 直連正式主機三次 19–25 秒穩定 gated＋三條含 before/example 的建議；小查詢仍 provided；fake_ollama truncated 模式前端顯示專屬訊息。
+
 ## 4. 「AI 沒給建議寫法」的判讀順序（接手後最常被問）
 
 1. 看 API 回應或畫面的 outcome：
    - `not_needed`：模型判定寫法已好，reason 應列出檢查項目。若 SQL 明顯有缺陷卻 not_needed → prompt 檢查清單問題。
    - `advice_only`：有方向但需業務假設 → 看「逐段對照」是否有 before/example。這是設計行為，不是 bug。
-   - `gated`：守門擋（多段、非 SELECT、解析失敗、禁止旗標）→ reason 會寫具體原因。
+   - `gated`：守門擋（多段、非 SELECT、解析失敗、禁止旗標、**SQL 過長 too_long_for_rewrite**、**改寫時輸出截斷 rewrite_truncated**）→ reason 會寫具體原因。
    - `rejected`：模型給了改寫但結構複核擋下 → reason 有具體項目（例如「GROUP BY 與原始不同」）。若複核過嚴可討論放寬，但要先確認語意真的等價。
-   - AI 狀態 `unavailable`：正式主機 `docker compose logs sqlcheck | Select-String ai_service` 看 `done_reason`、`thinking_chars`、`eval_count`；若 thinking_chars>0 表示思考模式又被打開。若看到 `prompt truncated by ollama`，代表 SQL 長到連 `num_ctx_max` 都不夠，調高 `OLLAMA_NUM_CTX_MAX` 或請同仁拆分 SQL；若看到 `response not in Chinese`，先查同一請求的 `num_ctx raised to` 與 `prompt_eval_count` 是否貼近上限。
+   - AI 狀態 `unavailable`：先看 API 的 `ai.degrade_code`（output_truncated／prompt_truncated／timeout／connection／http／invalid_response），畫面訊息也已對應。再看正式主機 `docker compose logs sqlcheck | Select-String ai_service` 的 `done_reason`、`thinking_chars`、`eval_count`（`eval_count == num_predict` 是輸出截斷；`prompt_eval_count == num_ctx` 是輸入截斷，兩者修法不同）；若 thinking_chars>0 表示思考模式又被打開。若看到 `prompt truncated by ollama`，代表 SQL 長到連 `num_ctx_max` 都不夠，調高 `OLLAMA_NUM_CTX_MAX` 或請同仁拆分 SQL；若看到 `response not in Chinese`，先查同一請求的 `num_ctx raised to` 與 `prompt_eval_count` 是否貼近上限。
 2. 重現方式：用第 6 節的直連腳本，不需要重新部署。
 3. 已知模型品質限制（不是程式 bug）：偶爾漏提引號一致性（`coll_yr = 107`）；TO_CHAR 範例可能假設 'YYYYMMDD' 而非民國日期；before 偶爾跳行複製導致與原文不完全逐字相同（前端仍能 diff）。
 
 ## 5. 目前狀態與驗證數據
 
-- 最新狀態：後端 300 項測試、前端 74 項測試、ruff、build 全過（2026-09-17 深夜，盲點修復與改名 commit）。docx 三層巢狀真實案例已用本機程式碼直連正式主機 Gemma4 驗證（num_ctx 16384、43 秒、中文 advice_only）。
+- 最新狀態：後端 309 項測試、前端 74 項測試、ruff、build 全過（2026-09-17 深夜，長 SQL 輸出截斷根因修復 commit）。docx 三層巢狀真實案例已用本機程式碼直連正式主機 Gemma4 驗證（num_ctx 16384、43 秒、中文 advice_only）。
 - 正式主機最後一次由使用者部署的版本在 `6a7294c` 之前；**`80f78e8`（放大字級）、`815c056`（全頁視覺）與本次畫面調整尚未部署**，需 `git pull` + `deploy\deploy.ps1`。
 - 使用者人工驗證（test_01～03.pdf）：多重缺陷 SQL、笛卡兒積 SQL、乾淨 SQL 三案皆符合預期。
 - 報告：`E2E_TEST_report_20260917.md`、`E2E_TEST_report_20260917_round2.md`、`SQLCheck2_E2E_test_report_20260916.md`。

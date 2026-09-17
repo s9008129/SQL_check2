@@ -166,7 +166,7 @@ async def test_timeout_exception_returns_unavailable_with_single_call(settings, 
 
     assert route.call_count == 1  # never retried on timeout
     assert result.status == "unavailable"
-    assert result.message == ai_service.DEGRADE_MESSAGE
+    assert result.message == ai_service.DEGRADE_MESSAGES["timeout"]
 
 
 @respx.mock
@@ -176,7 +176,7 @@ async def test_connect_error_returns_unavailable(settings, chat_url):
 
     assert route.call_count == 1
     assert result.status == "unavailable"
-    assert result.message == ai_service.DEGRADE_MESSAGE
+    assert result.message == ai_service.DEGRADE_MESSAGES["connection"]
 
 
 # ---------------------------------------------------------------------------
@@ -982,13 +982,130 @@ async def test_non_chinese_summary_is_retried_once_then_degraded(settings, chat_
 
 
 @respx.mock
-async def test_truncated_response_degrades_without_retry(settings, chat_url):
+async def test_output_truncation_retries_once_in_advice_only_mode(settings, chat_url):
+    # 2026-09-17 production DOCX: the model overran num_predict while writing
+    # a full rewrite. Second attempt = same request with candidate_allowed
+    # forced false (short, advice-only reply) — different parameters, so the
+    # old "never retry a truncation" rule does not apply.
+    advice_only = _good_inner(suggested_sql={"available": False, "reason": "僅提供方向。", "sql": None})
+    advice_only["rewrite_outcome"] = "advice_only"
+    responses = [
+        httpx.Response(200, json=_truncated_envelope()),
+        httpx.Response(200, json=_ollama_envelope(json.dumps(advice_only, ensure_ascii=False))),
+    ]
+    route = respx.post(chat_url).mock(side_effect=responses)
+    result = await _call(settings, _clean_select_statement())
+    assert result.status == "ok"
+    assert route.call_count == 2
+    first = json.loads(route.calls[0].request.content)["messages"][1]["content"]
+    second = json.loads(route.calls[1].request.content)["messages"][1]["content"]
+    assert '"candidate_allowed": true' in first
+    assert '"candidate_allowed": false' in second
+    assert result.suggested_sql.available is False
+    assert result.suggested_sql.outcome == "gated"
+    assert "超出回覆長度上限" in result.suggested_sql.reason
+    assert len(result.advice) >= 1  # the advice from the second attempt survives
+
+
+@respx.mock
+async def test_output_truncation_twice_degrades_with_specific_message(settings, chat_url):
     route = respx.post(chat_url).mock(return_value=httpx.Response(200, json=_truncated_envelope()))
     result = await _call(settings, _clean_select_statement())
     assert result.status == "unavailable"
-    # Retrying with identical parameters would very likely truncate the
-    # same way again — a truncation must degrade immediately, not retry.
+    assert route.call_count == 2
+    assert result.degrade_code == "output_truncated"
+    assert "超出長度上限" in result.message
+
+
+@respx.mock
+async def test_output_truncation_without_time_budget_does_not_retry(settings, chat_url):
+    # Deadline is OLLAMA_TIMEOUT_SECONDS from the start; with only 30s in
+    # total there is no room for a second attempt (< 60s budget rule).
+    short = dataclasses.replace(settings, ollama=dataclasses.replace(settings.ollama, timeout_seconds=30))
+    route = respx.post(chat_url).mock(return_value=httpx.Response(200, json=_truncated_envelope()))
+    result = await _call(short, _clean_select_statement())
+    assert result.status == "unavailable"
     assert route.call_count == 1
+    assert result.degrade_code == "output_truncated"
+
+
+@respx.mock
+async def test_output_truncation_when_rewrite_was_not_allowed_does_not_retry(settings, chat_url):
+    # candidate_allowed already false (multi-statement): the fallback payload
+    # would be identical, so a truncation degrades immediately.
+    route = respx.post(chat_url).mock(return_value=httpx.Response(200, json=_truncated_envelope()))
+    result = await _call(settings, _multi_statement())
+    assert result.status == "unavailable"
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_long_sql_is_gated_too_long_for_rewrite(settings, chat_url):
+    route = respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
+    )
+    long_sql = "SELECT " + ", ".join(f"A.C{i} AS 稅種{i}稅額_減因C" for i in range(400)) + " FROM T A WHERE A.Y = 1"
+    statements = parse_sql_text(long_sql).statements
+    result = await _call(settings, statements, sql_text=long_sql)
+    sent = json.loads(route.calls[0].request.content)["messages"][1]["content"]
+    assert '"candidate_allowed": false' in sent
+    # Model claimed available=true; server-side gate wins and explains why.
+    assert result.suggested_sql.available is False
+    assert result.suggested_sql.outcome == "gated"
+    assert "超過 AI 單次可完整改寫" in result.suggested_sql.reason
+
+
+@respx.mock
+async def test_length_gate_reason_overrides_model_generic_reason(settings, chat_url):
+    # Production run: the model answered available=false with the generic PRD
+    # sentence; the reviewer must still see the real (length) reason.
+    inner = _good_inner(
+        suggested_sql={"available": False, "reason": ai_service._NO_REWRITE_REASON, "sql": None}
+    )
+    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
+    long_sql = "SELECT " + ", ".join(f"A.C{i} AS 稅種{i}稅額_減因C" for i in range(400)) + " FROM T A WHERE A.Y = 1"
+    result = await _call(settings, parse_sql_text(long_sql).statements, sql_text=long_sql)
+    assert result.suggested_sql.outcome == "gated"
+    assert "超過 AI 單次可完整改寫" in result.suggested_sql.reason
+
+
+def test_rewrite_would_not_fit_uses_config_knobs():
+    cfg = {"rewrite_token_ratio": 1.2, "rewrite_reply_overhead_tokens": 900}
+    assert ai_service._rewrite_would_not_fit(1000, 3072, cfg) is False  # 1200 + 900 = 2100
+    assert ai_service._rewrite_would_not_fit(2000, 3072, cfg) is True  # 2400 + 900 = 3300
+
+
+@respx.mock
+async def test_timeout_gives_timeout_message(settings, chat_url):
+    respx.post(chat_url).mock(side_effect=httpx.ReadTimeout("slow"))
+    result = await _call(settings, _clean_select_statement())
+    assert result.status == "unavailable"
+    assert result.degrade_code == "timeout"
+    assert "逾時" in result.message
+
+
+@respx.mock
+async def test_connection_error_gives_connection_message(settings, chat_url):
+    respx.post(chat_url).mock(side_effect=httpx.ConnectError("down"))
+    result = await _call(settings, _clean_select_statement())
+    assert result.status == "unavailable"
+    assert result.degrade_code == "connection"
+    assert "無法連線" in result.message
+
+
+@respx.mock
+async def test_num_ctx_uses_doubling_tiers(settings, chat_url):
+    route = respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
+    )
+    await _call(settings, _clean_select_statement())
+    short = json.loads(route.calls[-1].request.content)["options"]["num_ctx"]
+    assert short == settings.ollama.num_ctx
+    long_sql = "SELECT " + ", ".join(f"A.C{i} AS 稅種{i}稅額_減因C" for i in range(1200)) + " FROM T A WHERE A.Y = 1"
+    await _call(settings, parse_sql_text(long_sql).statements, sql_text=long_sql)
+    long = json.loads(route.calls[-1].request.content)["options"]["num_ctx"]
+    assert long == settings.ollama.num_ctx * 2
+    assert long <= settings.ollama.num_ctx_max
 
 
 @respx.mock

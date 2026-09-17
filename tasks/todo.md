@@ -149,3 +149,7 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
 - 完成：5 案（PARALLEL hint+UPDATE、COST=門檻+萬用字元、雙段缺 WHERE、WITH+UNION ALL、引號不一致+UPPER+OR）規則引擎與守門全部正確；修了 4 個盲點（門檻等值說明、`:STR_001` 殘留、散文 example 誤入 diff、巢狀 SQL 被切碎）與 1 個嚴重靜默失敗（Ollama 截斷 prompt → 動態 num_ctx + 截斷／非中文偵測）。系統標題改為「SQLCheck AI｜SQL 效能優化助手」。後端 300、前端 74 測試全過；docx 真實案例直連正式主機 Gemma4 驗證 OK（43 秒）。
 - 待辦：正式主機部署後觀察長 SQL 的回應時間（num_ctx 16384 時 prompt eval 約 40 秒）與 VRAM；若吃緊可用 OLLAMA_NUM_CTX_MAX 調低。
 - 待辦：R008 `forbidden_operations` 仍為空清單（UPDATE 重要資料表目前只會有 R007 提醒），待業務提供禁止操作矩陣。
+
+## 2026-09-17 深夜：長 SQL 輸出截斷根因修復
+- 完成：長度守門 `too_long_for_rewrite`、輸出截斷 advice-only 重試、降級訊息分類（degrade_code）、單一總期限、num_ctx 倍數分級（預設改 16384）。後端 309、前端 74 測試全過；docx 直連正式主機三次穩定 19–25 秒 gated＋三條片段建議；fake_ollama truncated 模式前端截圖顯示專屬訊息。
+- 待辦：正式主機 git pull + deploy.ps1 後重測同一份 docx，log 應為 `decline_code=too_long_for_rewrite` 且無 truncated。

@@ -23,6 +23,9 @@ type Phase = "idle" | "loading-initial" | "loading-ai" | "done" | "error";
 // must stay comfortably above the backend's own timeout, or the frontend
 // would give up and show "unavailable" before the backend's second retry
 // attempt even had a chance to finish.
+// 2026-09-17: the backend now enforces ONE overall deadline of
+// OLLAMA_TIMEOUT_SECONDS (180s) per analysis, retries included, so this
+// watchdog only needs to stay above that single number.
 const AI_TIMEOUT_MS = 200_000;
 
 function degradedAi(): AiResult {

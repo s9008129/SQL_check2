@@ -32,6 +32,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from collections import Counter
 from typing import Any
 
@@ -129,7 +130,12 @@ class _AiRawResponse(BaseModel):
 # Deterministic gating (PRD §17.4, §25) — never influenced by the model.
 # ---------------------------------------------------------------------------
 def _compute_gates(
-    statements: list[ParsedStatement], findings: list[Finding], ai_gate_cfg: dict[str, Any]
+    statements: list[ParsedStatement],
+    findings: list[Finding],
+    ai_gate_cfg: dict[str, Any],
+    *,
+    sql_tokens: int = 0,
+    num_predict: int = 0,
 ) -> tuple[bool, bool, str | None]:
     """candidate_allowed: exactly one statement, SELECT, parsed ok, and none
     of its complexity_flags intersect the configured forbidden set.
@@ -157,6 +163,13 @@ def _compute_gates(
         if hit_flags:
             # Deterministic pick when more than one forbidden flag is hit.
             decline_code = f"complexity:{sorted(hit_flags)[0]}"
+        elif num_predict > 0 and _rewrite_would_not_fit(sql_tokens, num_predict, ai_gate_cfg):
+            # 2026-09-17 production DOCX: a ~6,000-char SQL cannot be
+            # rewritten inside num_predict=3072 tokens. Asking the model to
+            # try anyway made it overrun the output limit, which cut the JSON
+            # mid-way and threw the summary/advice away with it. Length is a
+            # deterministic fact, so it is a gate, not a model decision.
+            decline_code = "too_long_for_rewrite"
 
     candidate_allowed = decline_code is None
 
@@ -166,6 +179,15 @@ def _compute_gates(
         estimate_allowed = candidate_allowed or bool(findings)
 
     return candidate_allowed, estimate_allowed, decline_code
+
+
+def _rewrite_would_not_fit(sql_tokens: int, num_predict: int, ai_gate_cfg: dict[str, Any]) -> bool:
+    """A full rewrite echoes roughly the whole SQL (× `rewrite_token_ratio`)
+    on top of the summary + advice the reply always carries
+    (`rewrite_reply_overhead_tokens`). Both knobs live in app.yaml `ai_gate`."""
+    ratio = float(ai_gate_cfg.get("rewrite_token_ratio", 1.2))
+    overhead = int(ai_gate_cfg.get("rewrite_reply_overhead_tokens", 900))
+    return sql_tokens * ratio + overhead > num_predict
 
 
 # Traditional-Chinese labels for complexity flags that can still appear in a
@@ -188,6 +210,8 @@ _DECLINE_REASON_TEXT: dict[str, str] = {
     "multi_statement": "本次送出包含多段 SQL，系統設定為不自動改寫多段查詢，本次先提供改善方向，不自動產生建議寫法。",
     "not_select": "此語句不是 SELECT 查詢，系統設定僅對 SELECT 查詢提供建議寫法，本次先提供改善方向，不自動產生建議寫法。",
     "parse_failed": "此 SQL 結構較複雜，系統無法完整解析，本次先提供改善方向，不自動產生建議寫法。",
+    "too_long_for_rewrite": "此 SQL 內容較長，超過 AI 單次可完整改寫的範圍，本次先提供改善方向與片段建議，不自動產生完整改寫。",
+    "rewrite_truncated": "AI 嘗試完整改寫時超出回覆長度上限，本次改為只提供改善方向與片段建議。",
 }
 
 
@@ -501,7 +525,11 @@ def _finalize_suggested_sql(
 
     if not candidate_allowed:
         outcome = "gated"
-        if raw.available:
+        # Length-based gates are facts the server knows and the model does
+        # not; the model's own reason (often the generic PRD sentence it
+        # copied from the prompt) must not hide them.
+        length_gate = decline_code in ("too_long_for_rewrite", "rewrite_truncated")
+        if raw.available or length_gate or reason.strip() == _NO_REWRITE_REASON:
             # The model's own `reason` was almost certainly written to
             # justify *providing* a rewrite (available=true), so surfacing it
             # verbatim once we flip available to false would read as
@@ -646,8 +674,24 @@ def _finalize(
     return AiResult(status="ok", summary=summary, advice=advice, suggested_sql=suggested_sql, estimated_improvement_pct=pct)
 
 
-def _unavailable() -> AiResult:
-    return AiResult(status="unavailable", message=DEGRADE_MESSAGE)
+# 2026-09-17: one fixed, SQL-free sentence per failure class so the reviewer
+# (and whoever reads the printout later) can tell a timeout from a cut-off
+# reply without opening the container log. Unknown kinds fall back to the
+# PRD §56 sentence.
+DEGRADE_MESSAGES: dict[str, str] = {
+    "output_truncated": "SQL 內容較長，AI 回覆超出長度上限，本次未能完成分析；可縮短或拆分 SQL 後再試。",
+    "prompt_truncated": "SQL 內容過長，超出 AI 可處理範圍，請拆分後再試。",
+    "timeout": "AI 分析逾時（SQL 較長時約需 2～3 分鐘），請稍後再試一次。",
+    "connection": "無法連線 AI 服務，仍可依上方規則檢核結果進行確認。",
+    "http": "AI 服務回應異常，仍可依上方規則檢核結果進行確認。",
+    "invalid_response": DEGRADE_MESSAGE,
+}
+
+
+def _unavailable(kind: str | None = None) -> AiResult:
+    if kind:
+        logger.info("ai_service: degraded kind=%s", kind)
+    return AiResult(status="unavailable", message=DEGRADE_MESSAGES.get(kind or "", DEGRADE_MESSAGE), degrade_code=kind)
 
 
 # ---------------------------------------------------------------------------
@@ -671,11 +715,15 @@ def _num_ctx_for(settings: Settings, system_prompt: str, user_content: str) -> i
     """2026-09-17: size the context window per request. Ollama does NOT
     fail when the prompt exceeds num_ctx — it drops tokens silently, and a
     model that lost its system prompt answers in English and invents table
-    names (seen on a production DOCX). Needed = prompt + reply + margin,
-    rounded up to 1024, clamped to [num_ctx, num_ctx_max]."""
+    names (seen on a production DOCX). Needed = prompt + reply + margin.
+    Only doubling tiers of `num_ctx` are used (num_ctx, ×2, ×4 … ≤
+    num_ctx_max): every distinct num_ctx value makes Ollama reload the
+    31B model, so 1024-granular values would thrash between requests."""
     needed = _estimate_tokens(system_prompt) + _estimate_tokens(user_content) + settings.ollama.num_predict + 512
-    rounded = ((needed + 1023) // 1024) * 1024
-    return max(settings.ollama.num_ctx, min(rounded, settings.ollama.num_ctx_max))
+    tier = settings.ollama.num_ctx
+    while tier < needed and tier * 2 <= settings.ollama.num_ctx_max:
+        tier *= 2
+    return tier
 
 
 def _chat_request_body(settings: Settings, payload: dict[str, Any]) -> dict[str, Any]:
@@ -784,24 +832,56 @@ async def _one_attempt(client: httpx.AsyncClient, settings: Settings, payload: d
     return parsed
 
 
-async def _request_ai(settings: Settings, payload: dict[str, Any]) -> _AiRawResponse | None:
-    """Returns a validated raw response, or None on any failure. Connection
-    and timeout errors fail immediately (never retried — retrying would just
-    double the wall-clock wait for no benefit). A truncated response
-    (`done_reason=length`) also fails immediately, for the same reason —
-    see `_TruncatedResponseError`. Invalid JSON / schema validation failures
-    are retried exactly once."""
-    try:
-        await asyncio.wait_for(_OLLAMA_SEMAPHORE.acquire(), timeout=settings.ollama.timeout_seconds)
-    except TimeoutError:
-        return None
+# A second attempt only makes sense if Ollama still has time to answer.
+_MIN_RETRY_BUDGET_SECONDS = 60.0
+
+
+def _transport_failure_kind(exc: Exception) -> str:
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+    if isinstance(exc, httpx.HTTPStatusError):
+        return "http"
+    return "connection"
+
+
+async def _request_ai(
+    settings: Settings,
+    payload: dict[str, Any],
+    *,
+    deadline: float,
+    retry_payload: dict[str, Any] | None = None,
+) -> tuple[_AiRawResponse | None, str | None, bool]:
+    """Returns (raw, failure_kind, used_retry_payload).
+
+    One overall `deadline` (monotonic seconds) bounds the whole call,
+    including any retry, so the frontend watchdog stays strictly above it.
+    - Transport errors (connection/timeout/HTTP status) fail immediately.
+    - Prompt truncated by Ollama fails immediately (same prompt → same cut).
+    - Output truncated (`done_reason=length`): 2026-09-17 — if the caller
+      supplied `retry_payload` (the same request with candidate_allowed
+      forced false, i.e. advice-only, a much shorter reply) and at least
+      `_MIN_RETRY_BUDGET_SECONDS` remain, retry once with it. This is a
+      retry with *different* parameters; same-parameter retries of a
+      truncation would cut the same way again.
+    - Invalid JSON / schema / non-Chinese: retried once with the same payload.
+    """
+
+    def remaining() -> float:
+        return deadline - time.monotonic()
 
     try:
-        async with httpx.AsyncClient(timeout=settings.ollama.timeout_seconds) as client:
+        await asyncio.wait_for(_OLLAMA_SEMAPHORE.acquire(), timeout=max(remaining(), 0.0))
+    except TimeoutError:
+        return None, "timeout", False
+
+    try:
+        async with httpx.AsyncClient(timeout=max(remaining(), 1.0)) as client:
+            second_payload = payload
+            used_retry = False
             try:
-                return await _one_attempt(client, settings, payload)
-            except (httpx.RequestError, httpx.HTTPStatusError):
-                return None
+                return await _one_attempt(client, settings, payload), None, False
+            except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+                return None, _transport_failure_kind(exc), False
             except _PromptTruncatedError as exc:
                 logger.info(
                     "ai_service: prompt truncated by ollama (prompt_eval_count=%d >= num_ctx=%d) — "
@@ -809,36 +889,50 @@ async def _request_ai(settings: Settings, payload: dict[str, Any]) -> _AiRawResp
                     exc.prompt_eval_count,
                     exc.num_ctx,
                 )
-                return None
+                return None, "prompt_truncated", False
             except _TruncatedResponseError as exc:
+                if retry_payload is None or remaining() < _MIN_RETRY_BUDGET_SECONDS:
+                    logger.info(
+                        "ai_service: model output truncated (done_reason=length, eval_count=%s) — "
+                        "degrading (retry_payload=%s, remaining=%.0fs)",
+                        exc.eval_count,
+                        retry_payload is not None,
+                        remaining(),
+                    )
+                    return None, "output_truncated", False
                 logger.info(
                     "ai_service: model output truncated (done_reason=length, eval_count=%s) — "
-                    "degrading without retry; consider raising ollama.num_predict",
+                    "retrying once in advice-only mode (remaining=%.0fs)",
                     exc.eval_count,
+                    remaining(),
                 )
-                return None
+                second_payload = retry_payload
+                used_retry = True
             except _NonChineseResponseError:
                 logger.info("ai_service: response not in Chinese — retrying once")
             except (json.JSONDecodeError, ValidationError, KeyError, TypeError):
                 pass  # retry exactly once below
 
+            if remaining() <= 0:
+                return None, "timeout", used_retry
+            client.timeout = httpx.Timeout(max(remaining(), 1.0))
             try:
-                return await _one_attempt(client, settings, payload)
-            except (httpx.RequestError, httpx.HTTPStatusError):
-                return None
+                return await _one_attempt(client, settings, second_payload), None, used_retry
+            except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+                return None, _transport_failure_kind(exc), used_retry
             except _PromptTruncatedError:
-                return None
+                return None, "prompt_truncated", used_retry
             except _TruncatedResponseError as exc:
                 logger.info(
                     "ai_service: model output truncated again on retry (done_reason=length, eval_count=%s) — degrading",
                     exc.eval_count,
                 )
-                return None
+                return None, "output_truncated", used_retry
             except _NonChineseResponseError:
                 logger.info("ai_service: response not in Chinese again on retry — degrading")
-                return None
+                return None, "invalid_response", used_retry
             except (json.JSONDecodeError, ValidationError, KeyError, TypeError):
-                return None
+                return None, "invalid_response", used_retry
     finally:
         _OLLAMA_SEMAPHORE.release()
 
@@ -858,9 +952,8 @@ async def get_ai_result(
     """Never raises — any failure anywhere in this path (Ollama down,
     invalid response, or an unexpected bug in this module itself) degrades
     to the PRD-mandated "unavailable" result rather than propagating."""
+    deadline = time.monotonic() + settings.ollama.timeout_seconds
     try:
-        candidate_allowed, estimate_allowed, decline_code = _compute_gates(statements, findings, settings.ai_gate)
-
         representative = _pick_representative(statements, findings)
         if representative is not None:
             statement_type = representative.statement_type
@@ -868,6 +961,11 @@ async def get_ai_result(
         else:
             statement_type = "UNKNOWN"
             mask_result = mask_sql(sql_text, settings.masking.keep_short_ascii_literal_max_len)
+
+        sql_tokens = _estimate_tokens(mask_result.masked_sql)
+        candidate_allowed, estimate_allowed, decline_code = _compute_gates(
+            statements, findings, settings.ai_gate, sql_tokens=sql_tokens, num_predict=settings.ollama.num_predict
+        )
 
         where_evidence = None
         if representative is not None and representative.restriction_kind is not None:
@@ -877,31 +975,42 @@ async def get_ai_result(
             }
 
         logger.info(
-            "ai_service: gate candidate=%s estimate=%s decline_code=%s stmt_type=%s flags=%s where_kind=%s",
+            "ai_service: gate candidate=%s estimate=%s decline_code=%s stmt_type=%s flags=%s where_kind=%s sql_tokens=%d",
             candidate_allowed,
             estimate_allowed,
             decline_code,
             statement_type,
             sorted(representative.complexity_flags) if representative else [],
             representative.restriction_kind if representative else None,
+            sql_tokens,
         )
 
-        payload = _build_payload(
-            statement_type=statement_type,
-            sanitized_sql=mask_result.masked_sql,
-            cost=cost,
-            compliance_status=compliance_status,
-            findings=findings,
-            candidate_allowed=candidate_allowed,
-            estimate_improvement_allowed=estimate_allowed,
-            literal_hints=mask_result.literal_hints,
-            where_evidence=where_evidence,
-            structure_flags=sorted(representative.complexity_flags) if representative else [],
-        )
+        def build(candidate: bool) -> dict[str, Any]:
+            return _build_payload(
+                statement_type=statement_type,
+                sanitized_sql=mask_result.masked_sql,
+                cost=cost,
+                compliance_status=compliance_status,
+                findings=findings,
+                candidate_allowed=candidate,
+                estimate_improvement_allowed=estimate_allowed,
+                literal_hints=mask_result.literal_hints,
+                where_evidence=where_evidence,
+                structure_flags=sorted(representative.complexity_flags) if representative else [],
+            )
 
-        raw = await _request_ai(settings, payload)
+        payload = build(candidate_allowed)
+        # Fallback for an output-truncated first attempt: same request, but
+        # advice-only (see `_request_ai`). Only meaningful when a rewrite was
+        # allowed in the first place.
+        retry_payload = build(False) if candidate_allowed else None
+
+        raw, failure_kind, used_retry = await _request_ai(settings, payload, deadline=deadline, retry_payload=retry_payload)
         if raw is None:
-            return _unavailable()
+            return _unavailable(failure_kind)
+        if used_retry:
+            candidate_allowed = False
+            decline_code = "rewrite_truncated"
 
         original_notice_count = 0
         if representative is not None:

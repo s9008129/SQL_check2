@@ -131,6 +131,8 @@ export interface AiResult {
   suggested_sql: SuggestedSql | null;
   estimated_improvement_pct: number | null;
   message: string | null;
+  /** Why status is "unavailable" (diagnostic; `message` is what to show). */
+  degrade_code?: string | null;
 }
 
 export interface AnalyzeResponse {

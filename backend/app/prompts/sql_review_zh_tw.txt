@@ -136,6 +136,9 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
      JOIN 後的資料是否已經唯一；若不是，拿掉 DISTINCT 會改變查詢結果。」不要先鋪陳
      已檢查過的項目（那是 not_needed 才需要的），也不要在句尾加「故不自動產生建議寫法」
      「本次不改寫」這類結語——畫面已經會說明這次只提供方向。
+   - 若 candidate_allowed 為 false 且原因是 SQL 內容過長（系統依長度判定無法在單次回覆
+     內完整改寫），請把改善重點放在 advice 的 before／example 片段，不要嘗試在任何欄位
+     輸出整段 SQL。
    - 若 candidate_allowed 為 false，available 必須是 false。reason 請具體說明「為什麼
      這次不提供改寫」（例如「此語句包含集合運算」「無法解析此 SQL 結構」），而不是每次
      都輸出同一句話；若找不到更具體的原因，才使用這句固定說法：「為避免改變原本查詢內

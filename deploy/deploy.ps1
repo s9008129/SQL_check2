@@ -864,11 +864,51 @@ function Set-FirewallRules {
 # ============================================================================
 # Step 4/6: .env
 # ============================================================================
+# ---------------------------------------------------------------------------
+# Step 4 helpers: legacy .env migration (2026-09-17)
+#
+# A `.env` written before 2026-09-17 may still carry the old
+# `OLLAMA_NUM_CTX=8192`, while app.yaml's num_ctx_default is 16384. 8192 is
+# below the real system prompt (~5,700 tokens) plus the 3072-token output
+# budget, so Ollama silently truncates the prompt (observed on the production
+# host: the model lost its instructions, answered in English and invented
+# table names). Detect it, state the consequence plainly, and rewrite that ONE
+# line only after the operator confirms; the rest of .env is never touched.
+# ---------------------------------------------------------------------------
+function Test-LegacyNumCtx {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return $false }
+    $content = Get-Content -Path $Path -Raw
+    return [bool]($content -match '(?m)^\s*OLLAMA_NUM_CTX\s*=\s*8192\s*$')
+}
+
+function Repair-LegacyNumCtx {
+    param([string]$Path)
+    if (-not (Test-LegacyNumCtx -Path $Path)) { return }
+
+    Write-Warn "偵測到既有 .env 仍使用舊值 OLLAMA_NUM_CTX=8192，與 app.yaml 的 num_ctx_default=16384 不一致。"
+    Write-Info '8192 低於實際 system prompt（約 5,700 token）加 num_predict=3072 的需求；Ollama 會靜默截斷 prompt，模型將失去系統指令（實測會改用英文回答並捏造資料表名稱）。'
+    $answer = ''
+    try { $answer = Read-Host '  是否只把 .env 的這一行改成 OLLAMA_NUM_CTX=16384？(y/N)' } catch { $answer = '' }
+    if ($answer -notmatch '^(?i)y(es)?$') {
+        Write-Warn '未更新 .env（其餘設定一律未變更）。請自行將 .env 的 OLLAMA_NUM_CTX 確認為 16384。'
+        return
+    }
+
+    $backup = "$Path.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+    Copy-Item -Path $Path -Destination $backup -Force
+    $content = Get-Content -Path $Path -Raw
+    $updated = $content -replace '(?m)^\s*OLLAMA_NUM_CTX\s*=\s*8192\s*$', 'OLLAMA_NUM_CTX=16384'
+    Set-Content -Path $Path -Value $updated
+    Write-Ok "已將 .env 的 OLLAMA_NUM_CTX 更新為 16384（原檔備份：$backup）。容器會在 Step 6 啟動時套用。"
+}
+
 function Initialize-EnvFile {
     Write-Step 'Step 4/6: 設定 .env'
 
     if (Test-Path $script:EnvFile) {
         Write-Ok ".env 已存在 ($script:EnvFile)，不覆寫既有設定。"
+        Repair-LegacyNumCtx -Path $script:EnvFile
         return
     }
 

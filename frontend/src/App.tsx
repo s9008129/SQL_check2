@@ -81,8 +81,10 @@ export default function App() {
     resultSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
 
     // Step 2: fires automatically, no user action. On success the whole
-    // result is replaced (improvement.score/breakdown legitimately shift
-    // once the ai_adjustment component exists) — never a partial merge.
+    // result is replaced — never a partial merge. 2026-09-17: the AI pass no
+    // longer changes improvement.score/breakdown at all (the index is fully
+    // deterministic); only the AI-dependent sections (advice, suggested SQL,
+    // improvement potential) differ from the first response.
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
     try {

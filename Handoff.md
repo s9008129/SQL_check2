@@ -140,7 +140,8 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 - 加新規則的方法：在 `rewrite_rules._RULES` 加一個函式，回傳 `Rewrite(rule, canonical, accepted, assumption)`，並在 `tests/test_rewrite_rules.py` 寫正反例。
 
 ### 2026-09-17 深夜（四）：預估改善效果改為「改善潛力」等級
-- 使用者決定：百分比從未經量測（AI 不看執行計畫／統計／改後 COST），改為伺服器依事實推算的高／中／低（`ai_service.improvement_potential`），附推算依據句與警語「未經任何實際量測；系統人員採用前請於測試機覆核與測試」。推算表：BLOCK 或已確認的高影響片段或（整段改寫通過＋高影響）→高；NOTICE 或整段改寫通過或已確認的中影響片段→中；其餘任何建議→低；無→None（畫面「目前寫法良好」）。
+- 使用者決定：百分比從未經量測（AI 不看執行計畫／統計／改後 COST），改為伺服器依事實推算的高／中／低（`ai_service.improvement_potential`）。
+  **2026-09-17 PR #1 更新後的推算表（AI impact 不再參與）**：BLOCK，或 ≥2 項 server 已驗證改善證據 → 高；恰 1 項已驗證證據 → 中；只有 R004／R005／R006 寫法類提醒或未通過驗證的建議 → 低；只有治理型提醒（R007 重要資料表等）→ `notice_only`（畫面「有提醒，但未確認具體改善點」，**不得**顯示「目前寫法良好」）；完全無發現 → None（畫面「目前寫法良好」）。「已驗證證據」= `verification` 為 verified／corrected 的片段，或通過 `_revalidate_suggested_sql` 的整段改寫。
 - `estimated_improvement_pct` 仍在 API 與蒐集檔（分析用），畫面不顯示；`estimate_reason` 已移除。
 
 ### 2026-09-17（PR #1 Batch 1）：Ollama 11434 防火牆 fail-closed 與部署硬化
@@ -174,7 +175,7 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 
 ## 5. 目前狀態與驗證數據
 
-- 最新狀態：後端 342 項測試、前端 73 項測試、ruff、build 全過（2026-09-17 深夜，改善潛力等級 commit）。docx 三層巢狀真實案例已用本機程式碼直連正式主機 Gemma4 驗證（num_ctx 16384、43 秒、中文 advice_only）。
+- 最新狀態：後端 349 項中 347 通過（2 項 `tests/test_main.py` 為 macOS `/private/var` 路徑語意的既有失敗，與本 PR 無關）、前端 74 項測試、ruff、build 全過（2026-09-17 PR #1）。docx 三層巢狀真實案例已用本機程式碼直連正式主機 Gemma4 驗證（num_ctx 16384、43 秒、中文 advice_only）。
 - 正式主機最後一次由使用者部署的版本在 `6a7294c` 之前；**`80f78e8`（放大字級）、`815c056`（全頁視覺）與本次畫面調整尚未部署**，需 `git pull` + `deploy\deploy.ps1`。
 - 使用者人工驗證（test_01～03.pdf）：多重缺陷 SQL、笛卡兒積 SQL、乾淨 SQL 三案皆符合預期。
 - 報告：`E2E_TEST_report_20260917.md`、`E2E_TEST_report_20260917_round2.md`、`SQLCheck2_E2E_test_report_20260916.md`。

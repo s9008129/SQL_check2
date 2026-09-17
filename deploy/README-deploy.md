@@ -159,6 +159,18 @@ Remove-NetFirewallRule -DisplayName 'SQLCheck - Ollama API (container only)'
 `-OllamaModel` 參數的值（其餘內容原封不動）。**若 `.env` 已存在則完全不覆寫**——後續重新
 部署不會動到您手動調整過的設定（例如 `OLLAMA_TIMEOUT_SECONDS`、`OLLAMA_NUM_CTX`）。
 
+2026-09-17 起多一項**遷移提示**：`.env.example` 舊版寫的是 `OLLAMA_NUM_CTX=8192`，而
+`app.yaml` 的 `num_ctx_default` 是 **16384**。8192 低於實際 system prompt（約 5,700 token）
+加 `num_predict=3072` 的需求，Ollama 會**靜默截斷 prompt**（模型會失去系統指令、改用英文
+回答並捏造資料表名稱）。因此腳本偵測到既有 `.env` 仍是 8192 時會：
+
+1. 說明上述後果；
+2. 詢問「是否只把這一行改成 16384？」——**回答 `y` 才會改**，並先把原檔備份為
+   `.env.bak-<時間戳>`，其餘設定一字不動；
+3. 回答 `N`（或非互動執行時無法詢問）只印警告，**不會**修改 `.env`，也不影響部署流程。
+
+新產生的 `.env` 直接就是 16384，不需要這一步。
+
 ### Step 5/6：TLS 憑證
 若 `.\certs\sqlcheck.crt` 已存在則略過（憑證有效期約 825 天，不需要每次部署都重簽）。
 不存在時：

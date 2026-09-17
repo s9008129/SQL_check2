@@ -62,6 +62,15 @@ _VERIFIED = {"verified", "corrected"}
 # being touched, not evidence about how the SQL is written.
 _WRITE_STYLE_RULE_IDS = frozenset({"R004", "R005", "R006"})
 
+# 2026-09-17: last Ollama call's *diagnostics* only (latency + token counts),
+# for the production-host golden runner (backend/tests/golden/run_golden.py)
+# to record as evidence. Deliberately holds no prompt, SQL or response text.
+# `get_ai_result` resets it at the start of every call, and calls are
+# serialized by `_OLLAMA_SEMAPHORE`, so a sequential reader (the golden
+# runner) always sees the stats of the call it just made.
+LAST_CALL_STATS: dict[str, Any] = {}
+_STATS_NUMERIC_KEYS = ("eval_count", "prompt_eval_count", "total_duration_ms")
+
 
 def improvement_potential(result: AiResult, findings: list[Finding]) -> tuple[str | None, list[str]]:
     """2026-09-17 user decision: the level is derived ONLY from facts the
@@ -874,6 +883,35 @@ def _chat_request_body(settings: Settings, payload: dict[str, Any]) -> dict[str,
     }
 
 
+def _record_call_stats(body: dict[str, Any], data: dict[str, Any]) -> None:
+    """Publish this call's observable diagnostics for the golden runner.
+
+    Whitelisted scalars only — never the prompt, the SQL or the model's text,
+    so this can never become a second copy of the request/response payload.
+    Best-effort by construction: any unexpected shape leaves the previous
+    stats in place rather than raising into the analysis path.
+    """
+    try:
+        options = body.get("options") or {}
+        stats: dict[str, Any] = {
+            "model": body.get("model"),
+            "num_ctx": options.get("num_ctx"),
+            "num_predict": options.get("num_predict"),
+            "think": body.get("think"),
+            "done_reason": data.get("done_reason"),
+            "total_duration_ms": (data.get("total_duration") or 0) // 1_000_000,
+        }
+        for key in _STATS_NUMERIC_KEYS:
+            if key == "total_duration_ms":
+                continue
+            value = data.get(key)
+            stats[key] = value if isinstance(value, int) else None
+        LAST_CALL_STATS.clear()
+        LAST_CALL_STATS.update(stats)
+    except Exception as exc:  # noqa: BLE001 - diagnostics must never break analysis
+        logger.debug("ai_service: could not record call stats: %s", type(exc).__name__)
+
+
 class _TruncatedResponseError(Exception):
     """Raised when Ollama reports `done_reason == "length"` — the model hit
     `num_predict` before finishing its JSON output. Distinguished from a
@@ -948,6 +986,7 @@ async def _one_attempt(client: httpx.AsyncClient, settings: Settings, payload: d
         (data.get("total_duration") or 0) // 1_000_000,
         len(data["message"].get("thinking") or ""),
     )
+    _record_call_stats(body, data)
     return parsed
 
 
@@ -1071,6 +1110,8 @@ async def get_ai_result(
     """Never raises — any failure anywhere in this path (Ollama down,
     invalid response, or an unexpected bug in this module itself) degrades
     to the PRD-mandated "unavailable" result rather than propagating."""
+    LAST_CALL_STATS.clear()
+
     deadline = time.monotonic() + settings.ollama.timeout_seconds
     try:
         representative = _pick_representative(statements, findings)

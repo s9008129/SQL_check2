@@ -45,55 +45,44 @@ describe("SummaryCards — compliance colour states", () => {
     render(<SummaryCards result={result} />);
     expect(screen.getByText("不符合中心規範")).toBeTruthy();
     expect(screen.getByText("1 項不符合")).toBeTruthy();
+    expect(screen.getByText("不符合中心規範").className).toContain("m-value-bad");
+  });
+
+  it("renders COST in red with ✕ when the COST rule is BLOCK, green ✓ otherwise", () => {
+    const blocked = makeResult({
+      cost: 350000,
+      rules: [{ rule_id: "R001", name: "COST", status: "BLOCK", evidence: "350,000", note: "超過規範門檻 100,000" }],
+    });
+    const { unmount } = render(<SummaryCards result={blocked} />);
+    expect(screen.getByText("350,000").className).toContain("m-value-bad");
+    expect(screen.getByText("✕", { selector: ".tone-red .m-icon" })).toBeTruthy();
+    unmount();
+
+    render(<SummaryCards result={makeResult()} />);
+    expect(screen.queryByText("C")).toBeNull();
+  });
+
+  it("no longer renders a 建議寫法 card (the compare card shows the diff)", () => {
+    render(<SummaryCards result={makeResult()} />);
+    expect(screen.queryByText("建議寫法")).toBeNull();
+    expect(screen.queryByText("可供參考")).toBeNull();
   });
 });
 
-describe("SummaryCards — AI-dependent cards", () => {
-  it("shows an AI-pending state on 改善建議 and 建議寫法 while ai.status is pending", () => {
+describe("SummaryCards — AI-dependent card", () => {
+  it("shows an AI-pending state on 改善建議 while ai.status is pending", () => {
     const result = makeResult({
       ai: makeAi({ status: "pending", advice: [], suggested_sql: null, estimated_improvement_pct: null }),
     });
     render(<SummaryCards result={result} />);
-    expect(screen.getAllByText("AI 分析中").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("AI 分析中")).toBeTruthy();
   });
 
-  it("shows 本次不提供 on 建議寫法 when suggested_sql.available is false", () => {
+  it("shows 暫不提供 on 改善建議 when the AI is unavailable", () => {
     const result = makeResult({
-      ai: makeAi({
-        suggested_sql: {
-          available: false,
-          reason: "為避免改變原本查詢內容，本次先提供改善方向，不自動產生建議寫法。",
-          sql: null,
-        },
-      }),
+      ai: makeAi({ status: "unavailable", advice: [], suggested_sql: null, estimated_improvement_pct: null, message: "x" }),
     });
     render(<SummaryCards result={result} />);
-    expect(screen.getByText("本次不提供")).toBeTruthy();
-  });
-
-  it("shows 無需改寫 on 建議寫法 when outcome is not_needed", () => {
-    const result = makeResult({
-      ai: makeAi({
-        suggested_sql: { available: false, reason: "目前寫法已良好。", sql: null, outcome: "not_needed" },
-      }),
-    });
-    render(<SummaryCards result={result} />);
-    expect(screen.getByText("無需改寫")).toBeTruthy();
-  });
-
-  it("shows 僅提供方向 on 建議寫法 when outcome is advice_only", () => {
-    const result = makeResult({
-      ai: makeAi({
-        suggested_sql: { available: false, reason: "需確認切分方式。", sql: null, outcome: "advice_only" },
-      }),
-    });
-    render(<SummaryCards result={result} />);
-    expect(screen.getByText("僅提供方向")).toBeTruthy();
-  });
-
-  it("shows 可供參考 on 建議寫法 when a suggestion is available", () => {
-    const result = makeResult();
-    render(<SummaryCards result={result} />);
-    expect(screen.getByText("可供參考")).toBeTruthy();
+    expect(screen.getByText("暫不提供")).toBeTruthy();
   });
 });

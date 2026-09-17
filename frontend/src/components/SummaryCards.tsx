@@ -14,16 +14,18 @@ interface MetricProps {
   value: string;
   valueStyle?: React.CSSProperties;
   sub: React.ReactNode;
+  /** 2026-09-17: every 「不符合」 reads red, including the big value text. */
+  bad?: boolean;
 }
 
-function Metric({ tone, icon, label, value, valueStyle, sub }: MetricProps) {
+function Metric({ tone, icon, label, value, valueStyle, sub, bad }: MetricProps) {
   return (
     <div className={`metric tone-${tone}`}>
       <div className="m-top">
         <div className="m-label">{label}</div>
         <div className="m-icon">{icon}</div>
       </div>
-      <div className="m-value" style={valueStyle}>
+      <div className={`m-value${bad ? " m-value-bad" : ""}`} style={valueStyle}>
         {value}
       </div>
       <div className="m-sub">{sub}</div>
@@ -35,17 +37,21 @@ function findCostRule(rules: RuleRow[]): RuleRow | undefined {
   return rules.find((r) => r.rule_id === "R001") ?? rules.find((r) => r.name.includes("COST"));
 }
 
-/** 頂部 5 張摘要 Card (PRD §29): 中心規範／COST／改善優先指數／改善建議／建議寫法。 */
+/**
+ * 頂部 4 張摘要 Card (PRD §29): 中心規範／COST／改善優先指數／改善建議。
+ * 2026-09-17: the 「建議寫法」 card was removed (the compare card below
+ * already shows the per-segment diff), COST now carries the same ✓／✕ red-or-
+ * green semantics as the rule table (there is no third state for COST), and
+ * every 「不符合」 is rendered in the red tone.
+ */
 export default function SummaryCards({ result }: SummaryCardsProps) {
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   const { compliance, improvement, ai, cost, rules } = result;
   const costRule = findCostRule(rules);
+  const costBlocked = costRule?.status === "BLOCK";
   const aiPending = ai.status === "pending";
   const aiUnavailable = ai.status === "unavailable";
-  const suggestedAvailable = ai.status === "ok" && !!ai.suggested_sql?.available;
-  const outcome = ai.status === "ok" ? ai.suggested_sql?.outcome : undefined;
-  const notNeeded = !suggestedAvailable && outcome === "not_needed";
-  const adviceOnly = !suggestedAvailable && outcome === "advice_only";
+  const improvementColor = improvementTone(improvement.color);
 
   return (
     <section className="summary" aria-label="檢核摘要">
@@ -55,6 +61,7 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
         label="中心規範"
         value={compliance.label}
         valueStyle={{ fontSize: 22 }}
+        bad={compliance.status === "BLOCK"}
         sub={
           compliance.block_count > 0
             ? `${compliance.block_count} 項不符合`
@@ -65,31 +72,27 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
       />
 
       <Metric
-        tone="blue"
-        icon="C"
+        tone={costBlocked ? "red" : costRule?.status === "NA" ? "gray" : "green"}
+        icon={costBlocked ? "✕" : costRule?.status === "NA" ? "–" : "✓"}
         label="COST"
         value={formatCost(cost)}
+        bad={costBlocked}
         sub={costRule?.note ?? "—"}
       />
 
-      <div className="metric tone-yellow">
+      <div className={`metric tone-${improvementColor}`}>
         <div className="m-top">
           <div className="m-label">改善優先指數</div>
           <div className="m-icon">{improvement.score}</div>
         </div>
         <div className="score-line">
-          <div className="m-value">{improvement.score} / 100</div>
+          <div className={`m-value${improvementColor === "red" ? " m-value-bad" : ""}`}>{improvement.score} / 100</div>
         </div>
         <div className="m-sub">
           <span
             className="score-state"
             style={{
-              color:
-                improvementTone(improvement.color) === "green"
-                  ? "#16784a"
-                  : improvementTone(improvement.color) === "red"
-                    ? "#b83139"
-                    : "#9b6d00",
+              color: improvementColor === "green" ? "#16784a" : improvementColor === "red" ? "#b83139" : "#9b6d00",
             }}
           >
             {improvement.label}
@@ -98,11 +101,7 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
         </div>
         {improvement.breakdown.length > 0 && (
           <>
-            <button
-              type="button"
-              className="breakdown-toggle"
-              onClick={() => setBreakdownOpen((v) => !v)}
-            >
+            <button type="button" className="breakdown-toggle" onClick={() => setBreakdownOpen((v) => !v)}>
               指數組成 {breakdownOpen ? "▴" : "▾"}
             </button>
             {breakdownOpen && (
@@ -130,47 +129,6 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
             : aiUnavailable
               ? "AI 智慧建議暫時無法使用"
               : (ai.advice[0]?.title ?? "目前沒有額外建議")
-        }
-      />
-
-      <Metric
-        tone={
-          aiPending
-            ? "purple"
-            : aiUnavailable
-              ? "gray"
-              : suggestedAvailable || notNeeded
-                ? "green"
-                : adviceOnly
-                  ? "yellow"
-                  : "gray"
-        }
-        icon={suggestedAvailable || notNeeded ? "✓" : "·"}
-        label="建議寫法"
-        value={
-          aiPending
-            ? "AI 分析中"
-            : aiUnavailable
-              ? "暫不提供"
-              : suggestedAvailable
-                ? "可供參考"
-                : notNeeded
-                  ? "無需改寫"
-                  : adviceOnly
-                    ? "僅提供方向"
-                    : "本次不提供"
-        }
-        valueStyle={{ fontSize: 21 }}
-        sub={
-          aiPending
-            ? "約需數十秒"
-            : aiUnavailable
-              ? "AI 智慧建議暫時無法使用"
-              : suggestedAvailable
-                ? "原始 SQL 完整保留"
-                : notNeeded
-                  ? "目前寫法已良好"
-                  : (ai.suggested_sql?.reason ?? "本次先提供改善方向")
         }
       />
     </section>

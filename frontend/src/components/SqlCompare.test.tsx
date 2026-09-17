@@ -15,21 +15,23 @@ import SqlCompare from "./SqlCompare";
 import { makeAi } from "../test/fixtures";
 
 describe("SqlCompare", () => {
-  it("always shows the original SQL and its COST (editor when no rewrite, aligned diff when there is one)", () => {
-    const { unmount } = render(
+  it("shows only a verdict note (no editor panes) when there is no full rewrite", () => {
+    render(
       <SqlCompare
         originalSql="SELECT 1 FROM DUAL;"
         cost={68420}
-        ai={makeAi({ suggested_sql: { available: false, reason: "r", sql: null, outcome: "not_needed" } })}
+        ai={makeAi({ advice: [], suggested_sql: { available: false, reason: "r", sql: null, outcome: "not_needed" } })}
       />,
     );
-    expect(screen.getByTestId("sql-editor-原始 SQL")).toBeTruthy();
-    expect(screen.getByText("COST 68,420")).toBeTruthy();
-    unmount();
+    expect(screen.queryByTestId("sql-editor-原始 SQL")).toBeNull();
+    expect(screen.getByTestId("compare-verdict").textContent).toContain("不需要改寫");
+  });
 
+  it("shows the aligned diff with COST when there is a full rewrite", () => {
     render(<SqlCompare originalSql="SELECT 1 FROM DUAL;" cost={68420} ai={makeAi()} />);
     expect(screen.getByRole("table", { name: "原始 SQL 與建議寫法逐行對照" })).toBeTruthy();
     expect(screen.getByText(/COST 68,420/)).toBeTruthy();
+    expect(screen.queryByText("複製建議寫法")).toBeNull();
   });
 
   it("renders a line-aligned word-highlighted diff when a suggestion is available", () => {
@@ -45,7 +47,6 @@ describe("SqlCompare", () => {
     expect(screen.getByRole("table", { name: "原始 SQL 與建議寫法逐行對照" })).toBeTruthy();
     const marks = document.querySelectorAll("mark.diff-add");
     expect(marks.length).toBeGreaterThan(1); // legend + at least one real change
-    expect(screen.getByText("複製建議寫法")).toBeTruthy();
   });
 
   it("shows the red warning that suggestions must be tested first", () => {

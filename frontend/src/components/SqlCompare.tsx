@@ -1,6 +1,5 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { AdviceItem, AiResult } from "../types/api";
-import SqlEditor from "./SqlEditor";
 import { FragmentDiff, FullSqlDiff } from "./SqlDiffView";
 import { locateOriginalFragment } from "../lib/sqlDiff";
 import { formatCost } from "../lib/cost";
@@ -26,12 +25,6 @@ interface Segment {
   note: string | null;
 }
 
-/**
- * Every advice item that carries a SQL fragment becomes one "segment" for
- * the per-advice diff list. `before` comes from the model when it copied
- * the original fragment verbatim; otherwise we try to locate the closest
- * original line so the reviewer still gets a side-by-side view.
- */
 // "若 TAX_CD 為 2 碼且 SUBTAX_CD 為 1 碼：WHERE ..." — the model sometimes keeps
 // the business assumption as a prefix inside `example`; split it off so the
 // diff compares SQL with SQL and the assumption is shown as a note.
@@ -43,6 +36,12 @@ export function splitAssumption(example: string): { sql: string; assumption: str
   return { sql: example.slice(m[0].length).trim(), assumption: m[1] };
 }
 
+/**
+ * Every advice item that carries a SQL fragment becomes one "segment" for
+ * the per-advice diff list. `before` comes from the model when it copied
+ * the original fragment verbatim; otherwise we try to locate the closest
+ * original line so the reviewer still gets a side-by-side view.
+ */
 function toSegments(originalSql: string, advice: AdviceItem[]): Segment[] {
   const segments: Segment[] = [];
   for (const item of advice) {
@@ -60,10 +59,12 @@ function toSegments(originalSql: string, advice: AdviceItem[]): Segment[] {
 }
 
 /**
- * SQL 寫法比較區 (PRD §33): 原始 SQL 永遠保留、建議寫法只供參考。2026-09-17:
- * a full rewrite is shown as a line-aligned, word-highlighted diff; every
- * advice item with a SQL fragment is additionally listed as its own
- * before/after diff, so 「僅提供方向」 still shows precisely what to change.
+ * SQL 寫法比較區 (PRD §33), 2026-09-17 layout: a one-line AI verdict, then
+ * — when a full rewrite exists — the whole statement as a line-aligned,
+ * word-highlighted diff, then every advice item with a SQL fragment as its
+ * own before/after diff. The old side-by-side editor panes were removed
+ * (user request): the segment diffs already show the original fragments,
+ * and the original statement is visible in the input panel.
  */
 export default function SqlCompare({ originalSql, cost, ai }: SqlCompareProps) {
   const suggestedSql =
@@ -76,20 +77,33 @@ export default function SqlCompare({ originalSql, cost, ai }: SqlCompareProps) {
     [ai.status, ai.advice, originalSql],
   );
 
-  const [copied, setCopied] = useState(false);
-
-  async function handleCopy() {
-    if (!suggestedSql) return;
-    try {
-      await navigator.clipboard.writeText(suggestedSql);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1200);
-    } catch {
-      window.alert("請手動選取並複製建議寫法。");
-    }
-  }
-
   const outcome = ai.suggested_sql?.outcome;
+
+  let verdict: React.ReactNode;
+  if (ai.status === "pending") {
+    verdict = <div className="ai-note">{AI_PENDING_MESSAGE}</div>;
+  } else if (ai.status === "unavailable") {
+    verdict = <div className="ai-note">{ai.message?.trim() ? ai.message : AI_UNAVAILABLE_MESSAGE}</div>;
+  } else if (suggestedSql !== null) {
+    verdict = null;
+  } else {
+    const headline =
+      outcome === "not_needed"
+        ? SUGGESTED_SQL_NOT_NEEDED_MESSAGE
+        : outcome === "advice_only"
+          ? SUGGESTED_SQL_ADVICE_ONLY_MESSAGE
+          : SUGGESTED_SQL_NOT_AVAILABLE_MESSAGE;
+    const reason =
+      ai.suggested_sql?.reason && ai.suggested_sql.reason !== SUGGESTED_SQL_NOT_AVAILABLE_MESSAGE
+        ? ai.suggested_sql.reason
+        : null;
+    verdict = (
+      <div className={`ai-note${outcome === "not_needed" ? " ai-note-good" : ""}`} data-testid="compare-verdict">
+        <p className="verdict-headline">{headline}</p>
+        {reason && <p className="verdict-reason">{reason}</p>}
+      </div>
+    );
+  }
 
   return (
     <section className="card">
@@ -103,56 +117,16 @@ export default function SqlCompare({ originalSql, cost, ai }: SqlCompareProps) {
         <span className="badge blue">對照查看</span>
       </div>
       <div className="card-body">
-        {suggestedSql !== null ? (
+        {verdict}
+
+        {suggestedSql !== null && (
           <div className="sql-box sql-box-light">
             <div className="sql-head">
               <span>
                 原始 SQL（COST {formatCost(cost)}）與建議寫法逐行對照 · <mark className="diff-add legend">黃底</mark> 為建議修改處
               </span>
-              <button className="copy-btn" type="button" onClick={() => void handleCopy()}>
-                {copied ? "已複製" : "複製建議寫法"}
-              </button>
             </div>
             <FullSqlDiff original={originalSql} suggested={suggestedSql} />
-          </div>
-        ) : (
-          <div className="sql-grid">
-            <div className="sql-box">
-              <div className="sql-head">
-                <span>原始 SQL</span>
-                <span>COST {formatCost(cost)}</span>
-              </div>
-              <SqlEditor value={originalSql} readOnly variant="dark" minHeightPx={180} ariaLabel="原始 SQL" />
-            </div>
-
-            <div className="sql-box suggested">
-              <div className="sql-head">
-                <span>建議寫法</span>
-              </div>
-              {ai.status === "pending" ? (
-                <div className="sql-fallback">{AI_PENDING_MESSAGE}</div>
-              ) : ai.status === "unavailable" ? (
-                <div className="sql-fallback">{ai.message?.trim() ? ai.message : AI_UNAVAILABLE_MESSAGE}</div>
-              ) : (
-                <div className={`sql-fallback${outcome === "not_needed" ? " sql-fallback-good" : ""}`}>
-                  {/* Three genuinely different situations, three messages:
-                      the SQL is already fine; improvements exist but need a
-                      business assumption (advice only, see segment diffs
-                      below); or the server gated / rejected a rewrite (PRD
-                      §25.4 fixed copy). */}
-                  <p>
-                    {outcome === "not_needed"
-                      ? SUGGESTED_SQL_NOT_NEEDED_MESSAGE
-                      : outcome === "advice_only"
-                        ? SUGGESTED_SQL_ADVICE_ONLY_MESSAGE
-                        : SUGGESTED_SQL_NOT_AVAILABLE_MESSAGE}
-                  </p>
-                  {ai.suggested_sql?.reason && ai.suggested_sql.reason !== SUGGESTED_SQL_NOT_AVAILABLE_MESSAGE && (
-                    <p className="sql-fallback-reason">{ai.suggested_sql.reason}</p>
-                  )}
-                </div>
-              )}
-            </div>
           </div>
         )}
 

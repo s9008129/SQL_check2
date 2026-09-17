@@ -40,7 +40,7 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from app.schemas import AdviceItem, AiResult, Finding, SuggestedSql
-from app.services import rule_engine
+from app.services import rewrite_rules, rule_engine
 from app.services.masking import mask_sql, scrub_invented_placeholders, unmask_sql
 from app.services.rule_engine import GLOBAL_STATEMENT_INDEX
 from app.services.sql_parser import ParsedStatement, parse_sql_text, structural_signature
@@ -362,8 +362,27 @@ def _filter_advice(
             # A "before" with nothing to compare against is useless to the
             # diff view and misleading in the card — drop it.
             before = None
+        verification: str | None = None
+        assumption: str | None = None
+        if before and example:
+            # 2026-09-17: the model is not trusted for equivalence. The
+            # system derives the equivalent form itself (rewrite_rules);
+            # the model's text is confirmed, replaced, or flagged.
+            v = rewrite_rules.verify_fragment(before, example)
+            verification, assumption = v.status, v.assumption
+            if v.status == "corrected":
+                logger.info("ai_service: advice fragment corrected by rule %s", v.rule)
+                example = v.example
         kept.append(
-            AdviceItem(title=title, explanation=explanation, example=example, impact=item.impact, before=before)
+            AdviceItem(
+                title=title,
+                explanation=explanation,
+                example=example,
+                impact=item.impact,
+                before=before,
+                verification=verification,
+                assumption=assumption,
+            )
         )
     if dropped:
         # PRD: log a counter on a forbidden-phrase hit, never the content
@@ -495,6 +514,15 @@ def _revalidate_suggested_sql(
         new_notice_count = sum(1 for f in new_findings if f.status == "NOTICE")
         if new_notice_count > original_notice_count:
             return False, "建議寫法的提醒項目多於原始 SQL"
+
+        # 2026-09-17: structure being identical says nothing about the
+        # conditions inside it. Every condition the model changed must be a
+        # rewrite the system can derive itself (rewrite_rules); anything else
+        # is an unproven semantic change and is rejected. Runs last so the
+        # more specific compliance/structure reasons above win when they apply.
+        ok, why = rewrite_rules.verify_predicate_changes(representative.tree, stmt.tree)
+        if not ok:
+            return False, why or rewrite_rules.REASON_UNVERIFIABLE_CHANGE
 
         return True, None
     except Exception as exc:

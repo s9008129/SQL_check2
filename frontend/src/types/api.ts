@@ -111,6 +111,10 @@ export interface AdviceItem {
   // Original fragment that `example` replaces (verbatim); optional on the
   // wire for backward compatibility with an older backend.
   before?: string | null;
+  /** Server verdict on before→example: verified / corrected (system replaced it) / unverified. */
+  verification?: "verified" | "corrected" | "unverified" | null;
+  /** Caveat the rule's equivalence depends on, if any. */
+  assumption?: string | null;
 }
 
 export type RewriteOutcome = "provided" | "not_needed" | "advice_only" | "gated" | "rejected";

@@ -131,20 +131,27 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 - `num_ctx_default` 8192→16384；`_num_ctx_for` 只在倍數分級間切換（避免 Ollama 反覆重載模型）。
 - 驗證：docx 直連正式主機三次 19–25 秒穩定 gated＋三條含 before/example 的建議；小查詢仍 provided；fake_ollama truncated 模式前端顯示專屬訊息。
 
+### 2026-09-17 深夜（三）：條件改寫的等價性由系統驗證（`services/rewrite_rules.py`）
+- 起因：模型把 `SUBSTR(MANAGE_CD,6,3)='551'` 改成 `LIKE '__%551%'`（結果不同）並以「AI 建議寫法」示人；片段建議原本零驗證，整段改寫的結構複核也看不到條件語意。
+- 規則白名單（每條附等價論證）：`SUBSTR(col,p,n)='v'`→`col LIKE '<p-1 個 _>v%'`（p=1 也接受上下界寫法）；`TRUNC(col)=X`→`col>=X AND col<X+1`（附「X 不含時分秒」前提）；`NVL(col,'a')='b'`→`(col='b' OR col IS NULL)`／`col='b'`；同欄位 `OR` 串→`IN`。
+- 片段：`AdviceItem.verification` ∈ verified／corrected（example 已被系統換成推導結果）／unverified（前端標「AI 示意寫法」、不用黃底）；`assumption` 顯示為「前提：…」。
+- 整段改寫：`_revalidate_suggested_sql` 最後一步 `verify_predicate_changes`，任何條件變動都必須是規則可推導的，否則退回（原因句講「查詢結果可能改變」，不用「等價」字眼）。
+- 加新規則的方法：在 `rewrite_rules._RULES` 加一個函式，回傳 `Rewrite(rule, canonical, accepted, assumption)`，並在 `tests/test_rewrite_rules.py` 寫正反例。
+
 ## 4. 「AI 沒給建議寫法」的判讀順序（接手後最常被問）
 
 1. 看 API 回應或畫面的 outcome：
    - `not_needed`：模型判定寫法已好，reason 應列出檢查項目。若 SQL 明顯有缺陷卻 not_needed → prompt 檢查清單問題。
    - `advice_only`：有方向但需業務假設 → 看「逐段對照」是否有 before/example。這是設計行為，不是 bug。
    - `gated`：守門擋（多段、非 SELECT、解析失敗、禁止旗標、**SQL 過長 too_long_for_rewrite**、**改寫時輸出截斷 rewrite_truncated**）→ reason 會寫具體原因。
-   - `rejected`：模型給了改寫但結構複核擋下 → reason 有具體項目（例如「GROUP BY 與原始不同」）。若複核過嚴可討論放寬，但要先確認語意真的等價。
+   - `rejected`：模型給了改寫但結構複核擋下 → reason 有具體項目（例如「GROUP BY 與原始不同」、「改動了條件，系統無法確認查詢結果是否相同」）。後者代表模型做了 `rewrite_rules` 白名單以外的條件改法；若那種改法確實結果不變且常見，加規則（附等價論證）而不是放寬檢查。
    - AI 狀態 `unavailable`：先看 API 的 `ai.degrade_code`（output_truncated／prompt_truncated／timeout／connection／http／invalid_response），畫面訊息也已對應。再看正式主機 `docker compose logs sqlcheck | Select-String ai_service` 的 `done_reason`、`thinking_chars`、`eval_count`（`eval_count == num_predict` 是輸出截斷；`prompt_eval_count == num_ctx` 是輸入截斷，兩者修法不同）；若 thinking_chars>0 表示思考模式又被打開。若看到 `prompt truncated by ollama`，代表 SQL 長到連 `num_ctx_max` 都不夠，調高 `OLLAMA_NUM_CTX_MAX` 或請同仁拆分 SQL；若看到 `response not in Chinese`，先查同一請求的 `num_ctx raised to` 與 `prompt_eval_count` 是否貼近上限。
 2. 重現方式：用第 6 節的直連腳本，不需要重新部署。
 3. 已知模型品質限制（不是程式 bug）：偶爾漏提引號一致性（`coll_yr = 107`）；TO_CHAR 範例可能假設 'YYYYMMDD' 而非民國日期；before 偶爾跳行複製導致與原文不完全逐字相同（前端仍能 diff）。
 
 ## 5. 目前狀態與驗證數據
 
-- 最新狀態：後端 309 項測試、前端 74 項測試、ruff、build 全過（2026-09-17 深夜，長 SQL 輸出截斷根因修復 commit）。docx 三層巢狀真實案例已用本機程式碼直連正式主機 Gemma4 驗證（num_ctx 16384、43 秒、中文 advice_only）。
+- 最新狀態：後端 333 項測試、前端 76 項測試、ruff、build 全過（2026-09-17 深夜，條件改寫等價驗證 commit）。docx 三層巢狀真實案例已用本機程式碼直連正式主機 Gemma4 驗證（num_ctx 16384、43 秒、中文 advice_only）。
 - 正式主機最後一次由使用者部署的版本在 `6a7294c` 之前；**`80f78e8`（放大字級）、`815c056`（全頁視覺）與本次畫面調整尚未部署**，需 `git pull` + `deploy\deploy.ps1`。
 - 使用者人工驗證（test_01～03.pdf）：多重缺陷 SQL、笛卡兒積 SQL、乾淨 SQL 三案皆符合預期。
 - 報告：`E2E_TEST_report_20260917.md`、`E2E_TEST_report_20260917_round2.md`、`SQLCheck2_E2E_test_report_20260916.md`。

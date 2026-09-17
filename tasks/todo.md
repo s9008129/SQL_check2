@@ -153,3 +153,7 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
 ## 2026-09-17 深夜：長 SQL 輸出截斷根因修復
 - 完成：長度守門 `too_long_for_rewrite`、輸出截斷 advice-only 重試、降級訊息分類（degrade_code）、單一總期限、num_ctx 倍數分級（預設改 16384）。後端 309、前端 74 測試全過；docx 直連正式主機三次穩定 19–25 秒 gated＋三條片段建議；fake_ollama truncated 模式前端截圖顯示專屬訊息。
 - 待辦：正式主機 git pull + deploy.ps1 後重測同一份 docx，log 應為 `decline_code=too_long_for_rewrite` 且無 truncated。
+
+## 2026-09-17 深夜：條件改寫等價驗證（rewrite_rules）
+- 完成：片段三態（verified／corrected／unverified）與整段改寫條件驗證；prompt 補中段 SUBSTR 底線規則；前端標籤與註解白話化。後端 333、前端 76 測試全過；docx 直連正式主機確認 SUBSTR 錯誤片段被系統修正、TRUNC／SUBSTR 前綴整段改寫仍 provided。
+- 待辦：規則清單目前 4 種；蒐集檔中若常見其他條件改法（TO_CHAR 日期、LPAD 補零比對）再評估加規則，加規則前先寫等價論證。

@@ -70,7 +70,18 @@ export interface FragmentDiffProps {
   before: string;
   after: string;
   note?: string | null;
+  /** Server verdict on the fragment (see AdviceItem.verification). */
+  verification?: "verified" | "corrected" | "unverified" | null;
 }
+
+// 2026-09-17: the label must say how much the reader can trust the fragment.
+// Only rule-derived rewrites are called 建議寫法; anything the system could
+// not prove equivalent is a sketch.
+export const FRAGMENT_LABEL: Record<NonNullable<FragmentDiffProps["verification"]>, string> = {
+  verified: "AI 建議寫法（系統已確認查詢結果不變）",
+  corrected: "系統修正後的建議寫法（查詢結果不變）",
+  unverified: "AI 示意寫法（系統無法確認查詢結果是否相同，僅供參考）",
+};
 
 /**
  * One advice item's before/after fragment, side by side with word-level
@@ -78,10 +89,11 @@ export interface FragmentDiffProps {
  * full rewrite was produced, so "僅提供方向" still shows exactly what to
  * change where.
  */
-export function FragmentDiff({ title, before, after, note }: FragmentDiffProps) {
+export function FragmentDiff({ title, before, after, note, verification }: FragmentDiffProps) {
   const { left, right } = useMemo(() => computeWordDiff(before, after), [before, after]);
+  const label = verification ? FRAGMENT_LABEL[verification] : "AI 建議寫法";
   return (
-    <div className="fragment-diff" data-testid="fragment-diff">
+    <div className={`fragment-diff${verification ? ` fragment-${verification}` : ""}`} data-testid="fragment-diff">
       <div className="fragment-title">{title}</div>
       <div className="fragment-grid">
         <div className="fragment-cell">
@@ -90,8 +102,8 @@ export function FragmentDiff({ title, before, after, note }: FragmentDiffProps) 
             <Tokens tokens={left} />
           </code>
         </div>
-        <div className="fragment-cell fragment-after">
-          <div className="fragment-label">AI 建議寫法</div>
+        <div className={`fragment-cell fragment-after${verification === "unverified" ? " fragment-after-unverified" : ""}`}>
+          <div className="fragment-label">{label}</div>
           <code>
             <Tokens tokens={right} />
           </code>

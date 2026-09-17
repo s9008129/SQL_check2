@@ -295,6 +295,11 @@ mark.legend{margin:0 3px}
    silently overriding `.card-warning` (print.css won with !important, which
    is why the PDF was red while the browser was grey). */
 .card-desc.card-warning{color:#b83139}
+/* 2026-09-17 fragment trust levels: unverified sketches lose the yellow
+   "suggested" tint so they never look as authoritative as verified ones. */
+.fragment-after-unverified{background:#f8fafc;border-color:#d7deea}
+.fragment-after-unverified .fragment-label{color:#8a5a00}
+.fragment-corrected .fragment-after{border-color:#9fd7b8;background:#f2fbf6}
 
 /* CodeMirror hosts: light variant matches the prototype textarea, dark
    variant fills the dark .sql-box code panels. */

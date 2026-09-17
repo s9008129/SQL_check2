@@ -90,6 +90,41 @@ describe("SqlCompare", () => {
     expect(blocks[1].textContent).toContain("tax_cd");
   });
 
+  it("labels fragments by the server's verification verdict, in plain words", () => {
+    render(
+      <SqlCompare
+        originalSql="SELECT A.X FROM T A WHERE SUBSTR(A.C, 6, 3) = '551' AND UPPER(A.N) = :N"
+        ai={makeAi({
+          advice: [
+            {
+              title: "移除條件欄位的函數運算",
+              explanation: "e",
+              before: "SUBSTR(A.C, 6, 3) = '551'",
+              example: "A.C LIKE '_____551%'",
+              impact: "medium",
+              verification: "corrected",
+            },
+            {
+              title: "評估移除 UPPER",
+              explanation: "e",
+              before: "UPPER(A.N) = :N",
+              example: "A.N = :N",
+              impact: "low",
+              verification: "unverified",
+            },
+          ],
+          suggested_sql: { available: false, reason: "r", sql: null, outcome: "advice_only" },
+        })}
+      />,
+    );
+    const blocks = screen.getAllByTestId("fragment-diff");
+    expect(blocks[0].textContent).toContain("系統修正後的建議寫法（查詢結果不變）");
+    expect(blocks[0].textContent).toContain("AI 原本給的寫法會改變查詢結果");
+    expect(blocks[1].textContent).toContain("AI 示意寫法（系統無法確認查詢結果是否相同，僅供參考）");
+    expect(blocks[1].querySelector(".fragment-after-unverified")).toBeTruthy();
+    expect(screen.queryByText(/等價/)).toBeNull();
+  });
+
   it("does not diff a prose-only example as if it were SQL", () => {
     render(
       <SqlCompare

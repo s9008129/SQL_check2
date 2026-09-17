@@ -21,7 +21,14 @@ interface Segment {
   before: string | null;
   after: string;
   note: string | null;
+  verification: AdviceItem["verification"];
 }
+
+const VERIFICATION_NOTE: Record<NonNullable<AdviceItem["verification"]>, string | null> = {
+  verified: null,
+  corrected: "AI 原本給的寫法會改變查詢結果，系統已改為查詢結果不變的寫法。",
+  unverified: "系統無法確認這個改法的查詢結果是否相同，採用前務必於測試機比對。",
+};
 
 // "若 TAX_CD 為 2 碼且 SUBTAX_CD 為 1 碼：WHERE ..." — the model sometimes keeps
 // the business assumption as a prefix inside `example`; split it off so the
@@ -49,10 +56,14 @@ function toSegments(originalSql: string, advice: AdviceItem[]): Segment[] {
     // Prose-only examples stay on the advice card; they are not SQL to diff.
     if (!after || !looksLikeSqlFragment(after)) continue;
     const before = item.before?.trim() || locateOriginalFragment(originalSql, after);
-    const notes = [assumption ? `前提：${assumption}` : null, before ? null : "找不到對應的原始片段，僅顯示建議片段。"].filter(
-      (n): n is string => n !== null,
-    );
-    segments.push({ title: item.title, before, after, note: notes.length ? notes.join("　") : null });
+    const verification = item.before?.trim() ? (item.verification ?? null) : null;
+    const notes = [
+      assumption ? `前提：${assumption}` : null,
+      item.assumption ? `前提：${item.assumption}` : null,
+      verification ? VERIFICATION_NOTE[verification] : null,
+      before ? null : "找不到對應的原始片段，僅顯示建議片段。",
+    ].filter((n): n is string => n !== null);
+    segments.push({ title: item.title, before, after, note: notes.length ? notes.join("　") : null, verification });
   }
   return segments;
 }
@@ -144,7 +155,14 @@ export default function SqlCompare({ originalSql, ai }: SqlCompareProps) {
             <div className="segment-list-title">逐段對照（每一項建議的原寫法 → AI 建議寫法）</div>
             {segments.map((seg, i) =>
               seg.before ? (
-                <FragmentDiff key={i} title={`${i + 1}. ${seg.title}`} before={seg.before} after={seg.after} note={seg.note} />
+                <FragmentDiff
+                  key={i}
+                  title={`${i + 1}. ${seg.title}`}
+                  before={seg.before}
+                  after={seg.after}
+                  note={seg.note}
+                  verification={seg.verification}
+                />
               ) : (
                 <div className="fragment-diff" key={i} data-testid="fragment-diff">
                   <div className="fragment-title">

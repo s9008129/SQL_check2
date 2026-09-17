@@ -139,6 +139,15 @@ class AdviceItem(BaseModel):
     # advice item instead of only a free-floating snippet. Placeholders are
     # un-masked server-side before the response is returned.
     before: str | None = None
+    # 2026-09-17: what the server could prove about before→example.
+    #   verified   — the model's fragment matches a rule-derived equivalent
+    #   corrected  — it did not; `example` now holds the system's equivalent
+    #   unverified — no rule covers this change; shown as a sketch only
+    #   None       — no fragment
+    verification: Literal["verified", "corrected", "unverified"] | None = None
+    # Caveat under which the rule's equivalence holds (e.g. bind is a date
+    # without time), when any.
+    assumption: str | None = None
 
 
 RewriteOutcome = Literal["provided", "not_needed", "advice_only", "gated", "rejected"]

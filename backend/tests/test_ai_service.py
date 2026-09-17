@@ -52,7 +52,10 @@ def _good_inner(**overrides) -> dict:
         "suggested_sql": {
             "available": True,
             "reason": "此查詢結構單純，可提供建議寫法。",
-            "sql": "SELECT * FROM T A WHERE A.X = :STR_001",
+            # 2026-09-17: must be a rule-derivable rewrite of
+            # _clean_select_statement() (TRUNC → range), or re-validation
+            # rejects it as an unproven change to the conditions.
+            "sql": "SELECT A.X FROM T A WHERE A.Y >= :STR_001 AND A.Y < :STR_001 + 1",
         },
         "estimated_improvement_pct": 47,
     }
@@ -61,7 +64,9 @@ def _good_inner(**overrides) -> dict:
 
 
 def _clean_select_statement():
-    return parse_sql_text("SELECT A.X FROM T A WHERE A.Y = 'A123456789'").statements
+    # TRUNC on the condition column so a genuinely equivalent rewrite exists
+    # (see _good_inner); the literal is masked to :STR_001 on the way out.
+    return parse_sql_text("SELECT A.X FROM T A WHERE TRUNC(A.Y) = 'A123456789'").statements
 
 
 def _multi_statement():
@@ -109,7 +114,7 @@ async def test_suggested_sql_reverse_substitutes_masked_literal(settings, chat_u
         return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
     )
     result = await _call(settings, _clean_select_statement())
-    assert result.suggested_sql.sql == "SELECT * FROM T A WHERE A.X = 'A123456789'"
+    assert result.suggested_sql.sql == "SELECT A.X FROM T A WHERE A.Y >= 'A123456789' AND A.Y < 'A123456789' + 1"
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +278,12 @@ async def test_candidate_not_allowed_forces_suggested_sql_unavailable(settings, 
 @respx.mock
 async def test_outcome_provided_when_rewrite_passes_revalidation(settings, chat_url):
     inner = _good_inner(
-        suggested_sql={"available": True, "reason": "改用範圍比較。", "sql": "SELECT A.X FROM T A WHERE A.Y >= :STR_001", "rewrite_outcome": "provided"}
+        suggested_sql={
+            "available": True,
+            "reason": "改用範圍比較。",
+            "sql": "SELECT A.X FROM T A WHERE A.Y >= :STR_001 AND A.Y < :STR_001 + 1",
+            "rewrite_outcome": "provided",
+        }
     )
     respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
     result = await _call(settings, _clean_select_statement())
@@ -366,7 +376,7 @@ def test_system_prompt_requires_checklist_before_not_needed():
     assert "structure_flags" in ai_service.SYSTEM_PROMPT
     assert "not_needed 的 reason 必須列出你實際檢查過的項目" in ai_service.SYSTEM_PROMPT
     assert "隱含型別轉換" in ai_service.SYSTEM_PROMPT
-    assert "前綴上下界" in ai_service.SYSTEM_PROMPT
+    assert "重新推導每一個條件改寫" in ai_service.SYSTEM_PROMPT
 
 
 def test_system_prompt_tells_model_how_to_word_advice_only_reason():
@@ -459,14 +469,30 @@ async def test_suggested_sql_passing_revalidation_is_kept(settings, chat_url):
         suggested_sql={
             "available": True,
             "reason": "改用範圍比較。",
-            "sql": "SELECT A.X FROM T A WHERE A.Y >= :STR_001",
+            "sql": "SELECT A.X FROM T A WHERE A.Y >= :STR_001 AND A.Y < :STR_001 + 1",
         }
     )
     respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
     result = await _call(settings, _clean_select_statement())
 
     assert result.suggested_sql.available is True
-    assert result.suggested_sql.sql == "SELECT A.X FROM T A WHERE A.Y >= 'A123456789'"
+    assert result.suggested_sql.sql == "SELECT A.X FROM T A WHERE A.Y >= 'A123456789' AND A.Y < 'A123456789' + 1"
+
+
+@respx.mock
+async def test_rewrite_that_changes_results_is_rejected_even_when_structure_matches(settings, chat_url):
+    # 2026-09-17 production bug class: same tables/joins/columns, but the
+    # condition itself was changed into something that returns different
+    # rows. Structure checks cannot see it; the rule-derived check must.
+    inner = _good_inner(
+        suggested_sql={"available": True, "reason": "改。", "sql": "SELECT A.X FROM T A WHERE A.Y >= :STR_001"}
+    )
+    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
+    result = await _call(settings, _clean_select_statement())
+    assert result.suggested_sql.available is False
+    assert result.suggested_sql.outcome == "rejected"
+    assert "查詢結果" in result.suggested_sql.reason
+    assert "等價" not in result.suggested_sql.reason
 
 
 @respx.mock
@@ -873,8 +899,9 @@ async def _call_rewrite(settings, chat_url, original_sql: str, rewrite_sql: str,
 
 @respx.mock
 async def test_equivalent_rewrite_of_left_join_group_by_query_is_kept(settings, chat_url):
-    original = "SELECT A.X, COUNT(*) FROM T A LEFT JOIN U B ON A.K = B.K WHERE A.Y = 'A' GROUP BY A.X"
-    rewrite = "SELECT A.X, COUNT(*) FROM T A LEFT JOIN U B ON A.K = B.K WHERE A.Y >= 'A' GROUP BY A.X"
+    # OR-chain → IN is a rule-derived, result-preserving rewrite.
+    original = "SELECT A.X, COUNT(*) FROM T A LEFT JOIN U B ON A.K = B.K WHERE A.Y = 'A' OR A.Y = 'B' GROUP BY A.X"
+    rewrite = "SELECT A.X, COUNT(*) FROM T A LEFT JOIN U B ON A.K = B.K WHERE A.Y IN ('A', 'B') GROUP BY A.X"
     result = await _call_rewrite(settings, chat_url, original, rewrite)
     assert result.suggested_sql.available is True
     assert result.suggested_sql.sql == rewrite

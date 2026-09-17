@@ -5,7 +5,15 @@ export interface ImprovementAdviceProps {
   ai: AiResult;
 }
 
-const ADVICE_TONES = ["a-purple", "a-blue", "a-yellow", "a-green"] as const;
+// 2026-09-17: card tint now carries meaning — it follows the AI's impact
+// level (high = red-soft, medium = yellow-soft, low = blue-soft) instead of
+// cycling through decorative colours by position.
+const IMPACT_TONE: Record<ImpactLevel, string> = {
+  high: "a-high",
+  medium: "a-medium",
+  low: "a-low",
+};
+const DEFAULT_TONE = "a-low";
 
 const IMPACT_LABEL: Record<ImpactLevel, string> = {
   low: "影響：低",
@@ -46,7 +54,7 @@ export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
             ) : (
               <div className="advice-grid">
                 {ai.advice.map((item, index) => (
-                  <div className={`advice-box ${ADVICE_TONES[index % ADVICE_TONES.length]}`} key={`${item.title}-${index}`}>
+                  <div className={`advice-box ${item.impact ? IMPACT_TONE[item.impact] : DEFAULT_TONE}`} key={`${item.title}-${index}`}>
                     <h4>
                       {item.title}
                       {item.impact && (

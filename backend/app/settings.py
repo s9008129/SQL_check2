@@ -72,6 +72,7 @@ class OllamaSettings:
     temperature: float
     keep_alive: str
     max_retries_on_invalid_json: int
+    think: bool = False
 
 
 @dataclass(frozen=True)
@@ -143,6 +144,10 @@ def get_settings() -> Settings:
         temperature=float(ollama_section.get("temperature", 0.2)),
         keep_alive=str(ollama_section.get("keep_alive", "30m")),
         max_retries_on_invalid_json=int(ollama_section.get("max_retries_on_invalid_json", 1)),
+        think=_env_bool(
+            ollama_section.get("think_env", "OLLAMA_THINK"),
+            bool(ollama_section.get("think_default", False)),
+        ),
     )
 
     masking = MaskingSettings(

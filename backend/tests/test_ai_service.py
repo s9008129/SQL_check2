@@ -331,6 +331,50 @@ def test_system_prompt_explains_rewrite_outcome_and_examples():
     assert "example 就必須填寫" in ai_service.SYSTEM_PROMPT
 
 
+def test_system_prompt_requires_checklist_before_not_needed():
+    # 2026-09-17: "already good" must be an evidence-backed claim.
+    assert "structure_flags" in ai_service.SYSTEM_PROMPT
+    assert "not_needed 的 reason 必須列出你實際檢查過的項目" in ai_service.SYSTEM_PROMPT
+    assert "隱含型別轉換" in ai_service.SYSTEM_PROMPT
+    assert "前綴上下界" in ai_service.SYSTEM_PROMPT
+
+
+def test_chat_request_disables_thinking_by_default(settings):
+    body = ai_service._chat_request_body(settings, {"statement_type": "SELECT"})
+    assert body["think"] is False
+
+
+def test_chat_request_thinking_follows_settings(settings):
+    on = dataclasses.replace(settings, ollama=dataclasses.replace(settings.ollama, think=True))
+    assert ai_service._chat_request_body(on, {})["think"] is True
+
+
+@respx.mock
+async def test_truncation_while_thinking_is_logged(settings, chat_url, caplog):
+    caplog.set_level(logging.INFO, logger="app.services.ai_service")
+    env = _truncated_envelope()
+    env["message"]["thinking"] = "x" * 500
+    respx.post(chat_url).mock(return_value=httpx.Response(200, json=env))
+    result = await _call(settings, _clean_select_statement())
+    assert result.status == "unavailable"
+    assert "truncated while thinking" in "\n".join(r.getMessage() for r in caplog.records)
+
+
+@respx.mock
+async def test_payload_includes_structure_flags(settings, chat_url):
+    route = respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
+    )
+    sql = "SELECT A.X FROM T A WHERE A.Y = 1 AND A.K NOT IN (SELECT B.K FROM U B WHERE B.Z = 1)"
+    statements = parse_sql_text(sql).statements
+    await ai_service.get_ai_result(
+        sql_text=sql, cost=1000, compliance_status="PASS", findings=[], statements=statements, settings=settings
+    )
+    user_message = next(m["content"] for m in json.loads(route.calls[0].request.content)["messages"] if m["role"] == "user")
+    payload = json.loads(user_message.removeprefix("<SQL_DATA>\n").removesuffix("\n</SQL_DATA>"))
+    assert "not_in_subquery" in payload["structure_flags"]
+
+
 @respx.mock
 async def test_candidate_not_allowed_model_already_agreeing_keeps_its_own_reason(settings, chat_url):
     # When the model itself already said available=False (agreeing with the
@@ -757,7 +801,9 @@ async def test_rewrite_changing_join_kind_is_rejected(settings, chat_url):
     rewrite = "SELECT A.X, COUNT(*) FROM T A JOIN U B ON A.K = B.K WHERE A.Y >= 'A' GROUP BY A.X"
     result = await _call_rewrite(settings, chat_url, original, rewrite)
     assert result.suggested_sql.available is False
-    assert "JOIN 種類或順序" in result.suggested_sql.reason
+    # Either guard is a correct rejection: the structure-class flag check
+    # (outer_join disappears) fires before the join-order signature check.
+    assert "JOIN 種類或順序" in result.suggested_sql.reason or "改變了查詢結構" in result.suggested_sql.reason
 
 
 @respx.mock
@@ -794,6 +840,17 @@ async def test_rewrite_dropping_order_by_is_rejected(settings, chat_url):
     result = await _call_rewrite(settings, chat_url, original, rewrite)
     assert result.suggested_sql.available is False
     assert "ORDER BY" in result.suggested_sql.reason
+
+
+@respx.mock
+async def test_rewrite_not_in_to_not_exists_is_rejected(settings, chat_url):
+    # Not equivalent when the subquery column can be NULL — structure-class
+    # flags differ (not_in_subquery -> correlated_subquery), must be rejected.
+    original = "SELECT A.X FROM T A WHERE A.Y = 'A' AND A.K NOT IN (SELECT B.K FROM U B WHERE B.Z = 'A')"
+    rewrite = "SELECT A.X FROM T A WHERE A.Y = 'A' AND NOT EXISTS (SELECT 1 FROM U B WHERE B.K = A.K AND B.Z = 'A')"
+    result = await _call_rewrite(settings, chat_url, original, rewrite)
+    assert result.suggested_sql.available is False
+    assert "改變了查詢結構" in result.suggested_sql.reason
 
 
 @respx.mock

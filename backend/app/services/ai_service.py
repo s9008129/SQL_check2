@@ -243,6 +243,7 @@ def _build_payload(
     estimate_improvement_allowed: bool,
     literal_hints: dict[str, dict[str, Any]] | None = None,
     where_evidence: dict[str, str] | None = None,
+    structure_flags: list[str] | None = None,
 ) -> dict[str, Any]:
     """PRD §20's field set plus two additive, non-sensitive fields (2026-09-
     16): `literal_hints` (placeholder -> shape/length/wildcard, never the
@@ -264,6 +265,11 @@ def _build_payload(
         "candidate_allowed": candidate_allowed,
         "estimate_improvement_allowed": estimate_improvement_allowed,
         "literal_hints": literal_hints or {},
+        # Deterministic structural facts from sql_parser (2026-09-17): the
+        # model kept declaring a NOT IN subquery "already good" because
+        # nothing told it the pattern was there; findings only carry rule
+        # hits, and complexity flags were never in the payload.
+        "structure_flags": sorted(structure_flags or []),
     }
     if where_evidence is not None:
         payload["where_evidence"] = where_evidence
@@ -334,6 +340,22 @@ def _clamp_round_pct(value: int | None, estimate_allowed: bool) -> int | None:
 _NO_REWRITE_REASON = "為避免改變原本查詢內容，本次先提供改善方向，不自動產生建議寫法。"
 
 
+_STRUCTURE_CLASS_FLAGS = frozenset(
+    {
+        "not_in_subquery",
+        "correlated_subquery",
+        "set_operation",
+        "distinct",
+        "distinct_or_union",
+        "outer_join",
+        "cartesian_join",
+        "window_function",
+        "connect_by",
+        "group_by_aggregate",
+    }
+)
+
+
 def _revalidate_suggested_sql(
     sql_text: str,
     representative: ParsedStatement,
@@ -379,6 +401,15 @@ def _revalidate_suggested_sql(
             return False, "建議寫法不得包含 Hint"
         if "rownum" in stmt.complexity_flags:
             return False, "建議寫法不得包含 ROWNUM"
+        # 2026-09-17: structure-class flags must be identical. Catches
+        # NOT IN -> NOT EXISTS (not_in_subquery disappears, correlated_subquery
+        # appears; results differ when the subquery column has NULLs), added/
+        # removed subqueries or set operations, and DISTINCT/outer-join changes
+        # — none of which the column/join/group checks below can see.
+        orig_struct = representative.complexity_flags & _STRUCTURE_CLASS_FLAGS
+        new_struct = stmt.complexity_flags & _STRUCTURE_CLASS_FLAGS
+        if orig_struct != new_struct:
+            return False, "建議寫法改變了查詢結構（子查詢／集合運算／DISTINCT／JOIN 型態）"
 
         if representative.tree is None or stmt.tree is None:
             return False, "建議寫法結構複核失敗，無法比對"
@@ -569,6 +600,10 @@ def _chat_request_body(settings: Settings, payload: dict[str, Any]) -> dict[str,
         ],
         "format": RESPONSE_SCHEMA,
         "stream": False,
+        # Gemma4 thinks by default; for a schema-constrained JSON reply the
+        # thinking only burns num_predict (confirmed: 3072 tokens of thinking,
+        # empty content, done_reason=length -> "unavailable"). See app.yaml.
+        "think": settings.ollama.think,
         "options": {
             "temperature": settings.ollama.temperature,
             "num_ctx": settings.ollama.num_ctx,
@@ -607,6 +642,13 @@ async def _one_attempt(client: httpx.AsyncClient, settings: Settings, payload: d
     resp.raise_for_status()
     data = resp.json()
     if data.get("done_reason") == "length":
+        thinking_chars = len((data.get("message") or {}).get("thinking") or "")
+        if thinking_chars:
+            logger.info(
+                "ai_service: truncated while thinking (thinking_chars=%d) — model thinking mode is on; "
+                "set ollama.think_default=false / OLLAMA_THINK=false",
+                thinking_chars,
+            )
         raise _TruncatedResponseError(data.get("eval_count"))
     content = data["message"]["content"]  # Ollama's documented chat shape
     raw = json.loads(content)
@@ -615,11 +657,12 @@ async def _one_attempt(client: httpx.AsyncClient, settings: Settings, payload: d
     # token counts are observable, and none of these fields can ever embed
     # SQL text or prompt content.
     logger.info(
-        "ai_service: ollama response done_reason=%s eval_count=%s prompt_eval_count=%s total_duration_ms=%s",
+        "ai_service: ollama response done_reason=%s eval_count=%s prompt_eval_count=%s total_duration_ms=%s thinking_chars=%d",
         data.get("done_reason"),
         data.get("eval_count"),
         data.get("prompt_eval_count"),
         (data.get("total_duration") or 0) // 1_000_000,
+        len(data["message"].get("thinking") or ""),
     )
     return parsed
 
@@ -721,6 +764,7 @@ async def get_ai_result(
             estimate_improvement_allowed=estimate_allowed,
             literal_hints=mask_result.literal_hints,
             where_evidence=where_evidence,
+            structure_flags=sorted(representative.complexity_flags) if representative else [],
         )
 
         raw = await _request_ai(settings, payload)

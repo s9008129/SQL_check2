@@ -40,6 +40,14 @@ ollama:
   temperature: 0.2
   keep_alive: "30m"
   max_retries_on_invalid_json: 1
+  # 2026-09-17 新增：關閉 Gemma4 的「思考模式」。實測（正式主機直接打 Ollama）確認
+  # 預設開啟思考時，含 OR 條件的簡單查詢會把 3072 個 num_predict 全部耗在內部推理
+  # （抓到 8,431 字的 thinking 內容），content 完全空白、done_reason=length，最終
+  # 降級成「暫時無法使用」；關閉後同一查詢 14 秒完成、輸出完整 JSON。結構化 JSON
+  # 輸出任務不需要思考模式，這也讓每次回應快 3–5 倍。可用環境變數 OLLAMA_THINK=true
+  # 重新開啟（例如換成不支援 think 參數的模型時設為 true 以外的值不會有影響）。
+  think_env: OLLAMA_THINK
+  think_default: false
 
 # 建議寫法 / 預估改善幅度守門條件（PRD §17.4、§25）。
 ai_gate:

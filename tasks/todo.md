@@ -114,4 +114,17 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
   Ollama schema 必填 `rewrite_outcome`、prompt 要求 example 片段與假設、前端三種文案、
   蒐集檔記錄 outcome。後端 277 測試、前端 57 測試、build 全過。
 - 待辦：正式主機 `git pull` + `deploy.ps1` 後，用 6 份檔案重測，預期「無需改寫」綠色呈現；
-  用含 TRUNC 的 SQL 確認仍能拿到建議寫法。
+  用含 TRUNC 的 SQL 確認仍能拿到建議寫法。（2026-09-17 上午已完成驗證）
+
+## 2026-09-17 下午：關閉思考模式、結構事實入 payload、寫法良好需附檢查清單
+- 完成：`ollama.think_default=false`（OLLAMA_THINK 可覆寫）；payload 新增 structure_flags；
+  prompt 新增 not_needed 前檢查清單、reason 需列檢查項目、結構變更一律 advice_only、
+  SUBSTR 前綴改寫用前綴上下界、LIKE 'xxx%' 不改；`_revalidate_suggested_sql` 新增結構旗標
+  相等比對。用本機程式碼直連正式主機 Gemma4 驗證 9 案全部正確，283 測試全過。
+- 待辦：正式主機重新部署後，用「NOT IN 子查詢」與「OR 跨欄位」SQL 確認不再出現
+  「暫時無法使用」。
+- **安全待辦**：正式主機 Ollama 11434 可從區網直接連線（開發機實測 curl 成功）。deploy.ps1
+  的規則只放行 WSL 介面，表示另有放行規則（在正式主機執行
+  `Get-NetFirewallRule | Where-Object {$_.Enabled -eq 'True'} | Get-NetFirewallPortFilter | Where-Object LocalPort -eq 11434`
+  查出來源）。建議加一條 Block 規則限制 LocalSubnet 來源，並在 deploy.ps1 加入自動驗證
+  與回滾（容器內 curl host.docker.internal:11434 成功才保留）。

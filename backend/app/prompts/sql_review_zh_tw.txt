@@ -46,8 +46,15 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
   "none"/"leading"/"trailing"/"both"（該字串是否為 LIKE 前置／後置／雙邊萬用字元
   樣式）, shape: "digits"/"alnum"/"text"}。這些資訊**不含實際值**，只是讓你能判斷
   「這是一個前置萬用字元的 LIKE 樣式」「這是一串純數字」之類的結構特徵，藉此提出更具體
-  的改善建議（例如 wildcard 為 "trailing" 通常代表年度／日期前綴查詢，值得評估改成範圍
-  比較）。
+  的改善建議（注意：wildcard 為 "trailing" 的後置萬用字元在 Oracle 本來就能以範圍方式
+  處理，**不是**改善對象；只有 "leading"／"both" 才值得提醒）。
+- structure_flags：系統解析器對這段 SQL 偵測到的結構特徵，是**既定事實**，請逐一對照檢查：
+  not_in_subquery（NOT IN 子查詢：若子查詢欄位可能為 NULL，整個條件會不回傳任何資料，
+  且通常 NOT EXISTS 較有機會被有效率地處理——這是需要業務確認的 advice_only 情況）、
+  distinct（DISTINCT，若同時有多個 JOIN，常是用來掩蓋 JOIN 產生的重複列，值得提醒確認
+  JOIN 鍵值是否完整）、outer_join、group_by_aggregate、select_star（SELECT *，建議明列
+  欄位）、cartesian_join（缺少 JOIN 條件，務必提醒）、correlated_subquery、window_function、
+  connect_by、set_operation、rownum。
 - where_evidence（僅在系統判定「雖未寫 WHERE 但仍有限制條件證據」時才會出現）：
   {kind, detail}。kind 可能是 source_where（限制條件在子查詢／WITH 內）、
   join_on_constant（INNER JOIN 的 ON 含常數條件）、join_on_outer_constant（限制條件在
@@ -73,7 +80,9 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
      有內容時）是例外，仍應提出。
    - 後置萬用字元的 LIKE（例如 `LIKE '114%'`、`LIKE '07%'`）在 Oracle 中本來就能以
      範圍方式處理，**不是**需要改善的寫法，不要建議把它改成日期範圍；只有前置萬用字元
-     （`LIKE '%xxx'`）才值得提醒。
+     （`LIKE '%xxx'`）才值得提醒。前置萬用字元沒有等價的改寫，example 請寫出實際可行的
+     替代方向（例如「若業務上只需比對開頭，可改為 `LIKE 'xxx%'`；若需要全文比對，建議
+     評估建立文字索引」），不要編造不存在的佔位符或把它硬改成等號比對。
 3. suggested_sql（建議寫法）：
    - **candidate_allowed 為 true 時的預設行為：只要你的任何一項改善建議會實際改變 SQL
      文字（例如把 LIKE 前置萬用字元改成範圍查詢、把條件欄位的函數移除、調整日期比對寫
@@ -89,6 +98,24 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
      - "provided"：available 為 true，sql 欄位有完整改寫。
      - "not_needed"：對應上面的 (a)——目前寫法已良好、沒有文字層面需要改的地方。此時
        summary 要明確寫出「目前寫法良好」，estimated_improvement_pct 填 0。
+       **在選擇 not_needed 之前，必須先逐項檢查下列「規則引擎不會自動偵測」的細微寫法**，
+       任何一項命中就不能選 not_needed：
+       (1) 條件欄位是否套了函數或運算（UPPER／TRIM／SUBSTR／TO_CHAR／NVL／`+ 0`／`|| `
+           串接等）；
+       (2) 隱含型別轉換：同一段 SQL 裡，類似性質的代碼欄位有的用引號、有的沒引號（例如
+           `COLL_YR = 107` 但 `LEVY_TP = '1'`），代表其中一邊可能在比對時被資料庫隱含轉型。
+           你看不到欄位的實際型別，所以遇到這種混用時要以 advice_only 提醒「若 COLL_YR 為
+           文字欄位，建議改為 '107'」，而不是在 reason 裡宣稱「無隱含型別轉換」——你無法
+           驗證的事情不要寫成已確認；
+       (3) structure_flags 含 not_in_subquery、cartesian_join、select_star、
+           correlated_subquery；
+       (4) DISTINCT 搭配多個 JOIN（可能在掩蓋 JOIN 重複列）；
+       (5) OR 連接不同欄位的條件（可評估改為 IN 或拆成 UNION ALL，但這是結構變更，只能
+           advice_only）。
+       **not_needed 的 reason 必須列出你實際檢查過的項目**，讓同仁能驗證你不是隨口說好，
+       格式例如：「已檢查：條件皆為欄位直接比對、未對欄位套函數或運算、引號用法一致、
+       JOIN 皆有鍵值對應、無 NOT IN 子查詢、無前置萬用字元。」只列你**真的能從 SQL 文字
+       看出來**的項目；不可以只寫「目前寫法已良好」一句話。
      - "advice_only"：對應上面的 (b)——有改善方向，但需要業務確認才能等價改寫，因此只
        在 advice 的 example 給片段與假設，不產生完整改寫。
      不要把「其實沒東西可改」說成 advice_only，也不要把「需要假設」說成 not_needed。
@@ -109,6 +136,19 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
         SUM／AVG 等）都必須與原始 SQL 相同。
      5. SELECT 子句的欄位數必須與原始 SQL 相同。
      6. 不可以新增任何 Hint（包含 Parallel Hint）或 ROWNUM。
+     6-1. 不可以做任何「結構變更」：引入原本沒有的 UNION／UNION ALL／MINUS／INTERSECT、
+        新增或移除子查詢、把子查詢改成 JOIN、`NOT IN` 改 `NOT EXISTS`（子查詢欄位含 NULL
+        時結果會不同）、`IN` 改 `EXISTS`、拆分或合併 GROUP BY 欄位（例如把
+        `GROUP BY a||b` 改成 `GROUP BY a, b`）、移除 DISTINCT。這些一律只能放在 advice 的
+        example 並設為 advice_only，不能放進 sql 欄位——系統會用結構比對把它們擋下來，
+        擋下來的結果對同仁來說比「僅提供方向」更不友善。
+     6-2. 前綴比對的等價改寫必須用「前綴上下界」：`SUBSTR(A.COL,1,3) = '114'` 的等價寫法是
+        `A.COL >= '114' AND A.COL < '115'`（下一個前綴），**不可以**自行補成
+        `'1140101'`～`'1150101'` 這種假設了日期格式的範圍——那會改變結果。只有欄位確定是
+        DATE 型別（例如 `TO_CHAR(A.TXN_DATE,'YYYY') = '2024'`）才可以改成 TO_DATE 的年度
+        起訖範圍。這條只適用於「欄位套了 SUBSTR」的情況；原本就寫成 `A.COL LIKE '114%'`
+        的條件**不要**改成範圍寫法——兩者對資料庫來說效能相同，改了沒有任何好處，卻讓
+        同仁誤以為原本的寫法有問題。
      7. 改寫後的 SQL 必須與原始 SQL 不同（否則沒有改寫的意義）。
      8. 改寫後重新檢核時，不可以出現新的「不符合中心規範」項目，也不可以比原本多出
         「提醒」項目。

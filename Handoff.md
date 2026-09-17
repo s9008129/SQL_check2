@@ -115,6 +115,13 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
   直連正式主機 Gemma4 驗證（DISTINCT＋JOIN 案例回「移除 DISTINCT 前，請先確認 JOIN 後的
   資料是否已經唯一；若不是，拿掉 DISTINCT 會改變查詢結果…」）。
 
+### 2026-09-17 深夜：5 案盲點測試、docx 巢狀 SQL、Ollama 截斷防線、改名 SQLCheck AI
+- 系統標題改為「SQLCheck AI｜SQL 效能優化助手」（index.html、App.tsx 品牌區、app.yaml `app.name/title`、FastAPI title）。README／deploy 腳本仍用專案代號 SQLCheck 2.0，未改。
+- **Ollama 靜默截斷 prompt（最重要）**：長 SQL 讓 prompt 超過 `num_ctx` 時 Ollama 不報錯，模型失去系統指令後回英文、捏造資料表。現在 `ai_service._num_ctx_for` 依 prompt 長度在 `num_ctx_default`（8192）～`num_ctx_max`（32768，`OLLAMA_NUM_CTX_MAX`）間自動放大（1024 倍數；小查詢也會因保留完整 num_predict 而升到 10240）；回應 `prompt_eval_count >= num_ctx` 一律降級不重試；summary ≥20 字無中文視為無效（重試一次後降級）。
+- **sql_detect 括號深度感知**：`FROM (` 後空行再 `SELECT` 的巢狀查詢不再被切成多段、不再在括號內塞 `;`；括號未閉合時也不做尾隨散文截斷。
+- 其他盲點：R001 等於門檻時說明改「達到或超過規範門檻」；模型自創的 `:STR_NNN` 綁定改顯示 `:VALUE`（`masking.scrub_invented_placeholders`，只動原始 SQL 沒有的名稱）；前端 `looksLikeSqlFragment` 讓中文散文型 example 不進逐段對照。
+- 已確認為設計而非 bug：R008 在 `forbidden_operations` 空清單時對 UPDATE 重要資料表只給 R007 提醒；改善指數可在「符合中心規範」下仍達 80+（優先改善），因 NOTICE 權重加總所致。
+
 ## 4. 「AI 沒給建議寫法」的判讀順序（接手後最常被問）
 
 1. 看 API 回應或畫面的 outcome：
@@ -122,13 +129,13 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
    - `advice_only`：有方向但需業務假設 → 看「逐段對照」是否有 before/example。這是設計行為，不是 bug。
    - `gated`：守門擋（多段、非 SELECT、解析失敗、禁止旗標）→ reason 會寫具體原因。
    - `rejected`：模型給了改寫但結構複核擋下 → reason 有具體項目（例如「GROUP BY 與原始不同」）。若複核過嚴可討論放寬，但要先確認語意真的等價。
-   - AI 狀態 `unavailable`：正式主機 `docker compose logs sqlcheck | Select-String ai_service` 看 `done_reason`、`thinking_chars`、`eval_count`；若 thinking_chars>0 表示思考模式又被打開。
+   - AI 狀態 `unavailable`：正式主機 `docker compose logs sqlcheck | Select-String ai_service` 看 `done_reason`、`thinking_chars`、`eval_count`；若 thinking_chars>0 表示思考模式又被打開。若看到 `prompt truncated by ollama`，代表 SQL 長到連 `num_ctx_max` 都不夠，調高 `OLLAMA_NUM_CTX_MAX` 或請同仁拆分 SQL；若看到 `response not in Chinese`，先查同一請求的 `num_ctx raised to` 與 `prompt_eval_count` 是否貼近上限。
 2. 重現方式：用第 6 節的直連腳本，不需要重新部署。
 3. 已知模型品質限制（不是程式 bug）：偶爾漏提引號一致性（`coll_yr = 107`）；TO_CHAR 範例可能假設 'YYYYMMDD' 而非民國日期；before 偶爾跳行複製導致與原文不完全逐字相同（前端仍能 diff）。
 
 ## 5. 目前狀態與驗證數據
 
-- 最新狀態：後端 294 項測試、前端 71 項測試、ruff、build 全過（2026-09-17 晚，畫面調整 commit）。
+- 最新狀態：後端 300 項測試、前端 74 項測試、ruff、build 全過（2026-09-17 深夜，盲點修復與改名 commit）。docx 三層巢狀真實案例已用本機程式碼直連正式主機 Gemma4 驗證（num_ctx 16384、43 秒、中文 advice_only）。
 - 正式主機最後一次由使用者部署的版本在 `6a7294c` 之前；**`80f78e8`（放大字級）、`815c056`（全頁視覺）與本次畫面調整尚未部署**，需 `git pull` + `deploy\deploy.ps1`。
 - 使用者人工驗證（test_01～03.pdf）：多重缺陷 SQL、笛卡兒積 SQL、乾淨 SQL 三案皆符合預期。
 - 報告：`E2E_TEST_report_20260917.md`、`E2E_TEST_report_20260917_round2.md`、`SQLCheck2_E2E_test_report_20260916.md`。

@@ -73,6 +73,10 @@ class OllamaSettings:
     keep_alive: str
     max_retries_on_invalid_json: int
     think: bool = False
+    # 2026-09-17: upper bound for the per-request num_ctx that ai_service
+    # raises when a long SQL would not fit into `num_ctx` (see
+    # ai_service._num_ctx_for). Default 32768 = Gemma4's comfortable window.
+    num_ctx_max: int = 32768
 
 
 @dataclass(frozen=True)
@@ -148,6 +152,10 @@ def get_settings() -> Settings:
             ollama_section.get("think_env", "OLLAMA_THINK"),
             bool(ollama_section.get("think_default", False)),
         ),
+        num_ctx_max=_env_int(
+            ollama_section.get("num_ctx_max_env", "OLLAMA_NUM_CTX_MAX"),
+            int(ollama_section.get("num_ctx_max_default", 32768)),
+        ),
     )
 
     masking = MaskingSettings(
@@ -168,8 +176,8 @@ def get_settings() -> Settings:
     )
 
     return Settings(
-        app_name=app_section.get("name", "SQLCheck 2.0"),
-        app_title=app_section.get("title", "SQL 效能檢核"),
+        app_name=app_section.get("name", "SQLCheck AI"),
+        app_title=app_section.get("title", "SQL 效能優化助手"),
         upload=upload,
         ollama=ollama,
         ai_gate=app_cfg.get("ai_gate", {}),

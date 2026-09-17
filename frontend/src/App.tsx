@@ -131,8 +131,8 @@ export default function App() {
           <div className="brand">
             <div className="brand-mark">SQL</div>
             <div>
-              <div className="brand-title">SQLCheck 2.0</div>
-              <div className="brand-sub">SQL 效能檢核</div>
+              <div className="brand-title">SQLCheck AI</div>
+              <div className="brand-sub">SQL 效能優化助手</div>
             </div>
           </div>
           <div className="top-actions">

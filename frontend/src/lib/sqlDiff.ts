@@ -156,6 +156,18 @@ export function computeAlignedDiff(original: string, suggested: string): Aligned
  * null when nothing plausible matches so the caller can fall back to
  * showing the example on its own.
  */
+/**
+ * 2026-09-17 blind-spot fix: the model occasionally puts prose in `example`
+ * (「若業務上只需比對開頭，可改為 `A.NAME LIKE '股份%'`；…」). Such text must
+ * not be diffed as if it were SQL. Heuristic: after removing quoted string
+ * literals (which legitimately hold Chinese, e.g. '%股份'), a SQL fragment
+ * contains no CJK characters and no full-width punctuation.
+ */
+export function looksLikeSqlFragment(text: string): boolean {
+  const withoutLiterals = text.replace(/'(?:[^']|'')*'/g, "''");
+  return !/[㐀-鿿＀-￯　-〿]/.test(withoutLiterals);
+}
+
 export function locateOriginalFragment(originalSql: string, example: string): string | null {
   const tokenize = (s: string) =>
     new Set(

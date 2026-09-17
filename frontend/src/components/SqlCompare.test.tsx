@@ -90,6 +90,27 @@ describe("SqlCompare", () => {
     expect(blocks[1].textContent).toContain("tax_cd");
   });
 
+  it("does not diff a prose-only example as if it were SQL", () => {
+    render(
+      <SqlCompare
+        originalSql="SELECT A.TAX_ID FROM HOUT120 A WHERE A.NAME LIKE '%股份'"
+        ai={makeAi({
+          advice: [
+            {
+              title: "調整前置萬用字元比對",
+              explanation: "e",
+              before: "A.NAME LIKE '%股份'",
+              example: "若業務上只需比對開頭，可改為 `A.NAME LIKE '股份%'`；若需要全文比對，建議評估建立文字索引。",
+              impact: "high",
+            },
+          ],
+          suggested_sql: { available: false, reason: "r", sql: null, outcome: "advice_only" },
+        })}
+      />,
+    );
+    expect(screen.queryByTestId("fragment-diff")).toBeNull();
+  });
+
   it("splits a business-assumption prefix out of the example into a note", () => {
     render(
       <SqlCompare

@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { computeSqlLineDiff } from "./sqlDiff";
+import { computeSqlLineDiff, looksLikeSqlFragment } from "./sqlDiff";
+
+describe("looksLikeSqlFragment", () => {
+  it("accepts SQL whose only Chinese is inside a string literal", () => {
+    expect(looksLikeSqlFragment("A.NAME LIKE '%股份'")).toBe(true);
+    expect(looksLikeSqlFragment("A.TXN_DATE >= :D AND A.TXN_DATE < :D + 1")).toBe(true);
+  });
+
+  it("rejects prose the model put in `example`", () => {
+    expect(looksLikeSqlFragment("若業務上只需比對開頭，可改為 `A.NAME LIKE '股份%'`；若需要全文比對，建議評估建立文字索引。")).toBe(false);
+    expect(looksLikeSqlFragment("確認查詢範圍")).toBe(false);
+  });
+});
 
 describe("computeSqlLineDiff", () => {
   it("marks an identical pair with no highlighted lines", () => {

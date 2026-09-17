@@ -40,7 +40,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.schemas import AdviceItem, AiResult, Finding, SuggestedSql
 from app.services import rule_engine
-from app.services.masking import mask_sql, unmask_sql
+from app.services.masking import mask_sql, scrub_invented_placeholders, unmask_sql
 from app.services.rule_engine import GLOBAL_STATEMENT_INDEX
 from app.services.sql_parser import ParsedStatement, parse_sql_text, structural_signature
 from app.settings import PROMPTS_DIR, Settings
@@ -593,6 +593,8 @@ def _finalize(
     cost: int,
     rules_config: dict[str, Any],
     important_tables_config: dict[str, Any],
+    *,
+    original_sql: str = "",
 ) -> AiResult:
     forbidden = ai_guard_cfg.get("forbidden_phrases", [])
     vocab = ai_guard_cfg.get("vocabulary_replacements", {})
@@ -618,6 +620,20 @@ def _finalize(
     )
     pct = _clamp_round_pct(raw.estimated_improvement_pct, estimate_allowed)
 
+    # 2026-09-17: a `:STR_001` the model made up (not in the reverse map, not
+    # in the user's SQL) must not reach the reviewer — see masking.py.
+    advice = [
+        item.model_copy(
+            update={
+                "example": scrub_invented_placeholders(item.example, original_sql),
+                "before": scrub_invented_placeholders(item.before, original_sql),
+            }
+        )
+        for item in advice
+    ]
+    if suggested_sql.sql:
+        suggested_sql = suggested_sql.model_copy(update={"sql": scrub_invented_placeholders(suggested_sql.sql, original_sql)})
+
     logger.info(
         "ai_service: model available=%s advice=%d pct=%s",
         suggested_sql.available,
@@ -637,8 +653,36 @@ def _unavailable() -> AiResult:
 # ---------------------------------------------------------------------------
 # Ollama network call
 # ---------------------------------------------------------------------------
+_CJK_RE = re.compile(r"[㐀-鿿]")
+
+
+def _estimate_tokens(text: str) -> int:
+    """Slightly pessimistic token estimate, calibrated against Ollama's
+    `prompt_eval_count` for the Gemma4 tokenizer on 2026-09-17: the Chinese
+    system prompt (4,379 CJK + 5,999 other chars) measured ≈5,000 tokens;
+    this formula gives 5,879 (~1.17×). Over-estimating only costs a little
+    KV-cache; under-estimating silently truncates the prompt (see
+    `_PromptTruncatedError`)."""
+    cjk = len(_CJK_RE.findall(text))
+    return int(cjk + (len(text) - cjk) / 4) + 1
+
+
+def _num_ctx_for(settings: Settings, system_prompt: str, user_content: str) -> int:
+    """2026-09-17: size the context window per request. Ollama does NOT
+    fail when the prompt exceeds num_ctx — it drops tokens silently, and a
+    model that lost its system prompt answers in English and invents table
+    names (seen on a production DOCX). Needed = prompt + reply + margin,
+    rounded up to 1024, clamped to [num_ctx, num_ctx_max]."""
+    needed = _estimate_tokens(system_prompt) + _estimate_tokens(user_content) + settings.ollama.num_predict + 512
+    rounded = ((needed + 1023) // 1024) * 1024
+    return max(settings.ollama.num_ctx, min(rounded, settings.ollama.num_ctx_max))
+
+
 def _chat_request_body(settings: Settings, payload: dict[str, Any]) -> dict[str, Any]:
     user_content = "<SQL_DATA>\n" + json.dumps(payload, ensure_ascii=False) + "\n</SQL_DATA>"
+    num_ctx = _num_ctx_for(settings, SYSTEM_PROMPT, user_content)
+    if num_ctx > settings.ollama.num_ctx:
+        logger.info("ai_service: num_ctx raised to %d for a long prompt (default %d)", num_ctx, settings.ollama.num_ctx)
     return {
         "model": settings.ollama.model,
         "messages": [
@@ -653,7 +697,7 @@ def _chat_request_body(settings: Settings, payload: dict[str, Any]) -> dict[str,
         "think": settings.ollama.think,
         "options": {
             "temperature": settings.ollama.temperature,
-            "num_ctx": settings.ollama.num_ctx,
+            "num_ctx": num_ctx,
             # Config-driven rather than a hardcoded 1024: OllamaSettings
             # already carries num_predict (default 1024, same value) for
             # exactly this purpose.
@@ -677,17 +721,40 @@ class _TruncatedResponseError(Exception):
         self.eval_count = eval_count
 
 
+class _PromptTruncatedError(Exception):
+    """Raised when Ollama's `prompt_eval_count` reached the `num_ctx` we
+    sent: the prompt was silently cut, so whatever the model answered was
+    produced without (part of) the system prompt and/or the SQL. Never
+    retried — the same prompt would be cut the same way."""
+
+    def __init__(self, prompt_eval_count: int, num_ctx: int):
+        super().__init__("prompt truncated")
+        self.prompt_eval_count = prompt_eval_count
+        self.num_ctx = num_ctx
+
+
+class _NonChineseResponseError(ValueError):
+    """The prompt mandates Traditional Chinese; a long summary with no CJK
+    character at all means the model lost its instructions (observed
+    together with prompt truncation). Treated like an invalid response:
+    retried once, then degraded."""
+
+
+_MIN_SUMMARY_LEN_FOR_LANGUAGE_CHECK = 20
+
+
 async def _one_attempt(client: httpx.AsyncClient, settings: Settings, payload: dict[str, Any]) -> _AiRawResponse:
     """Exactly one POST + parse + validate. Raises on any problem; the
     caller decides retry-once (invalid JSON/shape) vs immediate-fail
     (connection/timeout/HTTP-status/truncation) based on the exception type.
     """
-    resp = await client.post(
-        f"{settings.ollama.base_url}/api/chat",
-        json=_chat_request_body(settings, payload),
-    )
+    body = _chat_request_body(settings, payload)
+    resp = await client.post(f"{settings.ollama.base_url}/api/chat", json=body)
     resp.raise_for_status()
     data = resp.json()
+    prompt_eval_count = data.get("prompt_eval_count")
+    if isinstance(prompt_eval_count, int) and prompt_eval_count >= body["options"]["num_ctx"]:
+        raise _PromptTruncatedError(prompt_eval_count, body["options"]["num_ctx"])
     if data.get("done_reason") == "length":
         thinking_chars = len((data.get("message") or {}).get("thinking") or "")
         if thinking_chars:
@@ -700,6 +767,9 @@ async def _one_attempt(client: httpx.AsyncClient, settings: Settings, payload: d
     content = data["message"]["content"]  # Ollama's documented chat shape
     raw = json.loads(content)
     parsed = _AiRawResponse.model_validate(raw)
+    summary = parsed.summary or ""
+    if len(summary) >= _MIN_SUMMARY_LEN_FOR_LANGUAGE_CHECK and not _CJK_RE.search(summary):
+        raise _NonChineseResponseError("summary contains no Chinese")
     # INFO, never DEBUG: this is the only place the actual model latency and
     # token counts are observable, and none of these fields can ever embed
     # SQL text or prompt content.
@@ -732,6 +802,14 @@ async def _request_ai(settings: Settings, payload: dict[str, Any]) -> _AiRawResp
                 return await _one_attempt(client, settings, payload)
             except (httpx.RequestError, httpx.HTTPStatusError):
                 return None
+            except _PromptTruncatedError as exc:
+                logger.info(
+                    "ai_service: prompt truncated by ollama (prompt_eval_count=%d >= num_ctx=%d) — "
+                    "degrading without retry; raise ollama.num_ctx_max or shorten the SQL",
+                    exc.prompt_eval_count,
+                    exc.num_ctx,
+                )
+                return None
             except _TruncatedResponseError as exc:
                 logger.info(
                     "ai_service: model output truncated (done_reason=length, eval_count=%s) — "
@@ -739,6 +817,8 @@ async def _request_ai(settings: Settings, payload: dict[str, Any]) -> _AiRawResp
                     exc.eval_count,
                 )
                 return None
+            except _NonChineseResponseError:
+                logger.info("ai_service: response not in Chinese — retrying once")
             except (json.JSONDecodeError, ValidationError, KeyError, TypeError):
                 pass  # retry exactly once below
 
@@ -746,11 +826,16 @@ async def _request_ai(settings: Settings, payload: dict[str, Any]) -> _AiRawResp
                 return await _one_attempt(client, settings, payload)
             except (httpx.RequestError, httpx.HTTPStatusError):
                 return None
+            except _PromptTruncatedError:
+                return None
             except _TruncatedResponseError as exc:
                 logger.info(
                     "ai_service: model output truncated again on retry (done_reason=length, eval_count=%s) — degrading",
                     exc.eval_count,
                 )
+                return None
+            except _NonChineseResponseError:
+                logger.info("ai_service: response not in Chinese again on retry — degrading")
                 return None
             except (json.JSONDecodeError, ValidationError, KeyError, TypeError):
                 return None
@@ -836,6 +921,7 @@ async def get_ai_result(
             cost,
             settings.rules_config,
             settings.important_tables_config,
+            original_sql=sql_text,
         )
     except Exception as exc:
         # PRD §50.4: exception type only, never a message/traceback that

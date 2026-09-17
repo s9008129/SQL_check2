@@ -53,6 +53,17 @@ class DetectResult:
     message: str
 
 
+_COMMENT_OR_STRING_RE = re.compile(r"/\*.*?\*/|--[^\n]*|'(?:[^']|'')*'", re.DOTALL)
+
+
+def _paren_depth(text: str) -> int:
+    """Net count of `(` minus `)` outside comments and string literals. A
+    positive value means the text ends inside an open parenthesis, i.e. it
+    cannot be a complete statement on its own."""
+    stripped = _COMMENT_OR_STRING_RE.sub(" ", text)
+    return stripped.count("(") - stripped.count(")")
+
+
 def _trim_trailing_prose(segment: str) -> str:
     """A candidate block runs from its opening keyword to the *next*
     statement-start match (or end of text) — never cut at a bare blank line,
@@ -73,7 +84,10 @@ def _trim_trailing_prose(segment: str) -> str:
     kept = [paragraphs[0]]
     for para in paragraphs[1:]:
         first_line = next((ln for ln in para.split("\n") if ln.strip()), "")
-        if _CONTINUATION_RE.match(first_line):
+        # 2026-09-17: inside an open parenthesis (a subquery written as
+        # `FROM (` <blank line> `SELECT …`) nothing is trailing prose yet —
+        # the statement cannot have ended before the paren closes.
+        if _CONTINUATION_RE.match(first_line) or _paren_depth("\n\n".join(kept)) > 0:
             kept.append(para)
         else:
             break
@@ -81,11 +95,23 @@ def _trim_trailing_prose(segment: str) -> str:
 
 
 def _candidate_blocks(text: str) -> list[str]:
+    """Split free text at statement-start keywords, but never inside an open
+    parenthesis: a nested query such as `FROM (` … `SELECT …` `)` is ONE
+    statement (2026-09-17 fix — a production DOCX with three nesting levels
+    was being cut into five fragments with `;` injected inside the parens,
+    so every fragment was incomplete and the AI could only say so)."""
     matches = list(_STATEMENT_START_RE.finditer(text))
-    blocks: list[str] = []
+    raw_blocks: list[str] = []
     for i, m in enumerate(matches):
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        block = _trim_trailing_prose(text[m.start() : end]).strip()
+        raw = text[m.start() : end]
+        if raw_blocks and _paren_depth(raw_blocks[-1]) > 0:
+            raw_blocks[-1] += raw
+        else:
+            raw_blocks.append(raw)
+    blocks: list[str] = []
+    for raw in raw_blocks:
+        block = _trim_trailing_prose(raw).strip()
         if block:
             blocks.append(block)
     return blocks

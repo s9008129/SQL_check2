@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import type { AdviceItem, AiResult } from "../types/api";
 import { FragmentDiff, FullSqlDiff } from "./SqlDiffView";
-import { locateOriginalFragment } from "../lib/sqlDiff";
+import { locateOriginalFragment, looksLikeSqlFragment } from "../lib/sqlDiff";
 import {
   AI_PENDING_MESSAGE,
   AI_UNAVAILABLE_MESSAGE,
@@ -46,7 +46,8 @@ function toSegments(originalSql: string, advice: AdviceItem[]): Segment[] {
     const raw = item.example?.trim();
     if (!raw) continue;
     const { sql: after, assumption } = splitAssumption(raw);
-    if (!after) continue;
+    // Prose-only examples stay on the advice card; they are not SQL to diff.
+    if (!after || !looksLikeSqlFragment(after)) continue;
     const before = item.before?.trim() || locateOriginalFragment(originalSql, after);
     const notes = [assumption ? `前提：${assumption}` : null, before ? null : "找不到對應的原始片段，僅顯示建議片段。"].filter(
       (n): n is string => n !== null,

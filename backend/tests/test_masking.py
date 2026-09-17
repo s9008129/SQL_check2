@@ -1,4 +1,10 @@
-from app.services.masking import DEIDENTIFY_FAILED_MARKER, deidentify_sql, mask_sql, unmask_sql
+from app.services.masking import (
+    DEIDENTIFY_FAILED_MARKER,
+    deidentify_sql,
+    mask_sql,
+    scrub_invented_placeholders,
+    unmask_sql,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +236,18 @@ def test_deidentify_never_raises_on_garbage_input():
 
 def test_deidentify_empty_input():
     assert deidentify_sql("") == ""
+
+
+def test_scrub_invented_placeholders_neutralises_only_model_made_binds():
+    # 2026-09-17 blind-spot test: the model invented `:STR_001` for a
+    # statement that had no literal, so nothing in reverse_map matched and the
+    # masking-internal name leaked to the reviewer.
+    original = "SELECT B.TAX_ID FROM HOUT130 B"
+    assert scrub_invented_placeholders("WHERE B.TAX_ID = :STR_001", original) == "WHERE B.TAX_ID = :VALUE"
+    # A bind the user's own SQL already uses must survive untouched.
+    original2 = "SELECT A.X FROM T A WHERE A.Y = :STR_001"
+    assert scrub_invented_placeholders("A.Y = :STR_001 AND A.Z = :NUM_007", original2) == "A.Y = :STR_001 AND A.Z = :VALUE"
+    assert scrub_invented_placeholders(None, original) is None
 
 
 def test_deidentify_failed_marker_leaks_nothing_when_reachable():

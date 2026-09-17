@@ -2,8 +2,8 @@
 # 環境變數（見 .env.example）永遠可覆寫本檔案列出的 *_env 對應項目。
 
 app:
-  name: "SQLCheck 2.0"
-  title: "SQL 效能檢核"
+  name: "SQLCheck AI"
+  title: "SQL 效能優化助手"
 
 upload:
   max_file_mb: 10
@@ -31,6 +31,15 @@ ollama:
   timeout_seconds_default: 180
   num_ctx_env: OLLAMA_NUM_CTX
   num_ctx_default: 8192
+  # 2026-09-17 新增：一份三層巢狀、含大量中文別名的正式 SQL（約 6,000 字）加上約
+  # 4,000 token 的 system prompt 超過 8192，Ollama 會「靜默截斷 prompt」
+  # （log 可見 prompt_eval_count 恰等於 num_ctx），模型失去系統指令後改用英文回答、
+  # 捏造資料表名稱。ai_service 現在依每次 prompt 長度估算需要的 num_ctx，
+  # 在 num_ctx_default 與 num_ctx_max 之間自動放大；若仍不足則降級為「暫時無法
+  # 使用」而不是顯示幻覺。num_ctx 越大 KV cache 越吃 VRAM，正式主機若回應明顯變慢
+  # 可調低此上限。
+  num_ctx_max_env: OLLAMA_NUM_CTX_MAX
+  num_ctx_max_default: 32768
   # 2026-09-16 由 1024 調高為 3072：實測（正式主機 E2E）確認 1024 對「中文
   # summary + 最多 3 條建議（各含 explanation/example）+ 完整 SQL 改寫」經常不夠，
   # 導致輸出被截斷成無效 JSON、觸發重試、最終降級為「暫時無法使用」。若正式主機

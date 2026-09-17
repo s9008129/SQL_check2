@@ -30,6 +30,8 @@ def test_cost_block_at_threshold(cfg):
     compliance, rows, findings = rule_engine.evaluate(parsed, 100000, rules_cfg, tables_cfg)
     r001 = _row(rows, "R001")
     assert r001.status == "BLOCK"
+    # Exactly-at-threshold must not read as 「超過」 (2026-09-17 blind-spot test).
+    assert r001.note == "達到或超過規範門檻 100,000"
     assert compliance.status == "BLOCK"
     assert compliance.label == "不符合中心規範"
     assert any(f.rule_id == "R001" and f.statement_index == -1 for f in findings)

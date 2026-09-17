@@ -65,7 +65,9 @@ def _eval_cost(cost: int, rules_config: dict[str, Any]) -> tuple[RuleRow, list[F
             name="COST",
             status="BLOCK",
             evidence=_fmt_int(cost),
-            note=f"超過規範門檻 {_fmt_int(threshold)}",
+            # `>=`: the rule is 「COST 須低於門檻」, so exactly-at-threshold is
+            # BLOCK too — say 「達到或超過」 so the boundary case reads correctly.
+            note=f"達到或超過規範門檻 {_fmt_int(threshold)}",
         )
         findings.append(
             Finding(rule_id="R001", status="BLOCK", fact=f"COST {_fmt_int(cost)}", statement_index=GLOBAL_STATEMENT_INDEX)

@@ -19,7 +19,7 @@ from app.api import router as api_router
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="SQLCheck 2.0", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="SQLCheck AI", docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(api_router, prefix="/api")
 
 def _find_static_dir(main_py_path: Path) -> Path | None:

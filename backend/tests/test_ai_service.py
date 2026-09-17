@@ -931,6 +931,57 @@ def _truncated_envelope() -> dict:
 
 
 @respx.mock
+async def test_prompt_truncated_by_ollama_degrades_without_retry(settings, chat_url, caplog):
+    # 2026-09-17 production DOCX: prompt_eval_count == num_ctx means Ollama
+    # silently cut the prompt; the (English, hallucinated) answer must never
+    # be shown. Ollama's own `prompt_eval_count` is the only signal.
+    caplog.set_level(logging.INFO, logger="app.services.ai_service")
+
+    def echo_num_ctx(request):
+        env = _ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False))
+        env["prompt_eval_count"] = json.loads(request.content)["options"]["num_ctx"]
+        return httpx.Response(200, json=env)
+
+    route = respx.post(chat_url).mock(side_effect=echo_num_ctx)
+    result = await _call(settings, _clean_select_statement())
+    assert result.status == "unavailable"
+    assert route.call_count == 1
+    assert "prompt truncated by ollama" in "\n".join(r.getMessage() for r in caplog.records)
+
+
+@respx.mock
+async def test_num_ctx_grows_with_long_sql_up_to_the_configured_max(settings, chat_url):
+    route = respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
+    )
+    # ~30k characters of SQL with Chinese aliases: far more than 8192 tokens.
+    long_sql = "SELECT " + ", ".join(f"A.C{i} AS 稅種{i}稅額_減因C" for i in range(1200)) + " FROM T A WHERE A.Y = 1"
+    statements = parse_sql_text(long_sql).statements
+    await _call(settings, statements, sql_text=long_sql)
+    sent_long = json.loads(route.calls[0].request.content)["options"]["num_ctx"]
+    assert sent_long > settings.ollama.num_ctx
+    assert sent_long <= settings.ollama.num_ctx_max
+    assert sent_long % 1024 == 0
+
+    await _call(settings, _clean_select_statement())
+    sent_short = json.loads(route.calls[-1].request.content)["options"]["num_ctx"]
+    # A short query never gets less than the configured default and always
+    # less than the long one (prompt + full num_predict reply must fit).
+    assert settings.ollama.num_ctx <= sent_short < sent_long
+
+
+@respx.mock
+async def test_non_chinese_summary_is_retried_once_then_degraded(settings, chat_url):
+    english = _good_inner(summary="This query joins land tax records with exemption records and filters by year.")
+    route = respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(english, ensure_ascii=False)))
+    )
+    result = await _call(settings, _clean_select_statement())
+    assert result.status == "unavailable"
+    assert route.call_count == 2
+
+
+@respx.mock
 async def test_truncated_response_degrades_without_retry(settings, chat_url):
     route = respx.post(chat_url).mock(return_value=httpx.Response(200, json=_truncated_envelope()))
     result = await _call(settings, _clean_select_statement())

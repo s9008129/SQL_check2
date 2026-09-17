@@ -120,6 +120,30 @@ def test_multi_statement_message_wording():
     assert "已辨識 3 段 SQL" in r.message
 
 
+def test_nested_subquery_with_blank_lines_is_one_statement():
+    # 2026-09-17 production DOCX: a three-level nested query, hand-formatted
+    # with blank lines after each `FROM (`. The free-text scanner used to cut
+    # it at every SELECT and inject `;` inside the open parens, producing five
+    # incomplete fragments.
+    text = (
+        "SELECT T3.*\nFROM\n  (\n\nSELECT T1.X, T2.Y\n    FROM\n      (\n        /*抓出面積*/\n\nSELECT M.X FROM Q.T604 M\n"
+        "            WHERE M.DATA_YR = '110'\n      ) T1,\n      (\n\nSELECT * FROM Q.T607 WHERE DATA_YR = '114'\n      ) T2\n"
+        "    WHERE T1.X = T2.X\n  ) T3;\n\n如有問題請洽承辦人。"
+    )
+    r = detect_sql(text, ".docx")
+    assert r.found is True
+    assert r.statement_count == 1
+    assert "(;" not in r.sql
+    assert r.sql.count(";") == 1
+    assert "如有問題" not in r.sql
+
+
+def test_two_real_statements_still_split_after_paren_fix():
+    text = "SELECT A.X FROM T A WHERE A.Y = (SELECT MAX(B.Y) FROM T B)\n\nSELECT C.Z FROM T C WHERE C.W = 1"
+    r = detect_sql(text, ".txt")
+    assert r.statement_count == 2
+
+
 def test_empty_text_not_found():
     r = detect_sql("", ".txt")
     assert r.found is False

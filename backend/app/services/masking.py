@@ -122,12 +122,34 @@ def unmask_sql(text: str | None, reverse_map: dict[str, str]) -> str | None:
     """Reverse-substitute known `:STR_NNN` / `:NUM_NNN` placeholders back to
     their original literal text (used on the AI's `suggested_sql.sql`, so a
     human reviewer sees real values, not placeholders, in the rewrite).
-    Placeholders with no known mapping are left as-is; never raises.
+    Placeholders with no known mapping are left as-is (the original SQL may
+    legitimately contain a bind named like one; ai_service decides what to do
+    with the ones the model invented, see `scrub_invented_placeholders`).
+    Never raises.
     """
     if not text:
         return text
     try:
         return _PLACEHOLDER_RE.sub(lambda m: reverse_map.get(m.group(0), m.group(0)), text)
+    except Exception:
+        return text
+
+
+# What a model-invented `:STR_NNN` / `:NUM_NNN` becomes (see below).
+INVENTED_PLACEHOLDER = ":VALUE"
+
+
+def scrub_invented_placeholders(text: str | None, original_sql: str) -> str | None:
+    """2026-09-17 blind-spot fix: the model sometimes invents a `:STR_001`-
+    style bind of its own (e.g. when suggesting a WHERE for a statement that
+    had no literal at all). After unmasking, any placeholder that is neither
+    in the reverse map nor literally present in the original SQL is masking
+    internals leaking to the reviewer — rewrite it to the neutral `:VALUE`.
+    Binds that the user's own SQL already contains are left untouched."""
+    if not text:
+        return text
+    try:
+        return _PLACEHOLDER_RE.sub(lambda m: m.group(0) if m.group(0) in original_sql else INVENTED_PLACEHOLDER, text)
     except Exception:
         return text
 

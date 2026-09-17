@@ -280,3 +280,13 @@
 - **通用教訓**：驗證「AI 是否可信」最有效的方法不是再問它一次，而是設計已知答案的對照組；
   對照組的失敗案例往往比成功案例更值錢——這次兩個「暫時無法使用」直接指向一個藏了兩天
   的根因。
+
+## 2026-09-17 晚：Ollama 靜默截斷 prompt、巢狀 SQL 被擷取器切碎
+
+- **失敗模式（一）**：一份三層巢狀、含大量中文別名的正式 docx SQL，AI 回覆變成英文、捏造不存在的資料表、reason 寫「No SQL provided」，outcome 卻是 not_needed（畫面會顯示「目前寫法良好」）。
+  **偵測訊號**：log 的 `prompt_eval_count` 恰等於 `num_ctx`（8192）。Ollama 對超長 prompt 不會報錯，而是靜默截斷，模型失去系統指令（中文、JSON 規則）。
+  **預防規則**：`ai_service._num_ctx_for` 依每次 prompt 長度估算 token（CJK 每字 1、其他每 4 字 1，實測約 1.17 倍）並在 `num_ctx`～`num_ctx_max` 間放大；回應後若 `prompt_eval_count >= 送出的 num_ctx` 一律降級（`_PromptTruncatedError`），summary 超過 20 字卻無任何中文也視為無效回覆（重試一次後降級）。**任何「模型突然講英文／講不存在的表」都先看 prompt_eval_count，不要先改 prompt。**
+- **失敗模式（二）**：同一份 docx 被 `sql_detect._candidate_blocks` 在每個 `SELECT` 切段，再用 `;` 串接，結果在還沒關閉的括號裡塞進分號（`FROM (;`），5 段全是殘缺 SQL。
+  **預防規則**：切段與 `_trim_trailing_prose` 皆改為括號深度感知（`_paren_depth`，忽略註解與字串常數）：括號未閉合前不切段、不視為尾隨散文。回歸測試 `test_nested_subquery_with_blank_lines_is_one_statement`。
+- **附帶盲點（已修）**：COST 剛好等於門檻時說明寫「超過」（改「達到或超過」）；模型自創的 `:STR_001` 綁定變數會原樣顯示給同仁（`scrub_invented_placeholders` 改為 `:VALUE`，但使用者 SQL 本來就有的同名綁定不動）；模型把中文散文放進 `example` 時前端會拿去逐字 diff（`looksLikeSqlFragment` 過濾）。
+- **未修的模型品質限制**：`SUBSTR(MANAGE_CD,6,3)='551'` 被建議成 `LIKE '__%551%'`（應為 `'_____551%'`）；引號不一致（`COLL_YR = 107`）仍偶爾漏提。

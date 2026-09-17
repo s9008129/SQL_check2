@@ -8,7 +8,10 @@ here because every function below exists to defend one of these):
 - The AI never decides compliance, never decides the improvement score,
   never invents Execution Plan / index / full-table-scan facts, and never
   fabricates a post-improvement Oracle COST. It only explains, advises, and
-  optionally proposes one rewrite / one heuristic improvement percentage.
+  optionally proposes one rewrite (which the server re-validates).
+- The improvement-potential level is derived server-side from verified
+  evidence only (`improvement_potential`): the model's own impact rating is
+  reference material for the advice card and can never raise the level.
 - The AI is never a single point of failure: every failure mode (connection
   refused, timeout, invalid JSON even after one retry, or any unexpected
   bug in this module) degrades to `AiResult(status="unavailable", ...)`
@@ -53,27 +56,50 @@ DEGRADE_MESSAGE = "智慧改善建議目前暫時無法使用，仍可依上方�
 
 _VERIFIED = {"verified", "corrected"}
 
+# 2026-09-17: rule ids whose findings are about the SQL *writing* itself
+# (they describe a concrete, checkable statement pattern). R007 (重要資料表)
+# is deliberately NOT one of them: it is a governance reminder about the data
+# being touched, not evidence about how the SQL is written.
+_WRITE_STYLE_RULE_IDS = frozenset({"R004", "R005", "R006"})
+
 
 def improvement_potential(result: AiResult, findings: list[Finding]) -> tuple[str | None, list[str]]:
-    """2026-09-17 user decision: the percentage the model used to give was
-    never measured (no plan, no stats, no rewritten COST), so it is replaced
-    by a level the server derives from things it actually knows:
-      high   — any BLOCK finding, or a high-impact advice whose fragment the
-               system confirmed result-preserving, or a full rewrite that
-               passed re-validation together with a high-impact advice;
-      medium — any NOTICE finding, or a passed full rewrite, or a medium-
-               impact advice with a confirmed fragment;
-      low    — any other advice (unconfirmed fragment, low impact, prose);
-      None   — nothing found (UI says 「目前寫法良好」).
-    Returns (level, basis lines) so the UI can show what it was derived from."""
+    """2026-09-17 user decision: the level is derived ONLY from facts the
+    server can observe for itself. The model's own `impact` rating is a
+    self-assessment — it has no Oracle execution plan, no real index, no
+    statistics and no cardinality — so it is shown on the advice card for
+    reference but can never raise (or lower) this level. The old percentage
+    was never measured, and the old "any NOTICE => medium" rule wrongly
+    promoted pure governance reminders.
+
+      high          — a BLOCK finding (deterministic non-compliance), or two
+                      or more server-verified improvement evidences;
+      medium        — exactly one server-verified improvement evidence;
+      low           — concrete SQL-writing findings (R004/R005/R006) or
+                      advisory prose, with no verified rewrite to back it;
+      "notice_only" — only governance reminders (e.g. R007 重要資料表): worth
+                      a human look, but no concrete SQL-writing improvement
+                      point was confirmed. The UI must NOT render this as
+                      「目前寫法良好」;
+      None          — nothing was found at all (UI says 「目前寫法良好」).
+
+    A "server-verified improvement evidence" is one of:
+      * an advice fragment whose before→example change the system re-validated
+        as result-preserving (`verification` is verified/corrected);
+      * a full suggested rewrite that passed the same re-validation
+        (`suggested_sql.outcome == "provided"`).
+    Returns (level, basis lines) so the UI can show what it was derived from.
+    """
     if result.status != "ok":
         return None, []
+
     blocks = sum(1 for f in findings if f.status == "BLOCK")
-    notices = sum(1 for f in findings if f.status == "NOTICE")
+    notices = [f for f in findings if f.status == "NOTICE"]
+    write_style_notices = [f for f in notices if f.rule_id in _WRITE_STYLE_RULE_IDS]
+    governance_notices = [f for f in notices if f.rule_id not in _WRITE_STYLE_RULE_IDS]
     provided = bool(result.suggested_sql and result.suggested_sql.outcome == "provided")
-    confirmed_high = [a for a in result.advice if a.impact == "high" and a.verification in _VERIFIED]
-    confirmed_medium = [a for a in result.advice if a.impact == "medium" and a.verification in _VERIFIED]
-    any_high = any(a.impact == "high" for a in result.advice)
+    verified_advice = [a for a in result.advice if a.verification in _VERIFIED]
+    evidence_count = len(verified_advice) + (1 if provided else 0)
 
     basis: list[str] = []
     if blocks or notices:
@@ -81,20 +107,25 @@ def improvement_potential(result: AiResult, findings: list[Finding]) -> tuple[st
         if blocks:
             parts.append(f"{blocks} 項不符合")
         if notices:
-            parts.append(f"{notices} 項提醒")
+            parts.append(f"{len(notices)} 項提醒")
         basis.append("規則檢核：" + "、".join(parts))
     if provided:
         basis.append("已提供整段建議寫法，系統已確認查詢結果不變")
+    if verified_advice:
+        basis.append(f"系統已驗證 {len(verified_advice)} 項建議片段可保留原查詢結果")
     # 2026-09-17 user request: the per-advice impact/verification breakdown
     # is NOT listed here (the advice cards already carry it).
 
-    if blocks or confirmed_high or (provided and any_high):
+    if blocks or evidence_count >= 2:
         return "high", basis
-    if notices or provided or confirmed_medium:
+    if evidence_count == 1:
         return "medium", basis
-    if result.advice:
+    if write_style_notices or result.advice:
         return "low", basis
+    if governance_notices:
+        return "notice_only", basis
     return None, basis
+
 
 _PROMPT_PATH = PROMPTS_DIR / "sql_review_zh_tw.txt"
 SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")

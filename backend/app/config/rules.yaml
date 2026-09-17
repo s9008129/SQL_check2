@@ -69,12 +69,15 @@ rules:
 #   1. 每一段 SQL（statement）分別計算 F_i（規則發現分）與 S_i（結構複雜度分）
 #   2. base = max_i(F_i + S_i)  — 多段 SQL 取「最需要優先處理的那一段」
 #   3. C = 依原始 COST 與門檻比例查表（全案件只有一個 COST，不分段）
-#   4. A = AI 對建議項目給的 impact（low/medium/high）換算後加總，設上限
-#   5. score = clamp(0, 100, base + C + A)
-#   6. 若任一段出現 BLOCK 等級 finding，score = max(score, block_floor)
+#   4. score = clamp(0, 100, base + C)
+#   5. 若任一段出現 BLOCK 等級 finding，score = max(score, block_floor)
 #
-# 這個模型讓 AI 能參與判讀（A 分量），但分數上限、下限與四捨五入全由程式與本檔案的
-# 數字控制，AI 無法自由打分，符合 PRD §16.1「不讓 AI 自由打分」的要求。
+# 2026-09-17 使用者決策：指數必須完全由「確定性事實」決定，不得再有任何 AI 分量。
+# 模型看不到 Oracle execution plan、真實 index、statistics、cardinality 或實際執行
+# 時間，它自己標的 impact（low/medium/high）因此不具備「效能影響高低」的證據力：
+# 只保留在 AI 建議卡上供人工參考，永不回灌正式分數。
+# 同樣的 SQL + COST + 本檔設定，不論 AI 是否可用、建議幾條、impact 標示為何，
+# 都必須得到完全相同的指數（PRD §16.1「不讓 AI 自由打分」）。
 # ---------------------------------------------------------------------------
 improvement_score:
   provisional: true
@@ -138,12 +141,3 @@ improvement_score:
         score: 14
       - max_ratio: null
         score: 15
-
-  # A：AI 判讀調整分（0–10）。AI 每條建議可附 impact，程式換算後加總並設上限；
-  # AI 不可用時 A=0，指數仍可完整計算（不因 AI 降級而無法顯示指數）。
-  ai_adjustment:
-    max: 10
-    impact_scores:
-      low: 0
-      medium: 2
-      high: 5

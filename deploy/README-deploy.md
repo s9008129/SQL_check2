@@ -402,7 +402,7 @@ cd deploy
 pwsh -NoProfile -File deploy/tests/firewall-helpers.Tests.ps1
 ```
 
-全部通過時結尾會印出 `ALL 67 FIREWALL HELPER CHECKS PASSED` 並以結束碼 0 結束。
+全部通過時結尾會印出 `ALL 96 FIREWALL HELPER CHECKS PASSED` 並以結束碼 0 結束。
 
 > **注意**：這支測試只涵蓋純判斷邏輯。`Get-NetFirewallRule`／`New-NetFirewallRule` 的實際
 > 行為、`vEthernet (WSL*)` 介面是否存在、以及「第二台電腦連不上 11434」的結果，仍只能在

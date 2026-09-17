@@ -165,7 +165,9 @@ CASES: list[GoldenCase] = [
         name="clean_sql_expects_no_advice",
         # Plainly good SELECT: bind equality only, no function on the
         # constrained columns, no structure flags. The model must not invent
-        # improvements for it (accepts advice==[] or outcome==not_needed).
+        # improvements: the case passes only when BOTH advice==[] AND
+        # outcome==not_needed hold; a not_needed answer that still carries
+        # advice is a FAIL (see evaluate_no_advice_expectation).
         sql="SELECT A.TAX_ID, A.AMOUNT FROM T A WHERE A.ID = :ID AND A.STATUS = :S",
         cost=900,
         expect_compliance="PASS",

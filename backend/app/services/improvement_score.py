@@ -156,7 +156,7 @@ def compute(
             component="structure",
             label="SQL 寫法複雜程度",
             score=round(winning_s, 1),
-            detail=f"多表關聯、笛卡兒積、多層子查詢、SELECT *、DISTINCT 等寫法會加分，最多 {st_max} 分。",
+            detail=f"多表關聯、缺少資料表關聯條件、多層子查詢、SELECT *、DISTINCT 等寫法會加分，最多 {st_max} 分。",
         ),
         ImprovementBreakdownItem(
             component="cost_ratio",
@@ -176,7 +176,7 @@ def compute(
                 score=float(structure_floor),
                 detail=(
                     "系統偵測到多表查詢缺少明確關聯條件；這不是新增中心規範，"
-                    f"但為避免畫面誤顯示「目前良好」，改善指數至少為 {structure_floor}。"
+                    f"但為避免畫面誤顯示「目前良好」，改善優先指數至少為 {structure_floor}。"
                 ),
             )
         )

@@ -98,6 +98,7 @@ class Settings:
     ollama: OllamaSettings
     ai_gate: dict[str, Any]
     ai_guard: dict[str, Any]
+    knowledge_context: dict[str, Any]
     masking: MaskingSettings
     archive: ArchiveSettings
     rules_config: dict[str, Any]
@@ -185,6 +186,7 @@ def get_settings() -> Settings:
         ollama=ollama,
         ai_gate=app_cfg.get("ai_gate", {}),
         ai_guard=app_cfg.get("ai_guard", {}),
+        knowledge_context=app_cfg.get("knowledge_context", {}),
         masking=masking,
         archive=archive,
         rules_config=rules_cfg,

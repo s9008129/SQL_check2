@@ -66,32 +66,41 @@ These are Class D (OUT_OF_SCOPE) in the catalog and belong to central DBA /
 infrastructure responsibility, or require a real test-environment measurement
 SQLCheck cannot perform.
 
-## Phase 2 shadow-mode boundary
+## Pattern Selector + Compact Context boundary
 
-Phase 2 introduces one narrowly-scoped runtime consumer:
-`backend/app/services/pattern_selector.py` reads the catalog and maps
-**already-existing deterministic facts** to catalog ids.
+The Runtime has two narrowly-scoped catalog consumers:
 
-Its outputs are intentionally split:
+1. `pattern_selector.py` maps **already-existing deterministic facts** to
+   catalog ids.
+   - **exact** — the catalog's specific detector matched (rule id, rewrite
+     rule, parser complexity flag, or the existing many-tables threshold).
+   - **family_signal** — only a broader family signal matched. This is
+     ambiguous by definition and is never a confirmed pattern.
+2. `context_adapter.py` may turn only `exact` matches into a small
+   `knowledge_context` list sent to Gemma.
 
-- **exact** — the catalog's specific detector matched (rule id, rewrite rule,
-  parser complexity flag, or the existing many-tables threshold).
-- **family_signal** — only a broader family signal matched. This is ambiguous
-  by definition and is never a confirmed pattern.
+Compact-context safety rules are hard boundaries, not prompt suggestions:
 
-`ai_service.py` may call the selector in **shadow mode** and log only pattern
-ids/counts. Selector failure is fail-open: it must never make the existing AI
-analysis unavailable. Pattern ids are not added to the request payload and no
-SQL/literal/table/model text is logged by the selector.
+- family_signal is never injected;
+- OUT_OF_SCOPE is never injected even if a future detector is added;
+- context is filtered to the one representative statement sent to Gemma;
+- priority is VERIFIED_REWRITE → ADVICE_ONLY → INFORMATIONAL;
+- top-N and total-character limits are enforced before payload construction;
+- only static catalog `model_guidance_zh_tw` is injected — never SQL,
+  literals, table names, findings text, model output, or external-source prose;
+- missing/drifted catalog guidance causes empty/fewer context, not a wider
+  guess;
+- selector/context failures are fail-open for AI availability.
 
 The following remain explicitly out of scope unless a later, separately
 reviewed PR authorizes them:
 
-- injecting selected catalog content into the Gemma system/user prompt
-- changing `_compute_gates`, compliance, rewrite verification, improvement
-  score, or improvement-potential semantics based on selector output
-- changing `backend/app/prompts/sql_review_zh_tw.txt` merely to accommodate
-  selector output
+- letting selector/context output change `_compute_gates`, compliance,
+  rewrite verification, improvement score, or improvement-potential semantics
+- treating ADVICE_ONLY as verified or letting Gemma override deterministic
+  rewrite validation
+- injecting family signals or OUT_OF_SCOPE catalog content
+- dynamically fetching external skill/web content at request time
 - Ollama parameters: `num_ctx`, `num_predict`, `think` default,
   `Semaphore(1)`, timeout
 - Frontend / API response schema for pattern selection
@@ -99,6 +108,6 @@ reviewed PR authorizes them:
 - Any new Oracle connection, application DB, vector DB, embeddings, RAG,
   LangChain/LangGraph, or fine-tuning
 
-The next context-adapter phase may consume **exact** ids only. A
-`family_signal` must first gain a specific deterministic detector (and the
-catalog entry must be updated) before it can be treated as matched knowledge.
+A `family_signal` must first gain a specific deterministic detector (and the
+catalog entry must be updated) before it can ever be treated as matched model
+knowledge.

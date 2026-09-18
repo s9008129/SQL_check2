@@ -1,4 +1,3 @@
-import dataclasses
 import json
 import logging
 
@@ -104,7 +103,7 @@ async def test_successful_response_populates_ok_result(settings, chat_url):
     assert result.advice[0].title == "合併同欄位 OR 條件"
     assert result.suggested_sql is not None
     assert result.suggested_sql.available is True
-    assert result.estimated_improvement_pct == 45  # 47 rounds to nearest 5
+    assert result.estimated_improvement_pct is None
 
 
 @respx.mock
@@ -303,21 +302,13 @@ async def test_vocabulary_replacement_applied_to_summary(settings, chat_url):
     assert "改善 SQL" in result.summary
 
 
-@pytest.mark.parametrize(("raw_pct", "expected"), [(47, 45), (101, 100), (None, None)])
+@pytest.mark.parametrize("raw_pct", [47, 101, None])
 @respx.mock
-async def test_estimated_improvement_pct_clamped_and_rounded(settings, chat_url, raw_pct, expected):
+async def test_model_improvement_percentage_is_always_ignored(settings, chat_url, raw_pct):
     inner = _good_inner(estimated_improvement_pct=raw_pct)
-    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
-    result = await _call(settings, _clean_select_statement())
-
-    assert result.estimated_improvement_pct == expected
-
-
-@respx.mock
-async def test_estimated_improvement_pct_missing_key_is_null(settings, chat_url):
-    inner = _good_inner()
-    del inner["estimated_improvement_pct"]
-    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
     result = await _call(settings, _clean_select_statement())
 
     assert result.estimated_improvement_pct is None
@@ -370,7 +361,7 @@ async def test_outcome_not_needed_keeps_model_reason(settings, chat_url):
     result = await _call(settings, _clean_select_statement())
     assert result.suggested_sql.outcome == "not_needed"
     assert result.suggested_sql.reason == "目前寫法已良好。"
-    assert result.estimated_improvement_pct == 0
+    assert result.estimated_improvement_pct is None
 
 
 @respx.mock
@@ -771,73 +762,18 @@ async def test_suggested_sql_that_is_unparseable_is_rejected(settings, chat_url)
 
 
 @respx.mock
-async def test_candidate_not_allowed_also_nulls_estimated_pct_when_estimate_requires_candidate(settings, chat_url):
-    # When estimate_requires_candidate is true, a non-candidate-allowed input
-    # also forces the pct to null server-side. app.yaml's own default was
-    # relaxed to false on 2026-09-16 (see app.yaml's comment), so this test
-    # builds its own settings override to exercise the true branch directly
-    # rather than depending on the shipped default.
-    strict_settings = dataclasses.replace(
-        settings,
-        ai_gate={**settings.ai_gate, "estimate_requires_candidate": True, "estimate_allowed_with_advice_fragments": False},
-    )
+async def test_deprecated_percentage_is_ignored_when_rewrite_is_gated(settings, chat_url):
     inner = _good_inner(estimated_improvement_pct=80)
-    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
-
-    result = await _call(
-        strict_settings, _multi_statement(), sql_text="SELECT * FROM T A WHERE A.X=1;\nSELECT * FROM T2 B WHERE B.Y=1;"
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
     )
-
-    assert result.estimated_improvement_pct is None
-
-
-@respx.mock
-async def test_estimate_kept_when_no_findings_but_advice_has_fragments(settings, chat_url):
-    # 2026-09-17: rules all pass, rewrite gated by length, but the model gave
-    # concrete fragments (example) — that is a basis for an estimate.
-    inner = _good_inner(estimated_improvement_pct=35)
-    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
-    long_sql = "SELECT " + ", ".join(f"A.C{i} AS 稅種{i}稅額_減因C" for i in range(400)) + " FROM T A WHERE A.Y = 1"
-    result = await _call(settings, parse_sql_text(long_sql).statements, sql_text=long_sql)
-    assert result.suggested_sql.outcome == "gated"
-    assert any(a.example for a in result.advice)
-    assert result.estimated_improvement_pct == 35
-
-
-@respx.mock
-async def test_estimate_dropped_when_no_findings_no_rewrite_and_no_fragments(settings, chat_url):
-    inner = _good_inner(estimated_improvement_pct=35)
-    for item in inner["advice"]:
-        item["example"] = None
-        item["before"] = None
-    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
-    long_sql = "SELECT " + ", ".join(f"A.C{i} AS 稅種{i}稅額_減因C" for i in range(400)) + " FROM T A WHERE A.Y = 1"
-    result = await _call(settings, parse_sql_text(long_sql).statements, sql_text=long_sql)
-    assert result.estimated_improvement_pct is None
-    # No findings, no rewrite, no fragments — only prose advice → level 低.
-    assert result.improvement_potential == "low"
-
-
-@respx.mock
-async def test_candidate_not_allowed_but_estimate_allowed_when_finding_exists_and_not_required(
-    settings, chat_url
-):
-    # 2026-09-16 default: estimate_requires_candidate is false, so a
-    # non-candidate-allowed input (multi-statement here) still gets a pct
-    # as long as there is at least one finding.
-    assert settings.ai_gate.get("estimate_requires_candidate") is False
-    inner = _good_inner(estimated_improvement_pct=47)
-    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
-
-    finding = Finding(rule_id="R004", status="NOTICE", fact="A.Y LIKE '%X'", statement_index=0)
     result = await _call(
         settings,
         _multi_statement(),
-        findings=[finding],
         sql_text="SELECT * FROM T A WHERE A.X=1;\nSELECT * FROM T2 B WHERE B.Y=1;",
     )
 
-    assert result.estimated_improvement_pct == 45
+    assert result.estimated_improvement_pct is None
 
 
 # ---------------------------------------------------------------------------
@@ -887,7 +823,7 @@ def test_representative_statement_picks_worst_for_multi_statement(settings):
 
 def test_candidate_allowed_false_for_non_select():
     statements = parse_sql_text("UPDATE T SET X = 1 WHERE Y = 2").statements
-    allowed, _, decline_code = ai_service._compute_gates(statements, [], {"candidate_forbidden_complexity_flags": []})
+    allowed, decline_code = ai_service._compute_gates(statements, {"candidate_forbidden_complexity_flags": []})
     assert allowed is False
     assert decline_code == "not_select"
 
@@ -895,8 +831,8 @@ def test_candidate_allowed_false_for_non_select():
 def test_candidate_allowed_false_when_complexity_flag_forbidden():
     statements = parse_sql_text("SELECT COUNT(*) FROM T A WHERE A.X = 1 GROUP BY A.X").statements
     assert "group_by_aggregate" in statements[0].complexity_flags
-    allowed, _, decline_code = ai_service._compute_gates(
-        statements, [], {"candidate_forbidden_complexity_flags": ["group_by_aggregate"]}
+    allowed, decline_code = ai_service._compute_gates(
+        statements, {"candidate_forbidden_complexity_flags": ["group_by_aggregate"]}
     )
     assert allowed is False
     assert decline_code == "complexity:group_by_aggregate"
@@ -913,9 +849,8 @@ def test_candidate_allowed_true_for_outer_join_group_by_distinct_after_2026_09_1
         "SELECT DISTINCT A.X FROM T A WHERE A.Y = 1",
     ):
         statements = parse_sql_text(sql).statements
-        allowed, _, decline_code = ai_service._compute_gates(
+        allowed, decline_code = ai_service._compute_gates(
             statements,
-            [],
             {"candidate_forbidden_complexity_flags": ["window_function", "connect_by", "set_operation", "rownum", "correlated_subquery"]},
         )
         assert allowed is True, sql
@@ -924,19 +859,10 @@ def test_candidate_allowed_true_for_outer_join_group_by_distinct_after_2026_09_1
 
 def test_candidate_allowed_false_multi_statement_decline_code():
     statements = parse_sql_text("SELECT A.X FROM T A WHERE A.Y=1;\nSELECT B.X FROM U B WHERE B.Y=1;").statements
-    allowed, _, decline_code = ai_service._compute_gates(statements, [], {})
+    allowed, decline_code = ai_service._compute_gates(statements, {})
     assert allowed is False
     assert decline_code == "multi_statement"
 
-
-def test_estimate_allowed_without_candidate_when_not_requiring_candidate():
-    statements = parse_sql_text("UPDATE T SET X = 1 WHERE Y = 2").statements
-    findings = [Finding(rule_id="R002", status="BLOCK", fact="x", statement_index=0)]
-    candidate_allowed, estimate_allowed, _decline_code = ai_service._compute_gates(
-        statements, findings, {"candidate_forbidden_complexity_flags": [], "estimate_requires_candidate": False}
-    )
-    assert candidate_allowed is False
-    assert estimate_allowed is True  # allowed because at least one finding exists
 
 
 def test_decline_reason_text_is_specific_per_code():

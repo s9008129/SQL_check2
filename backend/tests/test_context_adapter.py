@@ -89,7 +89,7 @@ def test_character_budget_skips_whole_items_never_truncates_guidance():
         selection, {"max_patterns": 4, "max_total_chars": 6000}, statement_index=0
     )
     assert len(full) == 1
-    item_chars = sum(len(v) for v in full[0].values())
+    item_chars = context_adapter._serialized_chars(full[0])
 
     too_small = context_adapter.build_knowledge_context(
         selection, {"max_patterns": 4, "max_total_chars": item_chars - 1}, statement_index=0
@@ -126,7 +126,7 @@ def test_hard_caps_prevent_misconfiguration_from_unbounding_context():
         selection, {"max_patterns": 9999, "max_total_chars": 999999}, statement_index=0
     )
     assert len(context) <= context_adapter._HARD_MAX_PATTERNS
-    assert sum(sum(len(v) for v in item.values()) for item in context) <= context_adapter._HARD_MAX_TOTAL_CHARS
+    assert sum(context_adapter._serialized_chars(item) for item in context) <= context_adapter._HARD_MAX_TOTAL_CHARS
 
 
 def test_match_signals_never_enter_model_context():

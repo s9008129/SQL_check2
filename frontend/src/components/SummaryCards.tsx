@@ -116,13 +116,13 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
             </button>
             {breakdownOpen && (
               <div className="breakdown-list" data-testid="breakdown-list">
-                <p className="breakdown-intro">指數為 0～100 分，由下列項目加總而成；每一項都有加分上限，加總後超過 100 以 100 計。</p>
+                <p className="breakdown-intro">指數為 0～100 分，依規則命中、SQL 結構、COST 與必要的最低分數門檻綜合計算。</p>
                 {improvement.breakdown.map((item) => (
                   <div className="breakdown-row" key={item.component}>
                     <div className="breakdown-head">
                       <span className="breakdown-label">{item.label}</span>
                       <span className="breakdown-score">
-                        {item.component === "block_floor" ? `至少 ${item.score} 分` : `+${item.score} 分`}
+                        {item.component === "block_floor" || item.component === "structure_floor" ? `至少 ${item.score} 分` : `+${item.score} 分`}
                       </span>
                     </div>
                     {item.detail && <div className="breakdown-detail">{item.detail}</div>}

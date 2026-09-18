@@ -220,6 +220,27 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
   目前不修改該主機防火牆設定，也不讓 Step 3 驗收阻擋 Knowledge／Selector／Context 核心工作；
   最後再獨立做正式主機 security hardening 與驗收。
 
+### 2026-09-18 Compact Context v1 — Phase 3 correction
+- Phase 2 的「只 shadow、不送進 Gemma」是當時的安全過渡狀態；Phase 3 起新增
+  `backend/app/services/context_adapter.py`，只把 Pattern Selector 的 **exact** match
+  轉成小型 `knowledge_context` 放進 `<SQL_DATA>`。不要再把「catalog 永遠不進模型」當成現況。
+- 注入邊界是程式硬限制，不靠模型自律：
+  - `family_signal` 永不注入；
+  - `OUT_OF_SCOPE` 永不注入；
+  - 只保留實際送給 Gemma 的 representative statement 所命中的 pattern；
+  - 優先序固定為 VERIFIED_REWRITE → ADVICE_ONLY → INFORMATIONAL；
+  - 預設最多 4 項、JSON 字元總量最多 1800；程式另有 hard cap 8 項／6000 字元；
+  - 只注入 catalog 內人工審核過的 `model_guidance_zh_tw`，不帶 SQL、literal、table name、
+    finding prose、family signal 或模型輸出。
+- `SQLCHECK_KNOWLEDGE_CONTEXT_ENABLED=false` 可在正式主機快速關閉 Phase 3 context 做 A/B／回復；
+  關閉後仍保留 Pattern Selector 與既有 prompt/runtime，不需要 rollback commit。
+- Selector／Context Adapter 都採 fail-open：catalog/context 失敗時只記 exception type，送給 Gemma 的
+  knowledge_context 退回空陣列，不影響原有 AI 可用性。
+- Phase 3 **不改** compliance、candidate gate、改善優先指數、改善潛力、rewrite proof、
+  API response schema、前端、Ollama 參數、deploy 或 firewall。
+- Prompt slimming 暫不和本 Phase 混做；先在正式主機用同一版程式做 context on/off golden A/B，
+  確認品質再另開 PR，才能知道改善或退步是 context 還是 prompt 改動造成。
+
 ## 4. 「AI 沒給建議寫法」的判讀順序（接手後最常被問）
 
 1. 看 API 回應或畫面的 outcome：
@@ -233,9 +254,14 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 
 ## 5. 目前狀態與驗證數據
 
-- 最新狀態：後端 359 項測試 = 2 failed／357 passed（2 項 `tests/test_main.py` 為 macOS `/private/var` 路徑語意的既有失敗，與本 PR 無關）、前端 74 項測試、ruff、build 全過（2026-09-17 PR #1）。docx 三層巢狀真實案例已用本機程式碼直連正式主機 Gemma4 驗證（num_ctx 16384、43 秒、中文 advice_only）。
-- 正式主機最後一次由使用者部署的版本在 `6a7294c` 之前；**`80f78e8`（放大字級）、`815c056`（全頁視覺）與本次畫面調整尚未部署**，需 `git pull` + `deploy\deploy.ps1`。
-- 使用者人工驗證（test_01～03.pdf）：多重缺陷 SQL、笛卡兒積 SQL、乾淨 SQL 三案皆符合預期。
+- GitHub Actions `Backend CI` 已成為 backend PR/main 的固定 gate。Compact Context v1 最新 CI：
+  **499 passed / Ruff All checks passed**（2026-09-18，PR #6）。前一個 Large-AND robustness PR #5
+  為 484 passed / Ruff clean；Pattern Selector PR #4 為 481 passed / Ruff clean。
+- 前端本輪沒有修改；最近一次既有前端基線為 74 項測試與 build 全過。不要因 backend CI 綠燈
+  宣稱重新跑過前端。
+- 正式主機尚未用 Compact Context 版本做 Gemma live A/B。project owner 已要求：先把核心程式與
+  Skill 修到 review/CI 完成，再一次通知正式主機 git pull；因此不要提早要求正式機更新。
+- 既有人工驗證（test_01～03.pdf）：多重缺陷 SQL、笛卡兒積 SQL、乾淨 SQL 三案皆符合當時版本預期。
 - 報告：`E2E_TEST_report_20260917.md`、`E2E_TEST_report_20260917_round2.md`、`SQLCheck2_E2E_test_report_20260916.md`。
 
 ## 6. 開發機驗證方法（不需部署）
@@ -270,14 +296,14 @@ curl -sk https://10.97.15.58/api/health
 
 ## 7. 尚未完成／建議的下一步方向（依優先序）
 
-1. **核心 Knowledge Runtime（目前最高優先）**：先完成 Pattern Selector v1 shadow mode 的 review／merge；
-   selector 只能產生 exact 與 family_signal，且 family_signal 不得當成已命中知識。
-2. **Compact Context Adapter（下一個獨立 PR）**：只允許少量 exact pattern 進入 Gemma context；
-   先定 deterministic top-N／去重／token budget，仍不得讓 catalog 影響 compliance、指數或 rewrite proof。
-3. **Prompt slimming / A-B**：Context Adapter 穩定後，再縮短 system prompt 內重複的 optimization prose，
-   用 synthetic golden + 正式主機 Gemma 做 A/B；不要一邊接 catalog 一邊大改 prompt，否則無法歸因。
-4. **正式主機 Gemma 驗證**：核心程式碼穩定後再集中跑 prompt／context golden，確認 TRUNC／NVL
-   維持 advice_only、SUBSTR canonical LIKE、OR→IN <=1000，以及 selector/context 不造成新幻覺。
+1. **Compact Context Adapter（目前核心）**：完成 exact-only context 的 CI／review／merge；family_signal、
+   OUT_OF_SCOPE、非 representative statement 都不得進模型。
+2. **正式主機 Gemma A/B 驗證**：Context Adapter merge 後才通知正式機 git pull；用
+   `SQLCHECK_KNOWLEDGE_CONTEXT_ENABLED=true/false` 跑同一組 golden，比較 advice/rewrite 品質與 latency。
+3. **Prompt slimming / A-B**：只有 context on/off 基線穩定後才縮短 system prompt 內重複 optimization prose；
+   不和 context 接線同 PR，避免無法歸因。
+4. **Knowledge coverage 精進**：依正式 SQL／去識別化 archive 的實際缺口補「specific detector → catalog guidance」，
+   不把 family signal 直接升級成 exact，也不新增無法證明的 rewrite。
 5. **Windows Firewall / 11434 hardening（延後到核心功能完成後獨立處理）**：正式主機 10.97.15.58
    目前 Step 3 會因既有 11434 規則 scope 不符而 fail-closed。這是已知部署／安全議題，不再作為
    Knowledge／Selector／Context 開發 gate；最後再獨立修正式主機規則、deploy diagnostics 與三項 E2E

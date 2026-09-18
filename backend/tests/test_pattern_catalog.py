@@ -1,10 +1,10 @@
 """Integrity checks for backend/app/knowledge/pattern_catalog.yaml.
 
 This validates the knowledge asset — pattern ids, classification rules,
-provenance, and governance invariants. Phase 2's pattern_selector.py reads the
-catalog in shadow mode, but these tests still never initialize Ollama and never
-need a live model or Oracle connection. Runtime selection behavior is covered
-separately by tests/test_pattern_selector.py.
+provenance, governance invariants, and the compact guidance eligible for
+exact-only model context. These tests never initialize Ollama and never need a
+live model or Oracle connection. Runtime selection behavior is covered
+separately by tests/test_pattern_selector.py / test_context_adapter.py.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ _VALID_SOURCE_TYPES = {"internal", "external_skill", "oracle_documentation"}
 _VALID_RUNTIME_GAP_KINDS = {"unverified_precondition", "unauthorized_accepted_form"}
 _BACKEND_DIR = Path(__file__).resolve().parents[1]
 _RULES_YAML = _BACKEND_DIR / "app" / "config" / "rules.yaml"
+_APP_YAML = _BACKEND_DIR / "app" / "config" / "app.yaml"
 _SQL_PARSER_PY = _BACKEND_DIR / "app" / "services" / "sql_parser.py"
 
 # Which specific-id list belongs to which deterministic detection.source.
@@ -156,6 +157,35 @@ def test_allowed_behavior_fields_present_and_boolean(patterns: list[dict[str, An
         allowed = p.get("allowed_behavior") or {}
         for key in ("explain", "advice", "automatic_rewrite"):
             assert isinstance(allowed.get(key), bool), f"{p.get('id')}: allowed_behavior.{key} must be a bool"
+
+
+def test_exact_context_eligible_patterns_have_compact_safe_guidance(patterns: list[dict[str, Any]]) -> None:
+    """Every deterministic non-Class-D pattern can be injected only through
+    an explicit compact catalog field; Class D must not carry model guidance."""
+    deterministic_sources = set(_SPECIFIC_LIST_FOR_SOURCE)
+    app_cfg = yaml.safe_load(_APP_YAML.read_text(encoding="utf-8"))
+    forbidden = tuple((app_cfg.get("ai_guard") or {}).get("forbidden_phrases") or ())
+
+    for p in patterns:
+        source = (p.get("detection") or {}).get("source")
+        guidance = p.get("model_guidance_zh_tw")
+        pid = p.get("id")
+        if p.get("classification") == "OUT_OF_SCOPE":
+            assert not guidance, f"{pid}: OUT_OF_SCOPE must never carry model_guidance_zh_tw"
+            continue
+        if source in deterministic_sources:
+            assert isinstance(guidance, str) and guidance.strip(), (
+                f"{pid}: deterministic context candidate requires model_guidance_zh_tw"
+            )
+            compact = " ".join(guidance.split())
+            assert len(compact) <= 500, f"{pid}: model guidance is not compact ({len(compact)} chars)"
+            assert not any(phrase in compact for phrase in forbidden), (
+                f"{pid}: model guidance contains an ai_guard forbidden phrase"
+            )
+        else:
+            assert not guidance, (
+                f"{pid}: non-deterministic source {source!r} must not have injectable model guidance"
+            )
 
 
 def test_detection_source_is_declared_and_legal(patterns: list[dict[str, Any]]) -> None:

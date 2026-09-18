@@ -98,6 +98,7 @@ class Settings:
     ollama: OllamaSettings
     ai_gate: dict[str, Any]
     ai_guard: dict[str, Any]
+    knowledge_context: dict[str, Any]
     masking: MaskingSettings
     archive: ArchiveSettings
     rules_config: dict[str, Any]
@@ -178,6 +179,12 @@ def get_settings() -> Settings:
         ),
     )
 
+    knowledge_context = dict(app_cfg.get("knowledge_context", {}))
+    knowledge_context["enabled"] = _env_bool(
+        str(knowledge_context.get("enabled_env", "SQLCHECK_KNOWLEDGE_CONTEXT_ENABLED")),
+        bool(knowledge_context.get("enabled", True)),
+    )
+
     return Settings(
         app_name=app_section.get("name", "SQLCheck AI"),
         app_title=app_section.get("title", "SQL 效能優化助手"),
@@ -185,6 +192,7 @@ def get_settings() -> Settings:
         ollama=ollama,
         ai_gate=app_cfg.get("ai_gate", {}),
         ai_guard=app_cfg.get("ai_guard", {}),
+        knowledge_context=knowledge_context,
         masking=masking,
         archive=archive,
         rules_config=rules_cfg,

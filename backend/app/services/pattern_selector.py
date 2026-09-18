@@ -1,19 +1,19 @@
-"""Deterministic SQL pattern selection for Knowledge v1 (Phase 2 shadow mode).
+"""Deterministic SQL pattern selection for SQLCheck Oracle Knowledge.
 
 This module reads ``knowledge/pattern_catalog.yaml`` and maps facts SQLCheck
 already knows (rule-engine findings, sql_parser complexity flags, and
 rewrite_rules proofs) to catalog pattern ids.
 
-Phase 2 contract:
+Runtime contract:
 - ``exact`` matches are deterministic and are the *only* patterns eligible for
-  a future compact-context adapter.
+  the compact-context adapter.
 - ``family_signal`` matches are deliberately ambiguous broader signals from
-  the catalog. They are observable in shadow diagnostics but are never treated
-  as a confirmed pattern and must not be injected into the model as if matched.
-- Selection never changes compliance, scores, rewrite verification, or AI
-  output. ``ai_service`` may call it in shadow mode and log ids only.
+  the catalog. They are observable diagnostics but are never treated as a
+  confirmed pattern and are never injected into the model as if matched.
+- Selection never changes compliance, scores, rewrite verification, or
+  candidate gating. The context adapter may consume only exact matches.
 - Match records contain no SQL text, literal values, table names, or model
-  output, so shadow diagnostics cannot become a second copy of user SQL.
+  output, so selector diagnostics cannot become a second copy of user SQL.
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ class PatternSelection:
 
     @property
     def context_candidate_ids(self) -> tuple[str, ...]:
-        """Future adapter input: exact matches only, never OUT_OF_SCOPE."""
+        """Compact-context adapter input: exact matches only, never OUT_OF_SCOPE."""
         return tuple(match.pattern_id for match in self.exact if match.classification != "OUT_OF_SCOPE")
 
     def log_fields(self) -> dict[str, object]:
@@ -93,6 +93,11 @@ def _catalog_patterns() -> tuple[dict[str, Any], ...]:
 def clear_catalog_cache() -> None:
     """Test helper for catalog-file mutation tests; production never needs it."""
     _catalog_patterns.cache_clear()
+
+
+def get_catalog_pattern(pattern_id: str) -> dict[str, Any] | None:
+    """Return one catalog entry by stable id without exposing loader details."""
+    return next((pattern for pattern in _catalog_patterns() if pattern.get("id") == pattern_id), None)
 
 
 def _statement_indexes_for_rule_ids(findings: Sequence[Finding], rule_ids: Iterable[str]) -> tuple[int, ...]:

@@ -59,20 +59,25 @@ and the compliance/optimization boundary. Then:
    since the 2026-09-18 Runtime Correctness fix; tests probe the runtime to
    keep it that way).
 
-## Phase boundary (read before touching Runtime code)
+## Runtime boundary (read before touching Pattern Context)
 
-Phase 2 adds a deterministic **Pattern Selector shadow mode**:
-`backend/app/services/pattern_selector.py` reads this catalog and maps facts
-SQLCheck already has to two separate outputs:
+Pattern Selector and Compact Context now form one deliberately narrow runtime
+path:
 
-- `exact`: a specific deterministic detector matched this catalog entry.
-  Only these ids may become candidates for a future compact-context adapter.
-- `family_signal`: a broader R005/R006/complexity signal fired, but the
-  specific pattern is **not confirmed**. These are diagnostics only and must
-  never be injected into Gemma as if they were matched.
+1. `pattern_selector.py` maps existing deterministic facts to:
+   - `exact`: a specific detector matched this catalog entry.
+   - `family_signal`: only a broader family signal matched; the specific
+     pattern is **not confirmed**.
+2. `context_adapter.py` may inject only a bounded number of `exact` entries
+   into Gemma as static `model_guidance_zh_tw`.
+3. `family_signal` and `OUT_OF_SCOPE` never enter model context.
+4. Context is filtered to the representative statement actually sent to
+   Gemma, ordered VERIFIED_REWRITE → ADVICE_ONLY → INFORMATIONAL, and bounded
+   by both top-N and character budget.
+5. Selector/context failures are fail-open for AI availability, but they never
+   change compliance, improvement score/potential, rewrite verification,
+   candidate gating, API schema, UI, or Ollama settings.
 
-`ai_service.py` currently logs the SQL-free ids/counts only. The selector does
-**not** alter prompt assembly, model payload, gating, compliance, scoring,
-rewrite verification, UI, or Ollama settings. Making Gemma consume selected
-catalog content is a separate later phase and requires its own reviewed PR.
-See `references/project-boundaries.md` for the exact boundary.
+The model still cannot promote ADVICE_ONLY to verified, and the server still
+re-validates every candidate rewrite. See `references/project-boundaries.md`
+for the exact authority and runtime boundaries.

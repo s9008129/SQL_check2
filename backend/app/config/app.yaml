@@ -62,6 +62,16 @@ ollama:
   think_env: OLLAMA_THINK
   think_default: false
 
+# Pattern Catalog → Gemma compact context（2026-09-18）。
+# 只允許 Pattern Selector 的 exact match；family_signal / OUT_OF_SCOPE 永不注入。
+# 保留開關是為了正式主機 A/B 或快速回復，不需要改程式碼。
+knowledge_context:
+  # 正式機 A/B／緊急回復只需設環境變數 false，不必改 catalog 或 rollback commit。
+  enabled_env: SQLCHECK_KNOWLEDGE_CONTEXT_ENABLED
+  enabled: true
+  max_patterns: 4
+  max_total_chars: 1800
+
 # 建議寫法 / 預估改善幅度守門條件（PRD §17.4、§25）。
 ai_gate:
   # candidate_allowed：單一段、SELECT、parser 成功解析、且不含下列任何複雜度旗標時

@@ -1,12 +1,12 @@
 # SQLCheck Oracle SQL Pattern Catalog — Source of Truth for optimization
 # knowledge governance (SQLCheck Oracle Knowledge v1).
 #
-# This file is machine-readable knowledge, not runtime prompt prose. Since
-# Phase 2 shadow mode (2026-09-18), backend/app/services/pattern_selector.py
-# reads it at request time to identify deterministic exact matches and broader
-# family signals. ai_service.py logs only SQL-free pattern ids/counts from that
-# selector; the selection is NOT added to the Gemma prompt, does not change
-# gating/scoring/compliance/rewrite verification, and is not exposed in the
+# This file is machine-readable knowledge, not free-form runtime prompt prose.
+# pattern_selector.py identifies deterministic exact matches and broader family
+# signals. context_adapter.py may send only a bounded set of exact,
+# non-OUT_OF_SCOPE entries' static model_guidance_zh_tw to Gemma through
+# <SQL_DATA>. family_signal is never injected. This context does not change
+# gating/scoring/compliance/rewrite verification and is not exposed in the
 # API/UI. See skills/sqlcheck-oracle-review/references/project-boundaries.md.
 #
 # Governance model (four classes — see

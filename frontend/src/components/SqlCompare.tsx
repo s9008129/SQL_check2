@@ -27,7 +27,7 @@ interface Segment {
 const VERIFICATION_NOTE: Record<NonNullable<AdviceItem["verification"]>, string | null> = {
   verified: null,
   corrected: "AI 原本給的寫法會改變查詢結果，系統已改為查詢結果不變的寫法。",
-  unverified: "系統無法確認這個改法的查詢結果是否相同，採用前務必於測試機比對。",
+  unverified: "系統無法確認這個改法會保留相同查詢結果，請先確認業務條件，不要直接套用。",
 };
 
 // "若 TAX_CD 為 2 碼且 SUBTAX_CD 為 1 碼：WHERE ..." — the model sometimes keeps
@@ -129,7 +129,7 @@ export default function SqlCompare({ originalSql, ai }: SqlCompareProps) {
     <section className="card card-compare">
       <div className="card-head">
         <div>
-          <div className="card-title">優化前後比較</div>
+          <div className="card-title">原寫法與建議寫法</div>
           <div className="card-desc card-warning" role="note">
             ⚠ {SUGGESTED_SQL_WARNING}
           </div>
@@ -143,7 +143,7 @@ export default function SqlCompare({ originalSql, ai }: SqlCompareProps) {
           <div className="sql-box sql-box-light">
             <div className="sql-head">
               <span>
-                原始 SQL 與 AI 建議寫法逐行對照 · <mark className="diff-add legend">黃底</mark> 為建議修改處
+                原始 SQL 與系統已確認的建議寫法逐行對照 · <mark className="diff-add legend">黃底</mark> 為建議修改處
               </span>
             </div>
             <FullSqlDiff original={originalSql} suggested={suggestedSql} />
@@ -152,7 +152,7 @@ export default function SqlCompare({ originalSql, ai }: SqlCompareProps) {
 
         {segments.length > 0 && (
           <div className="segment-list">
-            <div className="segment-list-title">逐段對照（每一項建議的原寫法 → AI 建議寫法）</div>
+            <div className="segment-list-title">逐段對照（每一項建議都會標示目前可採用程度）</div>
             {segments.map((seg, i) =>
               seg.before ? (
                 <FragmentDiff

@@ -74,12 +74,21 @@ class FragmentVerification:
 # Parsing / normalization helpers
 # ---------------------------------------------------------------------------
 def parse_predicate(text: str) -> exp.Expression | None:
-    """Parse a bare condition fragment (`A.X = 1 AND ...`). Returns None when
-    the text is not a condition (prose, a whole SELECT, garbage)."""
+    """Parse a condition fragment (`A.X = 1 AND ...`).
+
+    Advice fragments commonly include a leading WHERE/ON purely as a UI
+    wrapper. Strip that one syntactic wrapper before verification so a
+    provably-safe OR→IN fragment is not downgraded to "unverified" just
+    because the model copied the WHERE keyword.
+    """
     if not text or not text.strip():
         return None
+    predicate = text.strip().rstrip(";")
+    predicate = re.sub(r"^\s*(?:WHERE|ON)\b", "", predicate, flags=re.IGNORECASE).strip()
+    if not predicate:
+        return None
     try:
-        tree = parse_one(f"SELECT 1 FROM DUAL WHERE {text.strip().rstrip(';')}", read=DIALECT)
+        tree = parse_one(f"SELECT 1 FROM DUAL WHERE {predicate}", read=DIALECT)
     except Exception:
         return None
     if not isinstance(tree, exp.Select):

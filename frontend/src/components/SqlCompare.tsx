@@ -143,7 +143,7 @@ export default function SqlCompare({ originalSql, ai }: SqlCompareProps) {
           <div className="sql-box sql-box-light">
             <div className="sql-head">
               <span>
-                原始 SQL 與系統已確認的建議寫法逐行對照 · <mark className="diff-add legend">黃底</mark> 為建議修改處
+                原始 SQL 與查詢結果已確認的建議寫法逐行對照 · <mark className="diff-add legend">黃底</mark> 為建議修改處
               </span>
             </div>
             <FullSqlDiff original={originalSql} suggested={suggestedSql} />

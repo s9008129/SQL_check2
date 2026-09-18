@@ -101,17 +101,6 @@ ai_gate:
     - set_operation
     - rownum
     - correlated_subquery
-  # 2026-09-16 由 true 改為 false：預估改善幅度不應該完全綁在「有沒有建議寫法」
-  # 上——只要有任何規則發現（findings），AI 仍可依經驗法則給一個粗略的改善空間
-  # 預估（見 ai_service._compute_gates 的 false 分支：candidate_allowed 或至少
-  # 一項 finding 即允許）。
-  estimate_requires_candidate: false
-  # 2026-09-17 新增：規則全過、又因長度或結構不整段改寫，但 AI 仍給了帶片段
-  # （example）的具體建議時，也允許估算改善幅度。實測一份規則全過的長 SQL 拿到
-  # 3 條有實際效能影響的片段建議（JOIN 串接拆解、SUBSTR 改範圍、去掉 SELECT *）
-  # 卻不估算，同仁會困惑。純文字提醒（沒有 example）不算依據。
-  estimate_allowed_with_advice_fragments: true
-
 # AI 回覆的後處理守門清單（PRD §17.4、§22、§23、§56）。
 ai_guard:
   # 命中即整條建議移除（禁止 AI 宣稱資料庫實際行為，或捏造改善後 COST）。

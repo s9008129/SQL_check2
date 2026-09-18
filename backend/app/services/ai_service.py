@@ -41,6 +41,7 @@ from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
+from sqlglot import exp, parse_one
 
 from app.schemas import AdviceItem, AiResult, Finding, SuggestedSql
 from app.services import context_adapter, pattern_selector, rewrite_rules, rule_engine
@@ -192,7 +193,6 @@ RESPONSE_SCHEMA: dict[str, Any] = {
             },
             "required": ["available", "reason", "rewrite_outcome"],
         },
-        "estimated_improvement_pct": {"type": ["integer", "null"]},
     },
     "required": ["summary", "advice", "suggested_sql"],
 }
@@ -432,17 +432,165 @@ def _contains_forbidden(text: str, forbidden: list[str]) -> bool:
     return any(phrase in text for phrase in forbidden)
 
 
+_INTERNAL_PLACEHOLDER_RE = re.compile(r":(?P<kind>STR|NUM)_\d+", re.IGNORECASE)
+_UNOBSERVABLE_DB_CLAIM_RE = re.compile(
+    r"(?:Full\s+Table\s+Scan|全(?:資料)?表掃描|Execution\s+Plan|執行計畫(?:顯示)?|"
+    r"排序特性|(?:使用|利用|採用|走|命中|失效).{0,12}(?:索引|\bindex\b)|"
+    r"(?:索引|\bindex\b).{0,12}(?:使用|利用|採用|走|命中|失效)|無隱含型別轉換)",
+    re.IGNORECASE,
+)
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[。！？!?])")
+_TYPED_LITERAL_RE = re.compile(
+    r"\b(?P<kind>DATE|TIMESTAMP)\s*(?P<literal>'(?:[^']|'')*')",
+    re.IGNORECASE,
+)
+
+
+def _humanize_internal_placeholders(text: str) -> str:
+    """Masking tokens are implementation details, never user vocabulary.
+
+    Prose deliberately does *not* unmask to the original literal because
+    summaries/reasons may be printed or archived. SQL code fields keep using
+    the existing reversible mask/unmask path.
+    """
+
+    def repl(match: re.Match[str]) -> str:
+        return "原查詢中的文字值" if match.group("kind").upper() == "STR" else "原查詢中的數值"
+
+    return _INTERNAL_PLACEHOLDER_RE.sub(repl, text)
+
+
+def _sanitize_unobservable_db_claims(text: str) -> str:
+    """Remove sentences that claim database behavior SQLCheck cannot observe.
+
+    SQLCheck has no Oracle plan/index/statistics metadata. Keeping useful
+    neighboring sentences is better than dropping the whole advice item when
+    Gemma adds one unsupported index/plan assertion.
+    """
+    if not text:
+        return text
+    pieces = [p for p in _SENTENCE_SPLIT_RE.split(text) if p]
+    kept = [p for p in pieces if not _UNOBSERVABLE_DB_CLAIM_RE.search(p)]
+    if kept:
+        return "".join(kept).strip()
+    return "這項建議是依 SQL 寫法本身提出，實際效能仍需於測試環境確認。"
+
+
+def _sanitize_user_prose(text: str, vocab: dict[str, str]) -> str:
+    text = _apply_vocabulary(text, vocab)
+    text = _humanize_internal_placeholders(text)
+    return _sanitize_unobservable_db_claims(text)
+
+
+def _parse_sql_or_fragment(text: str) -> exp.Expression | None:
+    if not text or not text.strip():
+        return None
+    stripped = text.strip().rstrip(";")
+    try:
+        return parse_one(stripped, read="oracle")
+    except Exception:
+        predicate = re.sub(r"^\s*(?:WHERE|ON)\b", "", stripped, flags=re.IGNORECASE).strip()
+        if not predicate:
+            return None
+        try:
+            return parse_one(f"SELECT 1 FROM DUAL WHERE {predicate}", read="oracle")
+        except Exception:
+            return None
+
+
+def _identifier_facts(text: str) -> tuple[set[tuple[str | None, str]], set[str], set[str]] | None:
+    """Return (qualified columns, tables, aliases) for SQL or a predicate.
+
+    The guard intentionally reasons only from identifiers actually visible in
+    the original SQL. It never consults schema metadata.
+    """
+    tree = _parse_sql_or_fragment(text)
+    if tree is None:
+        return None
+
+    columns: set[tuple[str | None, str]] = set()
+    for col in tree.find_all(exp.Column):
+        name = (col.name or "").upper()
+        if not name:
+            continue
+        qualifier = (col.table or "").upper() or None
+        columns.add((qualifier, name))
+
+    tables: set[str] = set()
+    aliases: set[str] = set()
+    for table in tree.find_all(exp.Table):
+        name = (table.name or "").upper()
+        if name and name != "DUAL":
+            tables.add(name)
+        alias = (table.alias or "").upper()
+        if alias:
+            aliases.add(alias)
+
+    return columns, tables, aliases
+
+
+def _introduces_unknown_identifiers(source_sql: str, example: str) -> bool:
+    source = _identifier_facts(source_sql)
+    proposed = _identifier_facts(example)
+    if source is None or proposed is None:
+        return True
+
+    source_columns, source_tables, source_aliases = source
+    proposed_columns, proposed_tables, _ = proposed
+    if not proposed_tables.issubset(source_tables):
+        return True
+
+    source_names = {name for _, name in source_columns}
+    for qualifier, name in proposed_columns:
+        if qualifier is None:
+            if name not in source_names:
+                return True
+            continue
+        if (qualifier, name) in source_columns:
+            continue
+        # Allow qualification of an originally-unqualified column only when
+        # the qualifier itself is an alias/table already present in source.
+        if (None, name) in source_columns and (qualifier in source_aliases or qualifier in source_tables):
+            continue
+        return True
+    return False
+
+
+def _loses_typed_literal_wrapper(before: str | None, example: str) -> bool:
+    if not before:
+        return False
+    for match in _TYPED_LITERAL_RE.finditer(before):
+        kind = match.group("kind")
+        literal = match.group("literal")
+        if literal not in example:
+            continue
+        required = re.compile(rf"\b{re.escape(kind)}\s*{re.escape(literal)}", re.IGNORECASE)
+        if required.search(example) is None:
+            return True
+    return False
+
+
+def _advice_example_is_safe(source_sql: str, before: str | None, example: str) -> bool:
+    if _introduces_unknown_identifiers(source_sql, example):
+        return False
+    if _loses_typed_literal_wrapper(before, example):
+        return False
+    return True
+
+
 def _filter_advice(
     advice: list[AdviceItem],
     forbidden: list[str],
     vocab: dict[str, str],
     reverse_map: dict[str, str] | None = None,
+    *,
+    source_sql: str = "",
 ) -> list[AdviceItem]:
     kept: list[AdviceItem] = []
     dropped = 0
     for item in advice[:3]:  # RESPONSE_SCHEMA already caps at 3; defensive
-        title = _apply_vocabulary(item.title, vocab)
-        explanation = _apply_vocabulary(item.explanation, vocab)
+        title = _sanitize_user_prose(item.title, vocab)
+        explanation = _sanitize_user_prose(item.explanation, vocab)
         if _contains_forbidden(title, forbidden) or _contains_forbidden(explanation, forbidden):
             dropped += 1
             continue
@@ -452,6 +600,15 @@ def _filter_advice(
         # printout). Prose fields are never un-masked.
         example = unmask_sql(item.example, reverse_map or {}) if item.example else None
         before = unmask_sql(item.before, reverse_map or {}) if item.before else None
+        if example and not _advice_example_is_safe(source_sql, before, example):
+            logger.info("ai_service: advice SQL example hidden by deterministic safety guard")
+            example = None
+            before = None
+            if "系統不顯示可直接套用的寫法" not in explanation:
+                explanation = (
+                    explanation.rstrip("。") +
+                    "。這個方向需要原 SQL 未提供的業務資訊或資料型態前提，系統不顯示可直接套用的寫法。"
+                )
         if before and not example:
             # A "before" with nothing to compare against is useless to the
             # diff view and misleading in the card — drop it.
@@ -641,7 +798,7 @@ def _finalize_suggested_sql(
     rules_config: dict[str, Any],
     important_tables_config: dict[str, Any],
 ) -> SuggestedSql:
-    reason = _apply_vocabulary(raw.reason, vocab)
+    reason = _sanitize_user_prose(raw.reason, vocab)
     # Server-side override (never trust the model on this): candidate_allowed
     # is computed deterministically and wins regardless of what the model
     # claims.
@@ -759,12 +916,18 @@ def _finalize(
     forbidden = ai_guard_cfg.get("forbidden_phrases", [])
     vocab = ai_guard_cfg.get("vocabulary_replacements", {})
 
-    summary: str | None = _apply_vocabulary(raw.summary, vocab)
+    summary: str | None = _sanitize_user_prose(raw.summary, vocab)
     if _contains_forbidden(summary, forbidden):
         logger.info("ai_service: summary discarded on forbidden-phrase match")
         summary = None
 
-    advice = _filter_advice(raw.advice, forbidden, vocab, reverse_map)
+    advice = _filter_advice(
+        raw.advice,
+        forbidden,
+        vocab,
+        reverse_map,
+        source_sql=representative.raw_sql if representative is not None else original_sql,
+    )
     suggested_sql = _finalize_suggested_sql(
         raw.suggested_sql,
         reverse_map,
@@ -778,12 +941,11 @@ def _finalize(
         rules_config,
         important_tables_config,
     )
-    # 2026-09-17: concrete advice fragments (example present) are a basis for
-    # an estimate even when the rule engine found nothing and no full rewrite
-    # was allowed (app.yaml ai_gate.estimate_allowed_with_advice_fragments).
-    has_fragments = any(item.example for item in advice)
-    effective_estimate_allowed = estimate_allowed or (estimate_with_fragments and has_fragments)
-    pct = _clamp_round_pct(raw.estimated_improvement_pct, effective_estimate_allowed)
+    # The UI intentionally stopped presenting model-guessed improvement
+    # percentages. Keep the API field for backward compatibility, but the
+    # model is no longer asked to estimate a number and the server always
+    # returns null.
+    pct = None
 
     # 2026-09-17: a `:STR_001` the model made up (not in the reverse map, not
     # in the user's SQL) must not reach the reviewer — see masking.py.

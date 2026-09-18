@@ -12,16 +12,16 @@ is reshaped around what SQLCheck can actually verify:
 
 2. **Classify** — `pattern_catalog.yaml` decides how far a detected pattern
    may go: VERIFIED_REWRITE / ADVICE_ONLY / INFORMATIONAL / OUT_OF_SCOPE.
-   `pattern_selector.py` now performs this lookup in shadow mode. A specific
-   detector produces an `exact` match; broader R005/R006/complexity clues are
-   kept separately as `family_signal` and are **not** treated as confirmed
-   patterns. Selection order follows catalog order and carries no SQL text.
+   `pattern_selector.py` performs this lookup. A specific detector produces
+   an `exact` match; broader R005/R006/complexity clues are kept separately
+   as `family_signal` and are **not** treated as confirmed patterns.
 
-3. **Explain** — Gemma still receives the existing prompt/payload only. Phase 2
-   does **not** inject selector output. A later compact-context adapter may
-   provide a small number of `exact` matches, but must never promote a
-   `family_signal` into model context as if it were confirmed. Gemma explains;
-   it does not reclassify.
+3. **Explain** — `context_adapter.py` takes only `exact` matches for the
+   representative statement, excludes OUT_OF_SCOPE, applies deterministic
+   class priority plus top-N/character budgets, and sends only static catalog
+   `model_guidance_zh_tw` to Gemma. `family_signal` is never promoted into
+   model context. Gemma explains within the supplied classification; it does
+   not reclassify or override deterministic gates.
 
 4. **Suggest** — only when the catalog's `allowed_behavior.advice` is true.
    An OUT_OF_SCOPE pattern (e.g. index advice) is never suggested at all, not

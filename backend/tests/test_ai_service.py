@@ -388,6 +388,8 @@ def test_system_prompt_requires_checklist_before_not_needed():
         "語意完全相同",
         "TRUNC 等於、NVL 等於",  # old list of "system-derived" rewrites
         "A.COL >= '114' AND A.COL < '115'`）",  # prefix-range offered as an accepted form
+        "日期條件目前使用 TRUNC()，可以評估改成日期範圍寫法",  # old tone example contradicted advice-only contract
+        "OR 連接不同欄位的條件（可評估改為 IN",  # cross-column OR cannot be collapsed into one IN
     ],
 )
 def test_system_prompt_has_no_overclaiming_or_unprovable_rewrite_wording(overclaim):
@@ -404,6 +406,12 @@ def test_system_prompt_keeps_r004_scope_and_derived_rewrite_list():
     assert "只有前置萬用字元" in prompt
     assert "目前只有 SUBSTR 等於、同欄位 OR 串成" in prompt
     assert "超過 1000 個值不要合併成單一 IN" in prompt
+    assert "不可直接合併成單一 IN" in prompt
+    assert "UNION／UNION ALL" in prompt
+    assert "條件是否重疊" in prompt
+    assert "重複列／去重對結果的影響" in prompt
+    assert "SUBSTR() 比對" in prompt
+    assert "系統能確認的對應 LIKE 寫法" in prompt
 
 
 def test_system_prompt_provided_example_is_derivable_and_advice_only_example_is_not():

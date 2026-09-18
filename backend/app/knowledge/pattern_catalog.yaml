@@ -1,0 +1,928 @@
+# SQLCheck Oracle SQL Pattern Catalog — Source of Truth for optimization
+# knowledge governance (SQLCheck Oracle Knowledge v1, Phase 1).
+#
+# This file is machine-readable knowledge, not runtime prompt prose. It is
+# NOT loaded by ai_service.py / rule_engine.py / any request path in this
+# Phase — see skills/sqlcheck-oracle-review/references/project-boundaries.md
+# for why, and docs/sql-optimization-skill-applicability.md for how each
+# pattern here relates to the generic github/awesome-copilot sql-optimization
+# skill this project drew on.
+#
+# Governance model (four classes — see
+# skills/sqlcheck-oracle-review/SKILL.md for the full explanation):
+#   VERIFIED_REWRITE — backend/app/services/rewrite_rules.py can prove the
+#     specific rewritten form is equivalent. Today this is the ONLY class the
+#     running system is allowed to turn into an automatic "建議寫法" without
+#     a human confirming it first — and only through rewrite_rules.py, never
+#     through this file.
+#   ADVICE_ONLY — a reasonable direction, but SQLCheck cannot prove the
+#     rewritten SQL returns the same rows in every case. May be explained and
+#     suggested; must never become an automatic "已驗證" rewrite.
+#   INFORMATIONAL — worth a reviewer's attention; does not itself mean the
+#     SQL is wrong or that performance will improve.
+#   OUT_OF_SCOPE — SQLCheck has no real Oracle optimizer context (no
+#     execution plan, no index metadata, no statistics, no cardinality). Can
+#     be described as "requires DBA / test-environment confirmation"; must
+#     never be answered by Gemma.
+#
+# Authority order (unchanged by this file — see project-boundaries.md):
+#   正式中心規範 > rule_engine.py (Deterministic Rule Engine)
+#   > rewrite_rules.py (Deterministic Rewrite Rules) > this catalog > Gemma.
+#
+# Field reference:
+#   id                     stable, unique, upper_snake_case identifier.
+#   name_zh_tw             short Traditional-Chinese label for UI/docs use.
+#   category               predicate | join | subquery | set_operation |
+#                          distinct | structure | table_usage | index |
+#                          plan | statistics | storage.
+#   classification         one of the four classes above.
+#   oracle_applicable      true unless the pattern is dialect-irrelevant.
+#   detection.source       what (if anything) deterministically observes this
+#                          pattern today:
+#                            rule_engine              -> rules.yaml rule ids
+#                            rewrite_rules            -> rewrite_rules.py
+#                                                        function-level rule
+#                                                        names (the `rule`
+#                                                        field of `Rewrite`)
+#                            sql_parser_complexity_flag -> ParsedStatement.
+#                                                        complexity_flags
+#                            improvement_score_structure -> improvement_score
+#                                                        .yaml `structure`
+#                                                        weight keys
+#                            prompt_heuristic_only    -> only the system
+#                                                        prompt currently asks
+#                                                        the model to check
+#                                                        for this; no
+#                                                        deterministic
+#                                                        detector exists yet
+#                            none                     -> no detector anywhere
+#                                                        (informational
+#                                                        knowledge only)
+#   detection.rule_ids            rule_engine.py ids, e.g. ["R005"].
+#   detection.rewrite_rule_ids    rewrite_rules.py rule names, e.g.
+#                                 ["substr_eq_to_like"].
+#   detection.complexity_flags    sql_parser.py complexity_flags values.
+#   detection.structure_keys      improvement_score.yaml `structure.weights`
+#                                 keys.
+#   rationale_zh_tw        why this classification, in plain language.
+#   allowed_behavior.explain        the system/AI may describe the pattern.
+#   allowed_behavior.advice         the system/AI may suggest a direction.
+#   allowed_behavior.automatic_rewrite  may this pattern EVER become an
+#                          automatic "已驗證" rewrite without a human
+#                          confirming it first. Only ever true for
+#                          VERIFIED_REWRITE, and even then the actual
+#                          verification is done by rewrite_rules.py — this
+#                          flag documents intent, it does not itself perform
+#                          or authorize the rewrite.
+#   prohibited_claims      words/claims the model must never attach to this
+#                          pattern (index existence, execution plan, actual
+#                          COST after rewrite, etc.) — enforced today by
+#                          app.yaml's ai_guard.forbidden_phrases and the
+#                          system prompt's 語氣與用詞紅線 section, independent
+#                          of this file.
+#   verification.required_for_rewrite  true if any rewrite claim for this
+#                          pattern must be proven before being shown as
+#                          "verified"/"corrected" rather than "unverified".
+#   verification.mechanism  deterministic_python | none.
+#   sources                provenance: where this pattern's knowledge came
+#                          from (internal SQLCheck design decision, or the
+#                          external awesome-copilot sql-optimization skill).
+#
+# Adding a pattern: append an entry, run
+#   cd backend && uv run pytest tests/test_pattern_catalog.py -q
+# A new VERIFIED_REWRITE entry additionally requires a corresponding rule in
+# rewrite_rules.py with its own positive/negative/boundary tests in
+# tests/test_rewrite_rules.py — this file alone never makes a rewrite
+# automatic.
+
+catalog_version: 1
+
+patterns:
+  # ===========================================================================
+  # Class A — VERIFIED_REWRITE (mirrors backend/app/services/rewrite_rules.py
+  # exactly; one entry per `_RULES` function there).
+  # ===========================================================================
+  - id: SUBSTR_EQ_TO_LIKE
+    name_zh_tw: SUBSTR 定位比對改為 LIKE／範圍
+    category: predicate
+    classification: VERIFIED_REWRITE
+    oracle_applicable: true
+    detection:
+      source: rewrite_rules
+      rewrite_rule_ids: [substr_eq_to_like]
+      rule_ids: [R005]
+    rationale_zh_tw: >
+      SUBSTR(col, p, n) = 'v' 等價於 col LIKE '<p-1 個底線>v%'（p=1 時額外接受
+      上下界寫法），因為 SUBSTR 取出的固定長度片段等於 v 若且唯若該位置的字元
+      恰好是 v，這與 LIKE 樣式的語意相同，且對 NULL 值的行為一致。系統只接受
+      這個推導結果，不接受模型自創的萬用字元位置（正式案例：模型曾把
+      SUBSTR(MANAGE_CD,6,3)='551' 誤改為 LIKE '__%551%'，語意不同）。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: true
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+      - post_rewrite_cost
+    verification:
+      required_for_rewrite: true
+      mechanism: deterministic_python
+    sources:
+      - type: internal
+        ref: backend/app/services/rewrite_rules.py::_rule_substr_eq
+      - type: internal
+        ref: Handoff.md 2026-09-17 深夜（三）
+
+  - id: TRUNC_EQ_TO_RANGE
+    name_zh_tw: TRUNC 日期等式改為範圍比對
+    category: predicate
+    classification: VERIFIED_REWRITE
+    oracle_applicable: true
+    detection:
+      source: rewrite_rules
+      rewrite_rule_ids: [trunc_eq_to_range]
+      rule_ids: [R005]
+    rationale_zh_tw: >
+      TRUNC(col) = X 等價於 col >= X AND col < X + 1，前提是 X 為不含時分秒的
+      日期值（此前提由系統以 assumption 文字揭露給審核者，不代表系統已驗證
+      X 本身不含時間）。TRUNC(col, '格式') 帶格式參數的用法不在此規則範圍內。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: true
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+      - post_rewrite_cost
+    verification:
+      required_for_rewrite: true
+      mechanism: deterministic_python
+    sources:
+      - type: internal
+        ref: backend/app/services/rewrite_rules.py::_rule_trunc_eq
+
+  - id: NVL_EQ_TO_OR_IS_NULL
+    name_zh_tw: NVL 預設值比對改為明確條件
+    category: predicate
+    classification: VERIFIED_REWRITE
+    oracle_applicable: true
+    detection:
+      source: rewrite_rules
+      rewrite_rule_ids: [nvl_eq]
+      rule_ids: [R005]
+    rationale_zh_tw: >
+      NVL(col, 'a') = 'b'：當 a == b 時等價於 (col = 'b' OR col IS NULL)（NULL
+      也會被 NVL 代換成 'a' 而符合比對）；當 a != b 時等價於 col = 'b'（NULL
+      只會被代換成 'a'，不可能等於 'b'）。這是逐案代入即可證明的邏輯等價，
+      不依賴業務假設。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: true
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+      - post_rewrite_cost
+    verification:
+      required_for_rewrite: true
+      mechanism: deterministic_python
+    sources:
+      - type: internal
+        ref: backend/app/services/rewrite_rules.py::_rule_nvl_eq
+
+  - id: OR_SAME_COLUMN_TO_IN
+    name_zh_tw: 同欄位 OR 串接改為 IN
+    category: predicate
+    classification: VERIFIED_REWRITE
+    oracle_applicable: true
+    detection:
+      source: rewrite_rules
+      rewrite_rule_ids: [or_eq_to_in]
+      rule_ids: [R006]
+    rationale_zh_tw: >
+      col = a OR col = b [OR ...]（全部比較同一欄位、皆為等於比較字面值或
+      bind 參數）與 col IN (a, b, ...) 邏輯上完全相同，是純粹的語法糖轉換。
+      不同欄位的 OR 串接不屬於本規則（見 OR_CROSS_COLUMN_TO_UNION_ALL）。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: true
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+      - post_rewrite_cost
+    verification:
+      required_for_rewrite: true
+      mechanism: deterministic_python
+    sources:
+      - type: internal
+        ref: backend/app/services/rewrite_rules.py::_rule_or_eq_to_in
+
+  # ===========================================================================
+  # Class B — ADVICE_ONLY
+  # ===========================================================================
+  - id: PREDICATE_FUNCTION_GENERIC
+    name_zh_tw: 條件欄位使用函數（一般情況）
+    category: predicate
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    detection:
+      source: rule_engine
+      rule_ids: [R005]
+    rationale_zh_tw: >
+      條件欄位套用函數（TRIM／TO_CHAR／自訂函數等未被 rewrite_rules.py 涵蓋
+      的形式）通常有機會改寫成欄位本身的直接比較，但每種函數的等價改法都需
+      要個別驗證語意（型別、NULL 行為、格式假設），系統目前只對
+      SUBSTR／TRUNC／NVL 三種形式建立了證明；其餘一律只能提供方向。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_not_used
+      - full_table_scan
+      - execution_plan
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: external_skill
+        ref: github/awesome-copilot/sql-optimization
+      - type: internal
+        ref: backend/app/config/rules.yaml R005
+
+  - id: UPPER_CASE_FOLD_REMOVAL
+    name_zh_tw: 移除 UPPER／LOWER 大小寫轉換
+    category: predicate
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    detection:
+      source: rule_engine
+      rule_ids: [R005]
+    rationale_zh_tw: >
+      語意陷阱：WHERE UPPER(email) = 'ABC' 直接改成 WHERE email = 'abc' 並不
+      保證結果相同——實際資料中大小寫混雜時，兩種寫法比對到的資料列可能不同。
+      系統沒有欄位實際值分布的資訊，無法確認移除 UPPER／LOWER 後結果是否
+      不變，因此永遠只能提醒「可視資料實際大小寫慣例評估」，不可自動改寫。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_not_used
+      - full_table_scan
+      - actual_data_distribution
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: external_skill
+        ref: github/awesome-copilot/sql-optimization
+      - type: internal
+        ref: skills/sqlcheck-oracle-review/references/forbidden-claims.md
+
+  - id: IMPLICIT_TYPE_CONVERSION_MIXED_QUOTING
+    name_zh_tw: 同性質欄位引號用法不一致（可能隱含型別轉換）
+    category: predicate
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    detection:
+      source: prompt_heuristic_only
+    rationale_zh_tw: >
+      同一段 SQL 中性質相近的代碼欄位一邊加引號、一邊不加（例如
+      COLL_YR = 107 但 LEVY_TP = '1'）可能代表其中一邊發生隱含型別轉換。
+      系統看不到欄位實際型別，無法確認，目前只由系統提示要求模型檢查並以
+      advice_only 提醒；沒有 sql_parser 層級的偵測器。Future Phase 候選：
+      在 sql_parser 增加「同名模式欄位引號不一致」的結構化偵測。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - column_actual_type
+      - index_usage
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: backend/app/prompts/sql_review_zh_tw.txt 「隱含型別轉換」段落
+
+  - id: NOT_IN_SUBQUERY_TO_NOT_EXISTS
+    name_zh_tw: NOT IN 子查詢改為 NOT EXISTS
+    category: subquery
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    detection:
+      source: sql_parser_complexity_flag
+      complexity_flags: [not_in_subquery]
+    rationale_zh_tw: >
+      語意陷阱：當子查詢欄位可能為 NULL 時，NOT IN 會使整個條件不回傳任何
+      資料，NOT EXISTS 則不受影響——兩者在有 NULL 時結果不同。系統無法確認
+      子查詢欄位是否可能為 NULL（NOT NULL 約束資訊不在輸入範圍內），因此只能
+      提醒評估，不能自動改寫；ai_service._revalidate_suggested_sql 的
+      structure-class 比對也會擋下任何把 not_in_subquery 換成
+      correlated_subquery 的整段改寫。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+      - full_table_scan
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: external_skill
+        ref: github/awesome-copilot/sql-optimization
+      - type: internal
+        ref: backend/app/services/ai_service.py::_STRUCTURE_CLASS_FLAGS
+
+  - id: IN_SUBQUERY_TO_EXISTS
+    name_zh_tw: IN 子查詢改為 EXISTS
+    category: subquery
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    detection:
+      source: none
+    rationale_zh_tw: >
+      IN／EXISTS 在多數情況下結果相同，但子查詢含 DISTINCT、集合運算或多欄位
+      對應等寫法時仍可能出現差異，且哪一種寫法「較有效率」高度依賴 Oracle
+      optimizer 與統計資訊（見 Class D）。系統目前沒有專屬偵測旗標，僅列為
+      已知的 advice_only 候選知識，非自動偵測項目。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+      - actual_runtime_improvement
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: external_skill
+        ref: github/awesome-copilot/sql-optimization
+
+  - id: OR_CROSS_COLUMN_TO_UNION_ALL
+    name_zh_tw: 跨欄位 OR 條件改為 UNION ALL
+    category: set_operation
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    detection:
+      source: rule_engine
+      rule_ids: [R006]
+    rationale_zh_tw: >
+      語意陷阱：OR 條件若拆成 UNION（去重）或 UNION ALL（不去重）兩個查詢，
+      必須先確認同一列是否可能同時符合兩邊條件——會同時符合時 UNION ALL 會
+      重複列出該列，UNION 則需要額外的效能代價去重，兩者都可能改變結果筆數
+      語意。系統無法從 SQL 文字判斷兩個條件在資料上是否互斥，因此只能提供
+      方向，不能自動改寫。同欄位的 OR 見 OR_SAME_COLUMN_TO_IN（Class A）。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+      - actual_runtime_improvement
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: external_skill
+        ref: github/awesome-copilot/sql-optimization
+      - type: internal
+        ref: backend/app/config/rules.yaml R006
+
+  - id: LEFT_JOIN_TO_INNER_JOIN
+    name_zh_tw: LEFT JOIN 改為 INNER JOIN
+    category: join
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    detection:
+      source: sql_parser_complexity_flag
+      complexity_flags: [outer_join]
+    rationale_zh_tw: >
+      語意陷阱：只有在「副表一定有對應資料」的業務前提下，LEFT JOIN 才能
+      改成 INNER JOIN 而結果不變；若副表可能無對應資料，改寫會直接刪掉那些
+      主表列，是結果筆數的改變，不是效能優化。系統沒有資料完整性資訊可以
+      確認這個前提，因此不得視為 generic safe rewrite；
+      ai_service._revalidate_suggested_sql 的 join_sides 結構比對也會擋下
+      任何把 LEFT JOIN 換成 INNER JOIN 的整段改寫。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+      - actual_runtime_improvement
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: external_skill
+        ref: github/awesome-copilot/sql-optimization
+      - type: internal
+        ref: backend/app/services/ai_service.py::_revalidate_suggested_sql join_sides 比對
+
+  - id: CORRELATED_SUBQUERY_TO_JOIN_OR_WINDOW
+    name_zh_tw: 相關子查詢改為 JOIN 或視窗函數
+    category: subquery
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    detection:
+      source: sql_parser_complexity_flag
+      complexity_flags: [correlated_subquery]
+    rationale_zh_tw: >
+      語意陷阱：相關子查詢改寫成 JOIN 或視窗函數（例如 ROW_NUMBER() OVER
+      (PARTITION BY ...)）時，NULL 值的分組行為、重複列的處理方式與原本的
+      逐列相關子查詢不一定相同，且視窗函數的 PARTITION BY／ORDER BY 選擇本
+      身就需要業務判斷。此類別本身就在
+      app.yaml ai_gate.candidate_forbidden_complexity_flags 中被列為完全
+      禁止自動改寫（連候選都不產生），比一般 advice_only 更嚴格。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+      - actual_runtime_improvement
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: external_skill
+        ref: github/awesome-copilot/sql-optimization
+      - type: internal
+        ref: backend/app/config/app.yaml ai_gate.candidate_forbidden_complexity_flags
+
+  - id: DISTINCT_REMOVAL
+    name_zh_tw: 移除 DISTINCT
+    category: distinct
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    detection:
+      source: sql_parser_complexity_flag
+      complexity_flags: [distinct, distinct_or_union]
+    rationale_zh_tw: >
+      語意陷阱：DISTINCT 常用來掩蓋 JOIN 造成的重複列；在沒有證明 JOIN 後
+      的資料已經唯一之前移除 DISTINCT，可能讓查詢回傳重複列，是結果集合的
+      改變，不是單純效能調整。系統沒有資料唯一性的證明能力，因此只能提醒
+      「請先確認 JOIN 後的資料是否已經唯一」，不能自動移除；
+      ai_service._revalidate_suggested_sql 的 distinct 旗標比對也會擋下
+      任何整段改寫把 DISTINCT 拿掉的結果。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+      - actual_row_count
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: external_skill
+        ref: github/awesome-copilot/sql-optimization
+      - type: internal
+        ref: Handoff.md 2026-09-17 晚「advice_only 的說明改白話」
+
+  - id: GROUP_BY_STRUCTURAL_REWRITE
+    name_zh_tw: GROUP BY 欄位拆分／合併
+    category: structure
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    detection:
+      source: rule_engine
+      rule_ids: [R005]
+    rationale_zh_tw: >
+      例如把 GROUP BY a||b 拆成 GROUP BY a, b：拆分後分組鍵的排列組合可能與
+      原本的字串串接分組不同（例如 a='1',b='23' 與 a='12',b='3' 串接後相同
+      但分開後不同），是否等價需視實際資料值而定，系統無法只憑 SQL 文字證明。
+      ai_service._revalidate_suggested_sql 的 group_by_count／having 比對也
+      會擋下任何改變 GROUP BY 結構的整段改寫。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+      - actual_runtime_improvement
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: external_skill
+        ref: github/awesome-copilot/sql-optimization
+
+  - id: STRING_CONCAT_PREDICATE_SPLIT
+    name_zh_tw: 欄位串接條件拆分為多欄位比對
+    category: predicate
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    detection:
+      source: none
+    rationale_zh_tw: >
+      例如 W.TAX_CD || W.SUBTAX_CD = '551' 改成分欄位比對時，'551' 要切成
+      '55'+'1' 還是 '5'+'51' 需要業務確認欄位寬度慣例，系統無法從字面猜測
+      正確的切法，只能在 example 中列出「若 TAX_CD 為 2 碼」這類假設，
+      不能產生完整改寫。已在系統提示中以具體範例教導模型（見
+      backend/app/prompts/sql_review_zh_tw.txt 範例 c）。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: backend/app/prompts/sql_review_zh_tw.txt 範例 c
+
+  - id: LEADING_WILDCARD_LIKE
+    name_zh_tw: LIKE 前置萬用字元
+    category: predicate
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    detection:
+      source: rule_engine
+      rule_ids: [R004]
+    rationale_zh_tw: >
+      LIKE '%xxx' 這類前置萬用字元沒有等價的改寫可以自動產生——只能視業務
+      需求評估「若只需比對開頭可改為 LIKE 'xxx%'」或另建文字索引兩個方向，
+      兩者都不是自動可證明等價的轉換。後置萬用字元（LIKE 'xxx%'）在 Oracle
+      本就可用範圍掃描處理，不屬於本 pattern（見 rules.yaml R004 註解與
+      prompt「後置萬用字元」段落）。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_usage
+      - full_table_scan
+      - execution_plan
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: backend/app/config/rules.yaml R004
+
+  - id: CARTESIAN_JOIN_MISSING_CONDITION
+    name_zh_tw: 缺少 JOIN 條件（實質笛卡兒積）
+    category: join
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    detection:
+      source: sql_parser_complexity_flag
+      complexity_flags: [cartesian_join]
+    rationale_zh_tw: >
+      缺少 JOIN 條件（含舊式逗號連接）通常是筆誤而非刻意設計，務必提醒；
+      但正確的關聯鍵值需要業務知識才能補上，系統無法自動推測要用哪個欄位
+      關聯，因此只能提醒評估，不能自動改寫。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+      - actual_row_count
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: backend/app/services/sql_parser.py::_complexity_flags cartesian_join
+
+  # ===========================================================================
+  # Class C — INFORMATIONAL
+  # ===========================================================================
+  - id: SELECT_STAR
+    name_zh_tw: SELECT * 使用星號
+    category: structure
+    classification: INFORMATIONAL
+    oracle_applicable: true
+    detection:
+      source: sql_parser_complexity_flag
+      complexity_flags: [select_star]
+    rationale_zh_tw: >
+      建議明列欄位是良好習慣（可讀性、避免未來欄位異動影響呼叫端），但
+      SELECT * 本身既不代表 SQL 有錯，也不保證明列欄位就一定較快——實際影響
+      取決於資料表欄位數與呼叫端實際使用哪些欄位，系統無法從 SQL 文字得知
+      這些資訊。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - actual_runtime_improvement
+      - index_usage
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: external_skill
+        ref: github/awesome-copilot/sql-optimization
+
+  - id: IMPORTANT_TABLE_USAGE
+    name_zh_tw: 查詢重要資料表
+    category: table_usage
+    classification: INFORMATIONAL
+    oracle_applicable: true
+    detection:
+      source: rule_engine
+      rule_ids: [R007]
+    rationale_zh_tw: >
+      命中 important_tables.yaml 清單只代表「這是治理上需要留意的資料表」，
+      不代表這段 SQL 寫法有問題，也不是效能建議——這是資料範圍治理提醒，
+      刻意與「SQL 寫法」類的 R004/R005/R006 提醒分開統計
+      （見 ai_service._WRITE_STYLE_RULE_IDS 註解），不得因為外部 Skill 認為
+      某寫法不佳，就把重要資料表提醒升級為「不符合中心規範」。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+      - full_table_scan
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: backend/app/config/important_tables.yaml
+
+  - id: STRUCTURAL_COMPLEXITY_MANY_TABLES
+    name_zh_tw: 關聯資料表數量偏多
+    category: structure
+    classification: INFORMATIONAL
+    oracle_applicable: true
+    detection:
+      source: improvement_score_structure
+      structure_keys: [many_tables]
+    rationale_zh_tw: >
+      關聯的資料表數量多不必然代表查詢有問題或效能不佳，只是「寫法複雜度」
+      的量化指標之一（improvement_score.py 的 S 分量），提醒審核者留意，
+      不是可自動改善的具體項目。
+    allowed_behavior:
+      explain: true
+      advice: false
+      automatic_rewrite: false
+    prohibited_claims:
+      - actual_runtime_improvement
+      - execution_plan
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: backend/app/config/rules.yaml improvement_score.structure.many_tables_threshold
+
+  - id: LARGE_RESULT_SET_NO_LIMIT
+    name_zh_tw: 可能回傳大量資料列
+    category: structure
+    classification: INFORMATIONAL
+    oracle_applicable: true
+    detection:
+      source: none
+    rationale_zh_tw: >
+      「這段查詢可能回傳很多列」是值得留意的一般提醒，但系統看不到實際資料
+      量與資料分布，無法判斷「大量」的實際門檻，也不能宣稱一定有效能問題。
+      目前沒有 sql_parser 偵測器；只能作為知識性提醒存在，不接自動觸發。
+    allowed_behavior:
+      explain: true
+      advice: false
+      automatic_rewrite: false
+    prohibited_claims:
+      - actual_row_count
+      - execution_plan
+      - full_table_scan
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: external_skill
+        ref: github/awesome-copilot/sql-optimization
+
+  # ===========================================================================
+  # Class D — OUT_OF_SCOPE (SQLCheck has no real Oracle optimizer context;
+  # these must never be answered or estimated by Gemma — enforced today by
+  # app.yaml ai_guard.forbidden_phrases and the prompt's 語氣與用詞紅線).
+  # ===========================================================================
+  - id: INDEX_ADVISORY
+    name_zh_tw: 索引建議／存在／使用／涵蓋／欄位順序
+    category: index
+    classification: OUT_OF_SCOPE
+    oracle_applicable: true
+    detection:
+      source: none
+    rationale_zh_tw: >
+      涵蓋 CREATE INDEX 建議、index existence、index usage、covering index、
+      index column order。SQLCheck 沒有連線 Oracle Data Dictionary，看不到
+      任何實際索引定義，因此不能建議建立、調整或宣稱使用了哪個索引；這類
+      判斷需要 DBA 在測試環境對照實際執行計畫確認。
+    allowed_behavior:
+      explain: false
+      advice: false
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_not_used
+      - index_used
+      - index_invalid
+      - create_index_recommendation
+      - covering_index_recommendation
+      - index_column_order_recommendation
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: backend/app/prompts/sql_review_zh_tw.txt 「你完全沒有的能力」段落
+
+  - id: EXECUTION_PLAN_CLAIM
+    name_zh_tw: 執行計畫宣稱
+    category: plan
+    classification: OUT_OF_SCOPE
+    oracle_applicable: true
+    detection:
+      source: none
+    rationale_zh_tw: >
+      SQLCheck 沒有連線資料庫，無法取得 EXPLAIN PLAN／實際執行計畫，任何
+      「執行計畫顯示…」類敘述都是無法驗證的臆測。
+    allowed_behavior:
+      explain: false
+      advice: false
+      automatic_rewrite: false
+    prohibited_claims:
+      - execution_plan
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: backend/app/config/app.yaml ai_guard.forbidden_phrases
+
+  - id: FULL_TABLE_SCAN_CLAIM
+    name_zh_tw: 全表掃描宣稱
+    category: plan
+    classification: OUT_OF_SCOPE
+    oracle_applicable: true
+    detection:
+      source: none
+    rationale_zh_tw: >
+      「Full Table Scan／全表掃描」是實際執行計畫的觀測結果，SQLCheck 無法
+      得知，任何宣稱都可能誤導使用者以為系統做過實際分析。
+    allowed_behavior:
+      explain: false
+      advice: false
+      automatic_rewrite: false
+    prohibited_claims:
+      - full_table_scan
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: backend/app/config/app.yaml ai_guard.forbidden_phrases
+
+  - id: CARDINALITY_SELECTIVITY_DISTRIBUTION
+    name_zh_tw: 基數／選擇率／資料分布／統計資訊
+    category: statistics
+    classification: OUT_OF_SCOPE
+    oracle_applicable: true
+    detection:
+      source: none
+    rationale_zh_tw: >
+      涵蓋 cardinality、selectivity、data distribution、Oracle statistics。
+      這些都是 Oracle optimizer 依實際資料統計出的量化資訊，SQLCheck 沒有
+      連線資料庫、看不到 DBA_TABLES／DBA_TAB_COLUMNS 等統計資料，無法計算
+      或引用，任何具體數字或「選擇率高／低」的宣稱都不可信。
+    allowed_behavior:
+      explain: false
+      advice: false
+      automatic_rewrite: false
+    prohibited_claims:
+      - cardinality_estimate
+      - selectivity_claim
+      - data_distribution_claim
+      - oracle_statistics_claim
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: backend/app/prompts/sql_review_zh_tw.txt 「你完全沒有的能力」段落
+
+  - id: ACTUAL_RUNTIME_IMPROVEMENT_CLAIM
+    name_zh_tw: 實際執行效能改善量化宣稱
+    category: plan
+    classification: OUT_OF_SCOPE
+    oracle_applicable: true
+    detection:
+      source: none
+    rationale_zh_tw: >
+      SQLCheck 從未實際執行 SQL，不能宣稱「已測試」「已驗證」「實測」某項
+      改寫確實加快多少；`estimated_improvement_pct` 是模型主觀的粗略經驗
+      法則參考值，僅供人工參考，不回灌「改善指數」或「改善潛力」，也不得在
+      文字中包裝成量測結果。
+    allowed_behavior:
+      explain: false
+      advice: false
+      automatic_rewrite: false
+    prohibited_claims:
+      - tested_claim
+      - verified_claim
+      - measured_runtime_claim
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: backend/app/services/ai_service.py::improvement_potential
+
+  - id: POST_REWRITE_ORACLE_COST_CLAIM
+    name_zh_tw: 改寫後 Oracle COST 數字宣稱
+    category: plan
+    classification: OUT_OF_SCOPE
+    oracle_applicable: true
+    detection:
+      source: none
+    rationale_zh_tw: >
+      COST 是 Oracle optimizer 依統計資訊估算出的數字，只有實際在資料庫執行
+      估算才能得到；SQLCheck 不得捏造「改善後 COST」這種具體數值，這是 PRD
+      明文禁止且已在 app.yaml ai_guard.forbidden_phrases 攔截的項目。
+    allowed_behavior:
+      explain: false
+      advice: false
+      automatic_rewrite: false
+    prohibited_claims:
+      - post_rewrite_cost
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: backend/app/config/app.yaml ai_guard.forbidden_phrases
+
+  - id: PARTITION_RECOMMENDATION
+    name_zh_tw: 分割區（Partition）建議
+    category: storage
+    classification: OUT_OF_SCOPE
+    oracle_applicable: true
+    detection:
+      source: none
+    rationale_zh_tw: >
+      資料表分割區策略是實體儲存設計，需要資料量、查詢模式與中央 DBA
+      infrastructure context 才能決定，SQLCheck 是地方端 SQL 使用治理工具，
+      不是中央 Oracle infrastructure DBA，不得建議分割區設計。
+    allowed_behavior:
+      explain: false
+      advice: false
+      automatic_rewrite: false
+    prohibited_claims:
+      - partition_recommendation
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: skills/sqlcheck-oracle-review/references/project-boundaries.md
+
+  - id: PHYSICAL_STORAGE_AND_HOST_TUNING
+    name_zh_tw: 實體儲存調校／主機資源調校
+    category: storage
+    classification: OUT_OF_SCOPE
+    oracle_applicable: true
+    detection:
+      source: none
+    rationale_zh_tw: >
+      涵蓋實體儲存參數調整與資料庫主機資源（記憶體、CPU、I/O）調校建議。
+      這些屬於其他管理責任範圍，且需要中央 DBA 對正式環境的完整存取權限，
+      SQLCheck 不連線資料庫、不具備這類 context，不得提出建議。
+    allowed_behavior:
+      explain: false
+      advice: false
+      automatic_rewrite: false
+    prohibited_claims:
+      - physical_storage_tuning
+      - db_host_resource_tuning
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: skills/sqlcheck-oracle-review/references/project-boundaries.md

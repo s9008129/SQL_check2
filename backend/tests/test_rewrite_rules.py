@@ -25,9 +25,17 @@ def test_mid_string_substr_correct_like_is_verified():
 
 
 # --- SUBSTR prefix ---------------------------------------------------------
-def test_prefix_substr_like_and_bounds_both_verified():
+def test_prefix_substr_canonical_like_is_verified():
     assert _v("substr(w.coll_b_date, 1, 3) = '107'", "w.coll_b_date LIKE '107%'").status == "verified"
-    assert _v("substr(w.coll_b_date, 1, 3) = '107'", "w.coll_b_date >= '107' AND w.coll_b_date < '108'").status == "verified"
+
+
+def test_prefix_substr_range_bounds_are_not_verified():
+    # 2026-09-18: the p=1 prefix-range form depends on collation, which
+    # SQLCheck cannot see. It is never accepted as written; the system
+    # replaces it with its own canonical LIKE (the proven form).
+    v = _v("substr(w.coll_b_date, 1, 3) = '107'", "w.coll_b_date >= '107' AND w.coll_b_date < '108'")
+    assert v.status == "corrected"
+    assert v.example == "w.coll_b_date LIKE '107%'"
 
 
 def test_prefix_substr_wrong_bounds_corrected_to_like():
@@ -36,19 +44,41 @@ def test_prefix_substr_wrong_bounds_corrected_to_like():
     assert v.example == "w.coll_b_date LIKE '107%'"
 
 
+def test_full_rewrite_with_prefix_range_bounds_is_rejected():
+    o, s = _trees(
+        "SELECT A.X FROM T A WHERE SUBSTR(A.C, 1, 3) = '107'",
+        "SELECT A.X FROM T A WHERE A.C >= '107' AND A.C < '108'",
+    )
+    ok, why = rr.verify_predicate_changes(o, s)
+    assert ok is False and why
+
+
 def test_substr_length_mismatch_is_not_rewritable():
     # SUBSTR of length 3 can never equal a 2-char literal: no rule, unverified.
     assert _v("SUBSTR(A.C, 1, 3) = '10'", "A.C LIKE '10%'").status == "unverified"
+
+
+def test_substr_literal_longer_than_length_is_not_rewritable():
+    assert _v("SUBSTR(A.C, 1, 2) = '107'", "A.C LIKE '107%'").status == "unverified"
 
 
 def test_substr_value_with_wildcard_is_not_rewritable():
     assert _v("SUBSTR(A.C, 1, 2) = '1_'", "A.C LIKE '1_%'").status == "unverified"
 
 
-def test_next_prefix_edge_cases():
-    assert rr._next_prefix("107") == "108"
-    assert rr._next_prefix("109") is None
-    assert rr._next_prefix("AZ") is None
+def test_substr_value_with_percent_is_not_rewritable():
+    assert _v("SUBSTR(A.C, 1, 2) = '1%'", "A.C LIKE '1%%'").status == "unverified"
+
+
+def test_substr_value_with_quote_yields_valid_escaped_like():
+    # The canonical text must stay valid SQL when v contains a quote; the
+    # model's correctly escaped LIKE is verified, anything else is corrected
+    # to the escaped form (previously the system emitted `LIKE 'O'B%'`).
+    assert _v("SUBSTR(A.C, 1, 3) = 'O''B'", "A.C LIKE 'O''B%'").status == "verified"
+    v = _v("SUBSTR(A.C, 1, 3) = 'O''B'", "A.C = 'x'")
+    assert v.status == "corrected"
+    assert v.example == "A.C LIKE 'O''B%'"
+    assert rr.parse_predicate(v.example) is not None
 
 
 # --- TRUNC: never server-proven (2026-09-18 Runtime Correctness v1) --------

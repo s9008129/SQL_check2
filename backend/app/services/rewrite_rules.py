@@ -133,8 +133,11 @@ def _rule_substr_eq(pred: exp.Expression) -> Rewrite | None:
     trailing `%` = anything after). NULL col → NULL on both sides. Requires
     len(v) == n (otherwise SUBSTR can never equal v → not rewritable here)
     and v free of LIKE metacharacters. For p == 1 the pattern is 'v%'.
-    Also accepted for p == 1: the prefix-bounds form
-    `col >= 'v' AND col < 'next(v)'` the prompt has long taught the model."""
+
+    Only this LIKE form is accepted. The p == 1 prefix-bounds form
+    `col >= 'v' AND col < 'next(v)'` was removed on 2026-09-18: range
+    comparison depends on collation (NLS_COMP / NLS_SORT), which SQLCheck
+    cannot see."""
     if not isinstance(pred, exp.EQ):
         return None
     func, lit = pred.this, pred.expression
@@ -152,26 +155,10 @@ def _rule_substr_eq(pred: exp.Expression) -> Rewrite | None:
         return None
     if len(value) != length or _WILDCARD_RE.search(value):
         return None
-    pattern = "_" * (start - 1) + value + "%"
+    # Quotes inside v must be doubled, or the canonical text is not valid SQL.
+    pattern = ("_" * (start - 1) + value + "%").replace("'", "''")
     canonical = f"{_column_sql(col)} LIKE '{pattern}'"
-    accepted = [normalize_text(canonical) or canonical]
-    if start == 1:
-        nxt = _next_prefix(value)
-        if nxt is not None:
-            bounds = f"{_column_sql(col)} >= '{value}' AND {_column_sql(col)} < '{nxt}'"
-            n = normalize_text(bounds)
-            if n:
-                accepted.append(n)
-    return Rewrite(rule="substr_eq_to_like", canonical=canonical, accepted=tuple(accepted))
-
-
-def _next_prefix(value: str) -> str | None:
-    """'107' → '108', '10Z' → None (no safe successor without collation
-    knowledge). Only digits and letters other than 9/z/Z are incremented."""
-    last = value[-1]
-    if last in "9zZ" or not last.isalnum():
-        return None
-    return value[:-1] + chr(ord(last) + 1)
+    return Rewrite(rule="substr_eq_to_like", canonical=canonical, accepted=(normalize_text(canonical) or canonical,))
 
 
 def _rule_or_eq_to_in(atom: exp.Expression) -> Rewrite | None:

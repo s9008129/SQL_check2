@@ -161,7 +161,7 @@ patterns:
   # LIKE form, and OR_SAME_COLUMN_TO_IN authorizes only 1–1000 values.
   # ===========================================================================
   - id: SUBSTR_EQ_TO_LIKE
-    name_zh_tw: SUBSTR 定位比對改為 LIKE／範圍
+    name_zh_tw: SUBSTR 定位比對改為 LIKE
     category: predicate
     classification: VERIFIED_REWRITE
     oracle_applicable: true
@@ -179,8 +179,12 @@ patterns:
       取出的固定長度片段等於 v 若且唯若該位置的字元恰好是 v，這與 LIKE 樣式
       的語意相同，且對 NULL 值的行為一致。系統只接受這個推導結果，不接受模型
       自創的萬用字元位置（正式案例：模型曾把 SUBSTR(MANAGE_CD,6,3)='551' 誤改
-      為 LIKE '__%551%'，語意不同）。p=1 時 runtime 另外接受的上下界寫法
-      不在本 pattern 的認可範圍內，見 runtime_gap。
+      為 LIKE '__%551%'，語意不同）。v 含單引號時，canonical 文字會把單引號
+      重複成 ''，確保仍是可執行的 SQL。p=1 的上下界寫法
+      col >= 'v' AND col < '<next(v)>' 依賴 collation（NLS_COMP／NLS_SORT），
+      SQLCheck 看不到，因此不在認可範圍內；runtime 自 2026-09-18 起也不再
+      接受這種寫法（模型寫成上下界時，片段會被系統改成 canonical LIKE，整段
+      改寫則會被退回）。
     allowed_behavior:
       explain: true
       advice: true
@@ -192,29 +196,13 @@ patterns:
     verification:
       required_for_rewrite: true
       mechanism: deterministic_python
-    runtime_gap:
-      kind: unauthorized_accepted_form
-      runtime_rule: substr_eq_to_like
-      not_authorized_forms:
-        - "col >= 'v' AND col < '<next(v)>'   (p = 1 的上下界寫法)"
-      description_zh_tw: >
-        既有 rewrite_rules._rule_substr_eq 在 p=1 時，也把
-        col >= 'v' AND col < _next_prefix(v) 列為 accepted form，
-        verify_fragment 會把這種寫法標成 verified。範圍比較的結果取決於
-        collation（NLS_COMP／NLS_SORT 與資料的 collation 設定），而
-        _next_prefix() 的 docstring 自己也說明沒有 collation 資訊就無法得出
-        一般性的安全後繼值；SQLCheck 沒有 session 或欄位的 collation context。
-      required_action_zh_tw: >
-        本 PR 不修改 rewrite_rules.py。Phase 2（Pattern Selector）之前需另開
-        correctness PR，決定移除這個 accepted form 或加上可驗證的 collation
-        前提；在那之前，未來的 selector 只能自動選用 canonical LIKE 形式。
     sources:
       - type: internal
         ref: backend/app/services/rewrite_rules.py::_rule_substr_eq
       - type: internal
-        ref: backend/app/services/rewrite_rules.py::_next_prefix
-      - type: internal
         ref: Handoff.md 2026-09-17 深夜（三）
+      - type: internal
+        ref: backend/tests/test_rewrite_rules.py SUBSTR 段落（上下界寫法不被接受、單引號跳脫）
 
   - id: TRUNC_EQ_TO_RANGE
     name_zh_tw: TRUNC 日期等式改為範圍比對

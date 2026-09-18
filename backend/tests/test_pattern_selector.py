@@ -1,5 +1,11 @@
 from app.schemas import Finding
-from app.services.pattern_selector import PatternMatch, PatternSelection, select_patterns
+from app.services.pattern_selector import (
+    SUPPORTED_EXACT_SOURCES,
+    PatternMatch,
+    PatternSelection,
+    _catalog_patterns,
+    select_patterns,
+)
 from app.services.sql_parser import parse_sql_text
 
 
@@ -13,6 +19,18 @@ def _finding(rule_id: str, index: int = 0) -> Finding:
 
 def _rules(threshold: int = 4) -> dict:
     return {"improvement_score": {"structure": {"many_tables_threshold": threshold}}}
+
+
+
+
+
+def test_selector_supports_every_deterministic_catalog_source():
+    deterministic_sources = {
+        (p.get("detection") or {}).get("source")
+        for p in _catalog_patterns()
+        if (p.get("detection") or {}).get("source") not in {"none", "prompt_heuristic_only"}
+    }
+    assert deterministic_sources <= SUPPORTED_EXACT_SOURCES
 
 
 def test_clean_sql_selects_nothing():

@@ -1,0 +1,61 @@
+name: Deploy Script CI
+
+on:
+  pull_request:
+    paths:
+      - "deploy/**"
+      - ".github/workflows/deploy-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "deploy/**"
+      - ".github/workflows/deploy-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  powershell:
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse deploy scripts
+        shell: pwsh
+        run: |
+          $files = @(
+            "deploy/deploy.ps1",
+            "deploy/deploy-infra.ps1",
+            "deploy/smoke-test.ps1",
+            "deploy/tests/app-deploy-policy.Tests.ps1",
+            "deploy/tests/firewall-helpers.Tests.ps1"
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file),
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              $messages = $errors | ForEach-Object { $_.Message }
+              throw "$file parse failed: $($messages -join ' | ')"
+            }
+          }
+
+      - name: App-only deployment policy
+        shell: pwsh
+        run: pwsh -NoProfile -File deploy/tests/app-deploy-policy.Tests.ps1
+
+      - name: Firewall helper regression tests
+        shell: pwsh
+        run: pwsh -NoProfile -File deploy/tests/firewall-helpers.Tests.ps1

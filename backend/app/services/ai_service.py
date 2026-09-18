@@ -474,14 +474,27 @@ def _parse_sql_or_fragment(text: str) -> exp.Expression | None:
     if not text or not text.strip():
         return None
     stripped = text.strip().rstrip(";")
-    try:
-        return parse_one(stripped, read="oracle")
-    except Exception:
+
+    # A leading WHERE/ON is a fragment wrapper, not a standalone Oracle
+    # statement. sqlglot may still accept some such text into a partial AST,
+    # which would silently hide its literals/columns from provenance checks.
+    # Normalize the wrapper *before* trying a standalone parse.
+    if re.match(r"^\s*(?:WHERE|ON)\b", stripped, flags=re.IGNORECASE):
         predicate = re.sub(r"^\s*(?:WHERE|ON)\b", "", stripped, flags=re.IGNORECASE).strip()
         if not predicate:
             return None
         try:
             return parse_one(f"SELECT 1 FROM DUAL WHERE {predicate}", read="oracle")
+        except Exception:
+            return None
+
+    try:
+        return parse_one(stripped, read="oracle")
+    except Exception:
+        # Bare predicate fragments (without WHERE/ON) get one conservative
+        # wrapper so identifier/literal provenance can still be inspected.
+        try:
+            return parse_one(f"SELECT 1 FROM DUAL WHERE {stripped}", read="oracle")
         except Exception:
             return None
 

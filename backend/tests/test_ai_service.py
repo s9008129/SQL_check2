@@ -440,6 +440,17 @@ def test_system_prompt_explains_rewrite_outcome_and_examples():
     assert "example 就必須填寫" in ai_service.SYSTEM_PROMPT
 
 
+def test_system_prompt_defines_knowledge_context_authority_and_class_semantics():
+    prompt = ai_service.SYSTEM_PROMPT
+    assert "knowledge_context" in prompt
+    assert "確定性 exact match" in prompt
+    assert "權威性仍低於 findings" in prompt
+    assert "VERIFIED_REWRITE" in prompt
+    assert "ADVICE_ONLY" in prompt
+    assert "INFORMATIONAL" in prompt
+    assert "family_signal 或 OUT_OF_SCOPE" in prompt
+
+
 def test_system_prompt_requires_checklist_before_not_needed():
     # 2026-09-17: "already good" must be an evidence-backed claim.
     assert "structure_flags" in ai_service.SYSTEM_PROMPT

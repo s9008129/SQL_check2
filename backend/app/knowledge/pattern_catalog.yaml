@@ -305,7 +305,7 @@ patterns:
     name_zh_tw: 同欄位 OR 串接改為 IN
     model_guidance_zh_tw: >
       只有同一欄位、全部為等於比較時可改成 IN；單一 IN 最多 1000 個值。
-      跨欄位 OR 或超過 1000 個值都不得當成已驗證改寫。
+      跨欄位 OR 或超過 1000 個值都不得當成系統確認的改寫。
     category: predicate
     classification: VERIFIED_REWRITE
     oracle_applicable: true

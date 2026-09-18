@@ -3,7 +3,7 @@
 
 app:
   name: "SQLCheck AI"
-  title: "SQL 效能優化助手"
+  title: "SQL 智慧效能檢核與改善助手"
 
 upload:
   max_file_mb: 10

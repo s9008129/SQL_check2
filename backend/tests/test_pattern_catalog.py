@@ -411,6 +411,58 @@ def test_runtime_or_to_in_matches_catalog_boundary_and_gap(patterns: list[dict[s
     )
 
 
+# Synthetic probes of forms the catalog does NOT certify, keyed by the pattern
+# that governs them: (before, example, statuses meaning "the runtime certifies
+# this form"). For SUBSTR only "verified" counts — "corrected" means the
+# runtime replaced the range with its own canonical LIKE, which is certified.
+_UNCERTIFIED_FORM_PROBES: dict[str, list[tuple[str, str, frozenset[str]]]] = {
+    "SUBSTR_EQ_TO_LIKE": [
+        ("SUBSTR(A.C, 1, 3) = '107'", "A.C >= '107' AND A.C < '108'", frozenset({"verified"})),
+    ],
+    "TRUNC_EQ_TO_RANGE": [
+        ("TRUNC(A.D) = :X", "A.D >= :X AND A.D < :X + 1", frozenset({"verified", "corrected"})),
+        ("TRUNC(A.D) = :X", "A.D BETWEEN :X AND :X + 1", frozenset({"verified", "corrected"})),
+    ],
+    "NVL_EQ_TO_OR_IS_NULL": [
+        ("NVL(A.S, 'N') = 'N'", "(A.S = 'N' OR A.S IS NULL)", frozenset({"verified", "corrected"})),
+        ("NVL(A.S, 'N') = 'Y'", "A.S = 'Y'", frozenset({"verified", "corrected"})),
+    ],
+    "OR_SAME_COLUMN_TO_IN": [
+        (
+            " OR ".join(f"A.C = {i}" for i in range(1, 1002)),
+            f"A.C IN ({', '.join(str(i) for i in range(1, 1002))})",
+            frozenset({"verified", "corrected"}),
+        ),
+    ],
+}
+
+
+def test_runtime_gap_matches_what_the_runtime_actually_certifies(patterns: list[dict[str, Any]]) -> None:
+    """Runtime Correctness v1: the catalog's runtime_gap must describe the
+    runtime exactly — declared while the runtime still certifies a form the
+    catalog does not, removed once it no longer does."""
+    from app.services import rewrite_rules as rr
+
+    by_id = {p.get("id"): p for p in patterns}
+    for pid, probes in _UNCERTIFIED_FORM_PROBES.items():
+        assert pid in by_id, f"probe refers to unknown pattern {pid!r}"
+        certified = [
+            (before[:40], example[:40], status)
+            for before, example, certifying in probes
+            if (status := rr.verify_fragment(before, example).status) in certifying
+        ]
+        has_gap = bool(by_id[pid].get("runtime_gap"))
+        assert bool(certified) == has_gap, (
+            f"{pid}: runtime certifies {certified} but runtime_gap is {'declared' if has_gap else 'absent'}"
+        )
+
+
+def test_every_declared_runtime_gap_has_a_probe(patterns: list[dict[str, Any]]) -> None:
+    for p in patterns:
+        if p.get("runtime_gap"):
+            assert p.get("id") in _UNCERTIFIED_FORM_PROBES, f"{p.get('id')}: add a probe for its runtime_gap"
+
+
 def test_no_duplicate_source_of_truth_pattern_names(patterns: list[dict[str, Any]]) -> None:
     """Every VERIFIED_REWRITE rewrite_rule_id maps to exactly one catalog
     pattern id — otherwise the catalog would be a second, possibly

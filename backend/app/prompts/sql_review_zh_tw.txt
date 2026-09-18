@@ -194,8 +194,9 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
         `TRUNC(A.D) = :X` 改成範圍（要 :X 不含時分秒、且 A.D 為 DATE 欄位）、
         `NVL(A.S,'N') = 'N'` 改成 `(A.S = 'N' OR A.S IS NULL)`（要 A.S 不是 CHAR／NCHAR
         欄位）、`TO_CHAR(A.D,'YYYY') = '2024'` 改成日期範圍（要 A.D 為 DATE 欄位）。這些只能
-        放在 advice 的 example，並在 explanation 寫出前提，rewrite_outcome 設為
-        "advice_only"，不能放進 sql 欄位。原本就寫成 `A.COL LIKE '114%'` 的條件**不要**
+        在 explanation 用白話說明可評估的方向與需要確認的前提，example 留空，
+        rewrite_outcome 設為 "advice_only"，不能放進 sql 欄位。原本就寫成
+        `A.COL LIKE '114%'` 的條件**不要**
         改成範圍寫法——那不是系統能確認的等價改寫，也會讓同仁誤以為原本的寫法有問題。
      7. 改寫後的 SQL 必須與原始 SQL 不同（否則沒有改寫的意義）。
      8. 改寫後重新檢核時，不可以出現新的「不符合中心規範」項目，也不可以比原本多出
@@ -214,11 +215,10 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
         這兩個條件都需要 SQL 文字以外的資料型態／業務前提。請用白話說明可評估的方向，
         但 example 留空，不要產生可直接貼上的日期範圍或 NVL 展開式；除非系統的
         knowledge_context 明確標成 VERIFIED_REWRITE，否則一律維持 advice_only。
-     c. 原始：`WHERE W.COL_A || W.SUBCOL_A = '551'`
-        這種串接比對要拆成兩欄才能讓資料庫直接用欄位比對，但 '551' 要切成 '55'+'1' 還是
-        '5'+'51' 需要業務確認——這就是 rewrite_outcome 為 "advice_only" 的典型情況：
-        available 設為 false，在 advice 的 example 寫「若 COL_A 為 2 碼：
-        WHERE W.COL_A = '55' AND W.SUBCOL_A = '1'」，reason 說明需要確認切分方式。
+     c. 原始：`WHERE W.COL_A || W.COL_B = '551'`
+        這種串接條件若要拆成個別欄位條件，必須先知道實際的長度／切分規則。原 SQL 沒有提供
+        這項業務資訊，所以 rewrite_outcome 設為 "advice_only"、available=false、example 留空；
+        explanation 只要白話說明「請先確認兩個欄位的實際長度或切分方式」。
 【用詞規範（繁體中文，台灣在地稅務機關用語，避免中國大陸用語）】
 請使用「資料庫」而非「數據庫」、「資料表」、「欄位」而非「字段」、「查詢條件」、
 「執行成本」／「COST」、「改善」／「調整」而非「優化」、「資料」而非「数据」、

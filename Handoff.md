@@ -263,16 +263,17 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
   - `預估改善效果` → `建議採用狀態`。
   - `優化前後比較` → `原寫法與建議寫法`。
   - `改善指數` → `改善優先指數`，避免被誤認為效能分數。
-  - unverified 片段顯示 `示意方向（請勿直接套用）`；verified/corrected 才能稱為系統確認的建議寫法。
+  - unverified 片段顯示 `示意方向（請勿直接套用）`；verified/corrected 才能標示為
+    `查詢結果已確認`／`系統已修正寫法`。
 - Runtime anti-hallucination：
-  - advice example 若引入原 SQL 未出現的欄位／資料表／別名，伺服器隱藏 SQL 片段但保留有用的文字方向；
-  - 遺失 DATE/TIMESTAMP typed-literal wrapper 的 example 不顯示成可執行 SQL；
+  - advice example 若引入原 SQL 未出現的欄位／資料表／別名或新的業務常數，伺服器隱藏 SQL 片段但保留有用的文字方向；
+  - masking 保留 DATE/TIMESTAMP 的型態提示；若 example 遺失 typed-literal wrapper，則不顯示成可直接套用的 SQL；
   - `:STR_xxx`／`:NUM_xxx` 不得出現在人類可見 prose；
   - 索引／Execution Plan 等 SQLCheck 無法觀測的資料庫行為宣稱由 prompt + server prose guard 雙層收斂。
 - Prompt 的最高原則改成「不知道就不要猜 SQL」；缺 WHERE、未知 JOIN key、未知 datatype 等資訊不足情境改為 prose-first，不為了填 example 而生成欄位或條件。
 - 同欄位 OR→IN 的 advice fragment 現在可先移除純語法 wrapper `WHERE`／`ON` 再驗證；不擴大 rewrite authority。
 - Cartesian join 沒有被新增為中心規範 BLOCK；但 rules.yaml 新增產品層 `structure.score_floors.cartesian_join=60`，讓缺少資料表關聯條件的 SQL 至少顯示「建議改善」，不再出現 compliance PASS + 改善優先指數「目前良好」的矛盾。
-- Gemma response schema 不再要求模型猜 `estimated_improvement_pct`；API 欄位暫留相容，正式模型不再花 token 猜百分比。
+- Gemma response schema 與 payload 已移除改善百分比任務；API 欄位暫留相容且固定為 null，正式模型不再花 token 猜百分比。
 - 新增 `docs/115-sqlcheck-innovation-positioning.md`：115 年創新項目的真實可行銷定位、頁面語意與年度 KPI 證據原則。
 - 新增 Frontend CI；本輪 merge gate 為 Backend CI（pytest + Ruff）與 Frontend CI（Vitest + build）全綠。
 - 正式機 Gemma live 驗證仍須於 merge/deploy 後重跑 Round 1 的 10 cases，至少人工確認 T01/T05/T07/T10。
@@ -280,8 +281,8 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 ## 4. 「AI 沒給建議寫法」的判讀順序（接手後最常被問）
 
 1. 看 API 回應或畫面的 outcome：
-   - `not_needed`：模型判定寫法已好，reason 應列出檢查項目。若 SQL 明顯有缺陷卻 not_needed → prompt 檢查清單問題。
-   - `advice_only`：有方向但需業務假設 → 看「逐段對照」是否有 before/example。這是設計行為，不是 bug。
+   - `not_needed`：模型判定目前未發現需要調整的寫法；reason 只能寫 SQL 文字可直接觀察的事實，不可宣稱未知資料型態或索引行為。
+   - `advice_only`：有方向但需確認前提；若缺 WHERE、未知 JOIN key、未知 datatype／切分規則等需要猜資料的情況，可以只有文字方向而沒有 before/example，這是設計行為，不是 bug。
    - `gated`：守門擋（多段、非 SELECT、解析失敗、禁止旗標、**SQL 過長 too_long_for_rewrite**、**改寫時輸出截斷 rewrite_truncated**）→ reason 會寫具體原因。
    - `rejected`：模型給了改寫但結構複核擋下 → reason 有具體項目（例如「GROUP BY 與原始不同」、「改動了條件，系統無法確認查詢結果是否相同」）。後者代表模型做了 `rewrite_rules` 白名單以外的條件改法；若那種改法確實結果不變且常見，加規則（附等價論證）而不是放寬檢查。
    - AI 狀態 `unavailable`：先看 API 的 `ai.degrade_code`（output_truncated／prompt_truncated／timeout／connection／http／invalid_response），畫面訊息也已對應。再看正式主機 `docker compose logs sqlcheck | Select-String ai_service` 的 `done_reason`、`thinking_chars`、`eval_count`（`eval_count == num_predict` 是輸出截斷；`prompt_eval_count == num_ctx` 是輸入截斷，兩者修法不同）；若 thinking_chars>0 表示思考模式又被打開。若看到 `prompt truncated by ollama`，代表 SQL 長到連 `num_ctx_max` 都不夠，調高 `OLLAMA_NUM_CTX_MAX` 或請同仁拆分 SQL；若看到 `response not in Chinese`，先查同一請求的 `num_ctx raised to` 與 `prompt_eval_count` 是否貼近上限。

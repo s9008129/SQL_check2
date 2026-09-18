@@ -115,6 +115,8 @@ $script:Service       = 'sqlcheck'
 $script:ContainerName = 'sqlcheck-app'
 $script:ImageLatest   = 'sqlcheck-app:latest'
 $script:ImagePrevious = 'sqlcheck-app:prev'
+$script:EnvBackupForRun = $null
+$script:EnvCreatedThisRun = $false
 
 function Write-Step {
     param([string]$Message)
@@ -209,6 +211,28 @@ function Backup-File {
     return $backup
 }
 
+function Ensure-EnvironmentBackupForRun {
+    if ($script:EnvBackupForRun -or $script:EnvCreatedThisRun) {
+        return
+    }
+    if (Test-Path $script:EnvFile) {
+        $script:EnvBackupForRun = Backup-File -Path $script:EnvFile
+        Write-Info "已建立本次部署 .env rollback copy：$script:EnvBackupForRun"
+    }
+}
+
+function Restore-EnvironmentForRun {
+    if ($script:EnvBackupForRun -and (Test-Path $script:EnvBackupForRun)) {
+        Copy-Item -Path $script:EnvBackupForRun -Destination $script:EnvFile -Force
+        Write-Warn "已回復部署前 .env：$script:EnvBackupForRun"
+        return
+    }
+    if ($script:EnvCreatedThisRun -and (Test-Path $script:EnvFile)) {
+        Remove-Item -Path $script:EnvFile -Force
+        Write-Warn '本次原先沒有 .env；部署失敗後已移除本次建立的 .env。'
+    }
+}
+
 function Set-EnvValue {
     param([string]$Path, [string]$Name, [string]$Value)
 
@@ -283,11 +307,15 @@ function Invoke-Preflight {
     }
     Write-Ok 'Docker Desktop 引擎正常。'
 
-    $composeCode = Invoke-DockerCompose config --quiet
-    if ($composeCode -ne 0) {
-        Stop-Deploy "docker compose config 驗證失敗（exit=$composeCode）。"
+    if (Test-Path $script:EnvFile) {
+        $composeCode = Invoke-DockerCompose config --quiet
+        if ($composeCode -ne 0) {
+            Stop-Deploy "docker compose config 驗證失敗（exit=$composeCode）。"
+        }
+        Write-Ok 'docker-compose.yml 驗證通過。'
+    } else {
+        Write-Warn '尚無 .env，Preflight 暫不執行 compose config；建立 .env 後會再驗證。'
     }
-    Write-Ok 'docker-compose.yml 驗證通過。'
 
     $inside = (Get-GitOutput @('rev-parse', '--is-inside-work-tree') | Select-Object -First 1)
     if ($inside -ne 'true') {
@@ -371,6 +399,7 @@ function Initialize-Environment {
     Write-Step 'Step 3/7: .env / Runtime mode'
 
     if (-not (Test-Path $script:EnvFile)) {
+        $script:EnvCreatedThisRun = $true
         Copy-Item -Path $script:EnvExample -Destination $script:EnvFile -Force
         $content = Get-Content -Path $script:EnvFile -Raw
         $content = [regex]::Replace($content, '(?m)^OLLAMA_MODEL=.*$', "OLLAMA_MODEL=$OllamaModel")
@@ -383,9 +412,9 @@ function Initialize-Environment {
     $ctx = Get-EnvValue -Path $script:EnvFile -Name 'OLLAMA_NUM_CTX'
     if ($ctx -eq '8192') {
         if ($MigrateLegacyNumCtx) {
-            $backup = Backup-File -Path $script:EnvFile
+            Ensure-EnvironmentBackupForRun
             Set-EnvValue -Path $script:EnvFile -Name 'OLLAMA_NUM_CTX' -Value '16384'
-            Write-Ok "OLLAMA_NUM_CTX 8192 -> 16384；備份：$backup"
+            Write-Ok 'OLLAMA_NUM_CTX 8192 -> 16384。'
         } else {
             Write-Warn '偵測到 OLLAMA_NUM_CTX=8192；目前建議值為 16384。'
             Write-Warn '本次不自動修改；要遷移請加 -MigrateLegacyNumCtx。'
@@ -396,9 +425,9 @@ function Initialize-Environment {
         $desired = if ($KnowledgeContextMode -eq 'on') { 'true' } else { 'false' }
         $current = Get-EnvValue -Path $script:EnvFile -Name 'SQLCHECK_KNOWLEDGE_CONTEXT_ENABLED'
         if ($current -ne $desired) {
-            $backup = Backup-File -Path $script:EnvFile
+            Ensure-EnvironmentBackupForRun
             Set-EnvValue -Path $script:EnvFile -Name 'SQLCHECK_KNOWLEDGE_CONTEXT_ENABLED' -Value $desired
-            Write-Ok "Compact Context=$desired；原 .env 備份：$backup"
+            Write-Ok "Compact Context=$desired"
         } else {
             Write-Ok "Compact Context 已是 $desired。"
         }
@@ -417,6 +446,12 @@ function Initialize-Environment {
         Write-Warn "data directory 無法寫入：$script:DataDir"
         Write-Warn 'SQL archive 可能無法落盤，但不阻擋 SQL 檢核。'
     }
+
+    $composeCode = Invoke-DockerCompose config --quiet
+    if ($composeCode -ne 0) {
+        Stop-Deploy "建立/更新 .env 後 docker compose config 驗證失敗（exit=$composeCode）。"
+    }
+    Write-Ok '建立/更新 .env 後 compose config 驗證通過。'
 }
 
 function Save-RollbackPoint {
@@ -679,6 +714,8 @@ function Invoke-Main {
             Write-Fail "新版部署驗證失敗：$($validation.Reason)"
             Show-RecentContainerLogs
 
+            Restore-EnvironmentForRun
+
             if (-not $NoAutoRollback) {
                 Write-Warn '開始自動 rollback...'
                 if (Invoke-RollbackImage) {
@@ -708,6 +745,7 @@ function Invoke-Main {
         return 0
     } catch {
         Write-Fail $_.Exception.Message
+        Restore-EnvironmentForRun
         return 1
     }
 }

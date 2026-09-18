@@ -117,7 +117,14 @@ def build_record(
         "ai": {
             "status": ai_result.status,
             "advice": [
-                {"title": a.title, "explanation": a.explanation, "impact": a.impact} for a in ai_result.advice
+                {
+                    "title": a.title,
+                    "explanation": a.explanation,
+                    "impact": a.impact,
+                    "verification": a.verification,
+                    "example_available": bool(a.example),
+                }
+                for a in ai_result.advice
             ],
             "suggested_available": bool(ai_result.suggested_sql and ai_result.suggested_sql.available),
             "rewrite_outcome": ai_result.suggested_sql.outcome if ai_result.suggested_sql else None,

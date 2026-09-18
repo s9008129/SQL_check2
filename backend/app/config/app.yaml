@@ -69,10 +69,6 @@ knowledge_context:
   enabled: true
   max_patterns: 4
   max_total_chars: 1800
-  classification_priority:
-    VERIFIED_REWRITE: 0
-    ADVICE_ONLY: 1
-    INFORMATIONAL: 2
 
 # 建議寫法 / 預估改善幅度守門條件（PRD §17.4、§25）。
 ai_gate:

@@ -21,9 +21,6 @@ def _rules(threshold: int = 4) -> dict:
     return {"improvement_score": {"structure": {"many_tables_threshold": threshold}}}
 
 
-
-
-
 def test_selector_supports_every_deterministic_catalog_source():
     deterministic_sources = {
         (p.get("detection") or {}).get("source")
@@ -67,7 +64,10 @@ def test_rule_engine_exact_sources_select_leading_wildcard_and_important_table()
 def test_complexity_flags_select_exact_catalog_patterns():
     cases = [
         ("SELECT A.X FROM T A WHERE A.K NOT IN (SELECT B.K FROM U B)", "NOT_IN_SUBQUERY_TO_NOT_EXISTS"),
-        ("SELECT A.X FROM T A WHERE EXISTS (SELECT 1 FROM U B WHERE B.K = A.K)", "CORRELATED_SUBQUERY_TO_JOIN_OR_WINDOW"),
+        (
+            "SELECT A.X FROM T A WHERE EXISTS (SELECT 1 FROM U B WHERE B.K = A.K)",
+            "CORRELATED_SUBQUERY_TO_JOIN_OR_WINDOW",
+        ),
         ("SELECT DISTINCT A.X FROM T A WHERE A.X=1", "DISTINCT_REMOVAL"),
         ("SELECT A.X FROM T A, U B WHERE A.X=1", "CARTESIAN_JOIN_MISSING_CONDITION"),
         ("SELECT * FROM T A WHERE A.X=1", "SELECT_STAR"),
@@ -130,7 +130,9 @@ def test_exact_match_order_follows_catalog_order():
         "SELECT * FROM T A WHERE SUBSTR(A.C,1,3)='107' "
         "AND (A.Y=1 OR A.Y=2) AND A.N LIKE '%ABC'"
     )
-    selection = select_patterns(_parsed(sql), [_finding("R005"), _finding("R006"), _finding("R004")], _rules())
+    selection = select_patterns(
+        _parsed(sql), [_finding("R005"), _finding("R006"), _finding("R004")], _rules()
+    )
     ids = selection.exact_ids
     assert ids.index("SUBSTR_EQ_TO_LIKE") < ids.index("OR_SAME_COLUMN_TO_IN")
     assert ids.index("OR_SAME_COLUMN_TO_IN") < ids.index("LEADING_WILDCARD_LIKE")

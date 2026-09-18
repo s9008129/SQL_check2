@@ -135,17 +135,23 @@ async def test_pattern_selector_shadow_failure_never_degrades_ai(settings, chat_
 
 
 @respx.mock
-async def test_pattern_selector_shadow_is_not_injected_into_gemma_payload(settings, chat_url, monkeypatch):
-    class ShadowSelection:
-        def log_fields(self):
-            return {
-                "exact_ids": ["SHADOW_ONLY_SENTINEL"],
-                "family_signal_ids": ["FAMILY_ONLY_SENTINEL"],
-                "exact_count": 1,
-                "family_signal_count": 1,
-            }
-
-    monkeypatch.setattr(ai_service.pattern_selector, "select_patterns", lambda *_args, **_kwargs: ShadowSelection())
+async def test_exact_pattern_context_is_injected_but_family_signal_is_not(settings, chat_url, monkeypatch):
+    exact = ai_service.pattern_selector.PatternMatch(
+        pattern_id="OR_SAME_COLUMN_TO_IN",
+        classification="VERIFIED_REWRITE",
+        match_kind="exact",
+        statement_indexes=(0,),
+        signals=("rewrite:or_eq_to_in",),
+    )
+    family = ai_service.pattern_selector.PatternMatch(
+        pattern_id="TRUNC_EQ_TO_RANGE",
+        classification="ADVICE_ONLY",
+        match_kind="family_signal",
+        statement_indexes=(0,),
+        signals=("family_rule:R005",),
+    )
+    selection = ai_service.pattern_selector.PatternSelection(exact=(exact,), family_signals=(family,))
+    monkeypatch.setattr(ai_service.pattern_selector, "select_patterns", lambda *_args, **_kwargs: selection)
     route = respx.post(chat_url).mock(
         return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
     )
@@ -156,10 +162,30 @@ async def test_pattern_selector_shadow_is_not_injected_into_gemma_payload(settin
     sent_body = json.loads(route.calls[0].request.content)
     user_message = next(m["content"] for m in sent_body["messages"] if m["role"] == "user")
     payload = json.loads(user_message.removeprefix("<SQL_DATA>\n").removesuffix("\n</SQL_DATA>"))
-    blob = json.dumps(payload, ensure_ascii=False)
-    assert "SHADOW_ONLY_SENTINEL" not in blob
-    assert "FAMILY_ONLY_SENTINEL" not in blob
-    assert "pattern" not in {key.lower() for key in payload}
+    context = payload["knowledge_context"]
+    assert [item["pattern_id"] for item in context] == ["OR_SAME_COLUMN_TO_IN"]
+    assert context[0]["classification"] == "VERIFIED_REWRITE"
+    assert "guidance_zh_tw" in context[0]
+    assert "TRUNC_EQ_TO_RANGE" not in json.dumps(context, ensure_ascii=False)
+
+
+@respx.mock
+async def test_knowledge_context_failure_is_fail_open(settings, chat_url, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("context adapter failure")
+
+    monkeypatch.setattr(ai_service.context_adapter, "build_knowledge_context", boom)
+    route = respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
+    )
+
+    result = await _call(settings, _clean_select_statement())
+    assert result.status == "ok"
+
+    sent_body = json.loads(route.calls[0].request.content)
+    user_message = next(m["content"] for m in sent_body["messages"] if m["role"] == "user")
+    payload = json.loads(user_message.removeprefix("<SQL_DATA>\n").removesuffix("\n</SQL_DATA>"))
+    assert payload["knowledge_context"] == []
 
 
 # ---------------------------------------------------------------------------

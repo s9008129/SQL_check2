@@ -1061,6 +1061,33 @@ async def test_rewrite_changing_column_count_is_rejected(settings, chat_url):
     assert "查詢欄位數" in result.suggested_sql.reason
 
 
+@respx.mock
+async def test_rewrite_changing_select_expression_with_same_count_is_rejected(settings, chat_url):
+    original = "SELECT A.X FROM T A WHERE A.Y = 'A' OR A.Y = 'B'"
+    rewrite = "SELECT A.Z FROM T A WHERE A.Y IN ('A', 'B')"
+    result = await _call_rewrite(settings, chat_url, original, rewrite)
+    assert result.suggested_sql.available is False
+    assert "非條件結構" in result.suggested_sql.reason
+
+
+@respx.mock
+async def test_rewrite_changing_group_by_expression_with_same_count_is_rejected(settings, chat_url):
+    original = "SELECT A.X, COUNT(*) FROM T A WHERE A.Y = 'A' OR A.Y = 'B' GROUP BY A.X"
+    rewrite = "SELECT A.X, COUNT(*) FROM T A WHERE A.Y IN ('A', 'B') GROUP BY A.Z"
+    result = await _call_rewrite(settings, chat_url, original, rewrite)
+    assert result.suggested_sql.available is False
+    assert "非條件結構" in result.suggested_sql.reason
+
+
+@respx.mock
+async def test_rewrite_changing_order_by_expression_is_rejected(settings, chat_url):
+    original = "SELECT A.X, A.Z FROM T A WHERE A.Y = 'A' OR A.Y = 'B' ORDER BY A.X"
+    rewrite = "SELECT A.X, A.Z FROM T A WHERE A.Y IN ('A', 'B') ORDER BY A.Z"
+    result = await _call_rewrite(settings, chat_url, original, rewrite)
+    assert result.suggested_sql.available is False
+    assert "非條件結構" in result.suggested_sql.reason
+
+
 # ---------------------------------------------------------------------------
 # Truncated model output (done_reason=length) — 2026-09-16.
 # ---------------------------------------------------------------------------

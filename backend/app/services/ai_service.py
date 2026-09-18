@@ -96,7 +96,7 @@ def improvement_potential(result: AiResult, findings: list[Finding]) -> tuple[st
                       a human look, but no concrete SQL-writing improvement
                       point was confirmed. The UI must NOT render this as
                       「目前寫法良好」;
-      None          — nothing was found at all (UI says 「目前寫法良好」).
+      None          — nothing was found at all (UI says 「目前未發現需要調整的地方」).
 
     A "server-verified improvement evidence" is one of:
       * an advice fragment whose before→example change the system re-validated
@@ -127,7 +127,7 @@ def improvement_potential(result: AiResult, findings: list[Finding]) -> tuple[st
     if provided:
         basis.append("已提供整段建議寫法，系統已確認查詢結果不變")
     if verified_advice:
-        basis.append(f"系統已驗證 {len(verified_advice)} 項建議片段可保留原查詢結果")
+        basis.append(f"{len(verified_advice)} 項建議片段的查詢結果已由系統確認不變")
     # 2026-09-17 user request: the per-advice impact/verification breakdown
     # is NOT listed here (the advice cards already carry it).
 
@@ -216,7 +216,6 @@ class _AiRawResponse(BaseModel):
     summary: str
     advice: list[AdviceItem] = Field(default_factory=list)
     suggested_sql: _RawSuggestedSql
-    estimated_improvement_pct: int | None = None
 
 
 # ---------------------------------------------------------------------------

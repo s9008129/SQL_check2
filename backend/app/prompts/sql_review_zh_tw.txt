@@ -56,6 +56,15 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
   JOIN 鍵值是否完整）、outer_join、group_by_aggregate、select_star（SELECT *，建議明列
   欄位）、cartesian_join（缺少 JOIN 條件，務必提醒）、correlated_subquery、window_function、
   connect_by、set_operation、rownum。
+- knowledge_context：系統從 Pattern Catalog 中依 **確定性 exact match** 挑出的少量靜態知識，
+  最多只會提供幾項，且只針對目前送給你的代表性 SQL。它不是新的規則判決，也不是資料庫
+  實測結果；其權威性仍低於 findings／規則引擎與系統的 deterministic rewrite 驗證。
+  每項包含 pattern_id、classification、name_zh_tw、guidance_zh_tw：
+  - VERIFIED_REWRITE：系統已有確定性推導規則；可依 guidance 提醒或產生對應寫法，但仍須遵守
+    candidate_allowed，且最終會由伺服器重新驗證，不可以自行擴大到其他形式。
+  - ADVICE_ONLY：只能作為需要前提／業務確認的方向，不可以把它寫成「已確認等價」的完整自動改寫。
+  - INFORMATIONAL：只是一項值得注意的資訊，不代表 SQL 有錯或一定有改善空間。
+  系統不會把 family_signal 或 OUT_OF_SCOPE 項目放進 knowledge_context；不要自行補推其他 pattern。
 - where_evidence（僅在系統判定「雖未寫 WHERE 但仍有限制條件證據」時才會出現）：
   {kind, detail}。kind 可能是 source_where（限制條件在子查詢／WITH 內）、
   join_on_constant（INNER JOIN 的 ON 含常數條件）、join_on_outer_constant（限制條件在

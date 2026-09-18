@@ -24,6 +24,7 @@ from app.services import rewrite_rules as rr
 from app.services import sql_parser
 
 DATASET_PATH = Path(__file__).resolve().parent / "knowledge" / "semantic_traps.yaml"
+APP_YAML_PATH = Path(__file__).resolve().parents[1] / "app" / "config" / "app.yaml"
 DIALECT = "oracle"
 
 
@@ -97,6 +98,31 @@ def test_complexity_flag_presence_cases(case: dict[str, Any]) -> None:
         assert case["expected_flag_absent"] not in flags, (
             f"{case['id']}: expected flag {case['expected_flag_absent']!r} NOT in {flags}, got {flags}"
         )
+
+
+_GATE_CASES = [c for c in CASES if "expected_candidate_forbidden_flag" in c]
+
+
+@pytest.mark.parametrize("case", _GATE_CASES, ids=_id)
+def test_candidate_gate_still_forbids_flag(case: dict[str, Any]) -> None:
+    """The dataset claims this flag blocks full-rewrite candidates today.
+    Lock that claim against app.yaml itself (PR #2 review item 6): removing
+    the flag from config must fail here. Reads YAML only — no ai_service."""
+    app_cfg = yaml.safe_load(APP_YAML_PATH.read_text(encoding="utf-8"))
+    forbidden = app_cfg["ai_gate"]["candidate_forbidden_complexity_flags"]
+    assert case["expected_candidate_forbidden_flag"] in forbidden, (
+        f"{case['id']}: {case['expected_candidate_forbidden_flag']!r} is no longer in "
+        f"app.yaml ai_gate.candidate_forbidden_complexity_flags {forbidden}"
+    )
+
+
+def test_correlated_subquery_trap_locks_the_candidate_gate() -> None:
+    """Keep the gate assertion from disappearing silently with a dataset edit."""
+    assert any(
+        c["pattern_id"] == "CORRELATED_SUBQUERY_TO_JOIN_OR_WINDOW"
+        and c.get("expected_candidate_forbidden_flag") == "correlated_subquery"
+        for c in _GATE_CASES
+    ), "the correlated-subquery trap must assert the app.yaml candidate gate"
 
 
 def test_every_case_declares_forbidden_automatic_rewrite() -> None:

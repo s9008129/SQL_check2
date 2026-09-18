@@ -17,6 +17,10 @@
 #   complexity_flag_presence -> app.services.sql_parser.parse_sql_text(sql)
 #                                 .statements[0].complexity_flags
 #
+# `expected_candidate_forbidden_flag` (optional) additionally asserts that
+# backend/app/config/app.yaml ai_gate.candidate_forbidden_complexity_flags
+# still lists that flag, read directly from the YAML file.
+#
 # `kind` follows the Phase-1 spec: positive / negative / boundary /
 # semantic_trap / clean_control. Not every pattern needs every kind — only
 # the ones that are meaningful for that pattern's specific failure mode.
@@ -179,13 +183,15 @@ cases:
     mechanism: complexity_flag_presence
     sql: "SELECT A.ID FROM T A WHERE A.AMT = (SELECT MAX(B.AMT) FROM S B WHERE B.ID = A.ID)"
     expected_flag_present: correlated_subquery
+    expected_candidate_forbidden_flag: correlated_subquery
     forbidden_automatic_rewrite: true
     notes_zh_tw: >
       這段 SQL 的相關子查詢（子查詢引用外層別名 A.ID）會被 sql_parser 標記
       complexity_flags 含 correlated_subquery；這個旗標同時列在
       app.yaml ai_gate.candidate_forbidden_complexity_flags，代表 Runtime
       連候選改寫都不會產生，是比一般 ADVICE_ONLY 更嚴格的既有防線。
-      本測試只驗證「值測得到」這個事實，不觸發、不呼叫 ai_service／Ollama。
+      測試同時鎖住兩件事：parser 偵測得到，以及 app.yaml 仍把這個旗標列為
+      candidate 禁止項。只讀 app.yaml，不 import ai_service、不呼叫 Ollama。
 
   - id: correlated_subquery_negative_uncorrelated_subquery
     pattern_id: CORRELATED_SUBQUERY_TO_JOIN_OR_WINDOW

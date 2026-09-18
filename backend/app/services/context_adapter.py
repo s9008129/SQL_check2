@@ -20,6 +20,7 @@ candidate gating. It only provides compact explanatory context to Gemma.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Any
 
@@ -51,6 +52,11 @@ def _compact_text(value: object) -> str:
     if not isinstance(value, str):
         return ""
     return " ".join(value.split())
+
+
+def _serialized_chars(item: dict[str, str]) -> int:
+    """Exact UTF-8-facing JSON character count for one compact context item."""
+    return len(json.dumps(item, ensure_ascii=False, separators=(",", ":")))
 
 
 def build_knowledge_context(
@@ -117,9 +123,7 @@ def build_knowledge_context(
     for _, _, item in candidates:
         if len(selected) >= max_patterns:
             break
-        # Count only values because JSON punctuation/key names are fixed and
-        # small; this remains a deterministic, conservative tuning boundary.
-        item_chars = sum(len(value) for value in item.values())
+        item_chars = _serialized_chars(item)
         if used_chars + item_chars > max_total_chars:
             continue
         selected.append(item)

@@ -51,6 +51,8 @@ $required = @(
     'KnowledgeContextMode',
     'MigrateLegacyNumCtx',
     'NoAutoRollback',
+    'Restore-EnvironmentForRun',
+    'docker inspect $script:ContainerName',
     'smoke-test.ps1',
     'api/health'
 )

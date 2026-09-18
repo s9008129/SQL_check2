@@ -118,6 +118,50 @@ async def test_suggested_sql_reverse_substitutes_masked_literal(settings, chat_u
     assert result.suggested_sql.sql == "SELECT A.X FROM T A WHERE A.Y IN ('A123456789', 'B987654321')"
 
 
+@respx.mock
+async def test_pattern_selector_shadow_failure_never_degrades_ai(settings, chat_url, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("shadow selector failure")
+
+    monkeypatch.setattr(ai_service.pattern_selector, "select_patterns", boom)
+    route = respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
+    )
+
+    result = await _call(settings, _clean_select_statement())
+
+    assert route.call_count == 1
+    assert result.status == "ok"
+
+
+@respx.mock
+async def test_pattern_selector_shadow_is_not_injected_into_gemma_payload(settings, chat_url, monkeypatch):
+    class ShadowSelection:
+        def log_fields(self):
+            return {
+                "exact_ids": ["SHADOW_ONLY_SENTINEL"],
+                "family_signal_ids": ["FAMILY_ONLY_SENTINEL"],
+                "exact_count": 1,
+                "family_signal_count": 1,
+            }
+
+    monkeypatch.setattr(ai_service.pattern_selector, "select_patterns", lambda *_args, **_kwargs: ShadowSelection())
+    route = respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
+    )
+
+    result = await _call(settings, _clean_select_statement())
+    assert result.status == "ok"
+
+    sent_body = json.loads(route.calls[0].request.content)
+    user_message = next(m["content"] for m in sent_body["messages"] if m["role"] == "user")
+    payload = json.loads(user_message.removeprefix("<SQL_DATA>\n").removesuffix("\n</SQL_DATA>"))
+    blob = json.dumps(payload, ensure_ascii=False)
+    assert "SHADOW_ONLY_SENTINEL" not in blob
+    assert "FAMILY_ONLY_SENTINEL" not in blob
+    assert "pattern" not in {key.lower() for key in payload}
+
+
 # ---------------------------------------------------------------------------
 # Retry-on-invalid-JSON behavior
 # ---------------------------------------------------------------------------

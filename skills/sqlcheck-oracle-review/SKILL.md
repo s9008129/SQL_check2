@@ -61,9 +61,18 @@ and the compliance/optimization boundary. Then:
 
 ## Phase boundary (read before touching Runtime code)
 
-This skill and the catalog it documents are a **knowledge layer only**. As of
-this Phase, nothing here is wired into `ai_service.py`'s prompt assembly,
-gating, or the Ollama request path — see `references/project-boundaries.md`
-for the exact list of what must not change. If a task asks you to make the
-Runtime *use* this catalog (a "Pattern Selector"), that is explicitly a
-**future phase**, not this one.
+Phase 2 adds a deterministic **Pattern Selector shadow mode**:
+`backend/app/services/pattern_selector.py` reads this catalog and maps facts
+SQLCheck already has to two separate outputs:
+
+- `exact`: a specific deterministic detector matched this catalog entry.
+  Only these ids may become candidates for a future compact-context adapter.
+- `family_signal`: a broader R005/R006/complexity signal fired, but the
+  specific pattern is **not confirmed**. These are diagnostics only and must
+  never be injected into Gemma as if they were matched.
+
+`ai_service.py` currently logs the SQL-free ids/counts only. The selector does
+**not** alter prompt assembly, model payload, gating, compliance, scoring,
+rewrite verification, UI, or Ollama settings. Making Gemma consume selected
+catalog content is a separate later phase and requires its own reviewed PR.
+See `references/project-boundaries.md` for the exact boundary.

@@ -43,7 +43,7 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from app.schemas import AdviceItem, AiResult, Finding, SuggestedSql
-from app.services import rewrite_rules, rule_engine
+from app.services import pattern_selector, rewrite_rules, rule_engine
 from app.services.masking import mask_sql, scrub_invented_placeholders, unmask_sql
 from app.services.rule_engine import GLOBAL_STATEMENT_INDEX
 from app.services.sql_parser import ParsedStatement, parse_sql_text, structural_signature
@@ -1134,6 +1134,21 @@ async def get_ai_result(
         candidate_allowed, estimate_allowed, decline_code = _compute_gates(
             statements, findings, settings.ai_gate, sql_tokens=sql_tokens, num_predict=settings.ollama.num_predict
         )
+
+        # Phase 2 shadow mode: deterministically select catalog patterns but do
+        # not add them to the Gemma payload yet. This is diagnostics-only and
+        # fail-open by design: selector/catalog problems must never make the
+        # existing AI path unavailable. Log ids only — never SQL/literals.
+        try:
+            selection = pattern_selector.select_patterns(statements, findings, settings.rules_config)
+            shadow = selection.log_fields()
+            logger.info(
+                "ai_service: pattern_selector shadow exact=%s family=%s",
+                shadow["exact_ids"],
+                shadow["family_signal_ids"],
+            )
+        except Exception as exc:  # noqa: BLE001 - shadow diagnostics cannot break analysis
+            logger.warning("ai_service: pattern_selector shadow failed: %s", type(exc).__name__)
 
         where_evidence = None
         if representative is not None and representative.restriction_kind is not None:

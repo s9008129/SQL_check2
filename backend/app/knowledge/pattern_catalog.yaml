@@ -1,12 +1,13 @@
 # SQLCheck Oracle SQL Pattern Catalog — Source of Truth for optimization
-# knowledge governance (SQLCheck Oracle Knowledge v1, Phase 1).
+# knowledge governance (SQLCheck Oracle Knowledge v1).
 #
-# This file is machine-readable knowledge, not runtime prompt prose. It is
-# NOT loaded by ai_service.py / rule_engine.py / any request path in this
-# Phase — see skills/sqlcheck-oracle-review/references/project-boundaries.md
-# for why, and docs/sql-optimization-skill-applicability.md for how each
-# pattern here relates to the generic github/awesome-copilot sql-optimization
-# skill this project drew on.
+# This file is machine-readable knowledge, not runtime prompt prose. Since
+# Phase 2 shadow mode (2026-09-18), backend/app/services/pattern_selector.py
+# reads it at request time to identify deterministic exact matches and broader
+# family signals. ai_service.py logs only SQL-free pattern ids/counts from that
+# selector; the selection is NOT added to the Gemma prompt, does not change
+# gating/scoring/compliance/rewrite verification, and is not exposed in the
+# API/UI. See skills/sqlcheck-oracle-review/references/project-boundaries.md.
 #
 # Governance model (four classes — see
 # skills/sqlcheck-oracle-review/SKILL.md for the full explanation):
@@ -22,8 +23,8 @@
 #     TRUNC and NVL rules were removed, SUBSTR accepts only its canonical LIKE
 #     form, and OR→IN is limited to 1000 values. tests/test_pattern_catalog.py
 #     probes the runtime and fails if the two drift apart. This is the only
-#     class a future Pattern Selector may treat as proven — and only for the
-#     forms and boundaries the entry authorizes.
+#     class Pattern Selector may expose as a proven exact match — and only for
+#     the forms and boundaries the entry authorizes.
 #   ADVICE_ONLY — a reasonable direction, but SQLCheck cannot prove the
 #     rewritten SQL returns the same rows in every case. May be explained and
 #     suggested; must never become an automatic "已驗證" rewrite.
@@ -124,7 +125,7 @@
 #                          governance does not certify. The catalog does not
 #                          change runtime behavior; it records the gap so a
 #                          separate correctness PR can close it before any
-#                          Pattern Selector (Phase 2) relies on this entry.
+#                          downstream context adapter relies on this entry.
 #                          No entry declares one as of 2026-09-18; the probes
 #                          in tests/test_pattern_catalog.py require one to be
 #                          added if the runtime starts certifying an
@@ -136,8 +137,8 @@
 #                          accepts an extra output form this entry does not
 #                          authorize; listed in not_authorized_forms).
 #     runtime_gap.runtime_rule  the rewrite_rules.py rule id with the gap.
-#     runtime_gap.not_authorized_forms  forms a future selector must never
-#                          pick automatically (required for
+#     runtime_gap.not_authorized_forms  forms the selector/context adapter must
+#                          never pick automatically (required for
 #                          unauthorized_accepted_form).
 #     runtime_gap.description_zh_tw / required_action_zh_tw  why, and what
 #                          must happen before Phase 2.

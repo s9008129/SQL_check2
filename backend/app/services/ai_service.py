@@ -784,6 +784,16 @@ def _revalidate_suggested_sql(
         if representative.tree is None or stmt.tree is None:
             return False, "建議寫法結構複核失敗，無法比對"
 
+        # Current VERIFIED_REWRITE authority is predicate-only. Count-based
+        # structure checks cannot detect a model changing SELECT/GROUP BY/
+        # ORDER BY expressions while keeping the same counts. Require the
+        # entire non-predicate query skeleton to be identical, then validate
+        # predicate changes separately below.
+        if rewrite_rules.query_skeleton_without_conditions(
+            representative.tree
+        ) != rewrite_rules.query_skeleton_without_conditions(stmt.tree):
+            return False, "建議寫法改動了查詢欄位、分組、排序或其他非條件結構"
+
         orig_sig = structural_signature(representative.tree)
         new_sig = structural_signature(stmt.tree)
         if not orig_sig or not new_sig:

@@ -67,7 +67,7 @@ def build_knowledge_context(
     statement to Gemma.
     """
     cfg = config or {}
-    if not bool(cfg.get("enabled", True)):
+    if statement_index is None or not bool(cfg.get("enabled", True)):
         return []
 
     max_patterns = _positive_int(cfg.get("max_patterns"), _DEFAULT_MAX_PATTERNS, _HARD_MAX_PATTERNS)

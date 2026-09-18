@@ -558,12 +558,65 @@ def _loses_typed_literal_wrapper(before: str | None, example: str) -> bool:
     return False
 
 
+def _literal_facts(text: str) -> tuple[set[str], set[str]] | None:
+    """Return (string literal contents, numeric literal contents).
+
+    This is a provenance check only; it does not try to infer datatypes.
+    """
+    tree = _parse_sql_or_fragment(text)
+    if tree is None:
+        return None
+    strings: set[str] = set()
+    numbers: set[str] = set()
+    for literal in tree.find_all(exp.Literal):
+        value = str(literal.this)
+        if literal.is_string:
+            strings.add(value)
+        else:
+            numbers.add(value)
+    return strings, numbers
+
+
+def _wildcard_core(value: str) -> str:
+    return value.strip("%_")
+
+
+def _introduces_unknown_literals(source_sql: str, example: str) -> bool:
+    """Reject business constants invented by the model.
+
+    Exact source literals are allowed. String examples may add/move only LIKE
+    wildcard characters around the same non-empty literal core; this keeps
+    deterministic SUBSTR→LIKE and clearly-labelled LIKE direction examples
+    possible without authorizing new business values.
+    """
+    source = _literal_facts(source_sql)
+    proposed = _literal_facts(example)
+    if source is None or proposed is None:
+        return True
+    source_strings, source_numbers = source
+    proposed_strings, proposed_numbers = proposed
+
+    source_cores = {_wildcard_core(v) for v in source_strings if _wildcard_core(v)}
+    for value in proposed_strings:
+        if value in source_strings:
+            continue
+        core = _wildcard_core(value)
+        if core and core in source_cores:
+            continue
+        return True
+
+    return not proposed_numbers.issubset(source_numbers)
+
+
 def _advice_example_is_safe(source_sql: str, before: str | None, example: str) -> bool:
     # Production supplies the representative SQL. Existing unit-level
     # rewrite-evidence helpers may intentionally call _filter_advice without
     # a whole statement, so identifier enforcement is conditional here.
-    if source_sql and _introduces_unknown_identifiers(source_sql, example):
-        return False
+    if source_sql:
+        if _introduces_unknown_identifiers(source_sql, example):
+            return False
+        if _introduces_unknown_literals(source_sql, example):
+            return False
     return not _loses_typed_literal_wrapper(before, example)
 
 

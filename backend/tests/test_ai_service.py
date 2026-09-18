@@ -43,9 +43,10 @@ def _good_inner(**overrides) -> dict:
         "summary": "這段 SQL 的條件欄位使用了函數，建議調整寫法。",
         "advice": [
             {
-                "title": "調整日期條件寫法",
-                "explanation": "條件欄位包了函數，可考慮改寫成範圍比較。",
-                "example": "A.TXN_DATE >= :START_DATE",
+                "title": "合併同欄位 OR 條件",
+                "explanation": "同一欄位的多個等於條件可改成較精簡的 IN 寫法。",
+                "before": "A.Y = :STR_001 OR A.Y = :STR_002",
+                "example": "A.Y IN (:STR_001, :STR_002)",
                 "impact": "high",
             }
         ],
@@ -433,6 +434,10 @@ def test_response_schema_requires_rewrite_outcome():
     assert set(props["properties"]["rewrite_outcome"]["enum"]) == {"provided", "not_needed", "advice_only"}
 
 
+def test_response_schema_no_longer_asks_gemma_for_improvement_percentage():
+    assert "estimated_improvement_pct" not in ai_service.RESPONSE_SCHEMA["properties"]
+
+
 def test_system_prompt_explains_rewrite_outcome_and_examples():
     assert "rewrite_outcome" in ai_service.SYSTEM_PROMPT
     assert "not_needed" in ai_service.SYSTEM_PROMPT
@@ -451,11 +456,11 @@ def test_system_prompt_defines_knowledge_context_authority_and_class_semantics()
     assert "family_signal 或 OUT_OF_SCOPE" in prompt
 
 
-def test_system_prompt_requires_checklist_before_not_needed():
-    # 2026-09-17: "already good" must be an evidence-backed claim.
+def test_system_prompt_keeps_not_needed_observable_and_plain():
     assert "structure_flags" in ai_service.SYSTEM_PROMPT
-    assert "not_needed 的 reason 必須列出你實際檢查過的項目" in ai_service.SYSTEM_PROMPT
-    assert "隱含型別轉換" in ai_service.SYSTEM_PROMPT
+    assert "目前未發現需要調整的寫法" in ai_service.SYSTEM_PROMPT
+    assert "不可宣稱" in ai_service.SYSTEM_PROMPT
+    assert "無隱含型別轉換" in ai_service.SYSTEM_PROMPT
     assert "重新推導每一個條件改寫" in ai_service.SYSTEM_PROMPT
 
 
@@ -495,17 +500,14 @@ def test_system_prompt_keeps_r004_scope_and_derived_rewrite_list():
     assert "系統能確認的對應 LIKE 寫法" in prompt
 
 
-def test_system_prompt_provided_example_is_derivable_and_advice_only_example_is_not():
-    # The prompt's "provided" example must pass the runtime's own predicate
-    # check, and its "advice_only" TRUNC/NVL example must not — otherwise the
-    # prompt steers the model into rewrites the server rejects.
+def test_system_prompt_provided_example_is_derivable_and_advice_only_is_prose_first():
     from sqlglot import parse_one
 
     from app.services import rewrite_rules
 
-    provided_orig = "WHERE SUBSTR(A.MANAGE_CD,6,3) = '551' AND A.STATUS = :STR_001"
-    provided_sugg = "WHERE A.MANAGE_CD LIKE '_____551%' AND A.STATUS = :STR_001"
-    advice_orig = "WHERE TRUNC(A.TXN_DATE) = :STR_001 AND NVL(A.S,'N') = 'N'"
+    provided_orig = "WHERE SUBSTR(A.CODE_COL,6,3) = '551' AND A.STATUS = :STR_001"
+    provided_sugg = "WHERE A.CODE_COL LIKE '_____551%' AND A.STATUS = :STR_001"
+    advice_orig = "WHERE TRUNC(A.DATE_COL) = :STR_001 AND NVL(A.S,'N') = 'N'"
     for fragment in (provided_orig, provided_sugg, advice_orig):
         assert fragment in ai_service.SYSTEM_PROMPT
 
@@ -513,8 +515,8 @@ def test_system_prompt_provided_example_is_derivable_and_advice_only_example_is_
         return parse_one(f"SELECT A.X FROM T A {where}", read="oracle")
 
     assert rewrite_rules.verify_predicate_changes(tree(provided_orig), tree(provided_sugg)) == (True, None)
-    advice_sugg = "WHERE A.TXN_DATE >= :STR_001 AND A.TXN_DATE < :STR_001 + 1 AND (A.S = 'N' OR A.S IS NULL)"
-    assert rewrite_rules.verify_predicate_changes(tree(advice_orig), tree(advice_sugg))[0] is False
+    assert "example 留空" in ai_service.SYSTEM_PROMPT
+    assert "不知道就不要猜 SQL" in ai_service.SYSTEM_PROMPT
 
 
 def test_system_prompt_tells_model_how_to_word_advice_only_reason():
@@ -1427,3 +1429,87 @@ async def test_last_call_stats_records_diagnostics_only(settings, chat_url):
     blob = json.dumps(stats, ensure_ascii=False, default=str)
     for forbidden in ("SELECT", "A.Y", "TRUNC", "這段 SQL"):
         assert forbidden not in blob
+
+
+
+# ---------------------------------------------------------------------------
+# Business-readable safety guard regressions (production diagnostic Round 1)
+# ---------------------------------------------------------------------------
+def test_invented_where_identifier_is_hidden_instead_of_shown():
+    from app.schemas import AdviceItem
+
+    advice = [
+        AdviceItem(
+            title="增加查詢條件",
+            explanation="請依實際需求補上查詢條件。",
+            example="WHERE WIIT001.COLL_YR = '113'",
+            impact="high",
+        )
+    ]
+    result = ai_service._filter_advice(advice, [], {}, {}, source_sql="SELECT * FROM WIIT001")
+    assert len(result) == 1
+    assert result[0].example is None
+    assert result[0].before is None
+    assert "不顯示可直接套用的寫法" in result[0].explanation
+
+
+def test_invented_join_key_is_hidden_instead_of_shown():
+    from app.schemas import AdviceItem
+
+    source = "SELECT A.ID, B.TYPE FROM TEST_DATA A, TEST_ADDRESS B WHERE A.STATUS = 'A'"
+    advice = [
+        AdviceItem(
+            title="確認兩張表的關聯條件",
+            explanation="請先確認兩張表應以哪個欄位關聯。",
+            before="WHERE A.STATUS = 'A'",
+            example="WHERE A.STATUS = 'A' AND A.ID = B.ID",
+            impact="high",
+        )
+    ]
+    result = ai_service._filter_advice(advice, [], {}, {}, source_sql=source)
+    assert result[0].example is None
+    assert result[0].before is None
+
+
+def test_known_identifiers_are_allowed_through_example_guard():
+    source = "SELECT A.ID FROM TEST_DATA A WHERE A.STATUS = 'A' OR A.STATUS = 'B'"
+    assert ai_service._introduces_unknown_identifiers(source, "WHERE A.STATUS IN ('A','B')") is False
+
+
+def test_typed_date_wrapper_loss_blocks_executable_looking_example():
+    before = "TRUNC(A.UPDATE_TIME) = DATE '2026-09-18'"
+    example = "A.UPDATE_TIME >= '2026-09-18' AND A.UPDATE_TIME < '2026-09-18' + 1"
+    assert ai_service._loses_typed_literal_wrapper(before, example) is True
+    assert ai_service._advice_example_is_safe(
+        "SELECT A.ID FROM TEST_DATA A WHERE TRUNC(A.UPDATE_TIME) = DATE '2026-09-18'",
+        before,
+        example,
+    ) is False
+
+
+def test_internal_masking_placeholders_become_plain_privacy_safe_prose():
+    text = ai_service._sanitize_user_prose(
+        "請確認 :STR_001 與 :NUM_002 的實際格式。",
+        {},
+    )
+    assert ":STR_" not in text
+    assert ":NUM_" not in text
+    assert "原查詢中的文字值" in text
+    assert "原查詢中的數值" in text
+
+
+def test_unobservable_index_claim_sentence_is_removed_but_useful_advice_survives():
+    text = ai_service._sanitize_user_prose(
+        "這會導致資料庫無法直接利用該欄位的索引。請確認是否能改用更明確的查詢條件。",
+        {},
+    )
+    assert "索引" not in text
+    assert "請確認是否能改用更明確的查詢條件" in text
+
+
+def test_not_needed_cannot_surface_no_implicit_conversion_claim():
+    text = ai_service._sanitize_user_prose(
+        "已檢查條件寫法，無隱含型別轉換。",
+        {},
+    )
+    assert "無隱含型別轉換" not in text

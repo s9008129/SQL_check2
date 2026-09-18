@@ -177,6 +177,34 @@ def test_multi_conjunct_unproven_part_must_stay_unchanged():
     assert v.example == "A.C LIKE '107%' AND TRUNC(A.D) = :X"
 
 
+# --- large AND robustness -------------------------------------------------
+def _and_chain(n: int, *, start: int = 1) -> str:
+    return " AND ".join(f"A.C{i} = {i}" for i in range(start, start + n))
+
+
+def test_conjuncts_large_and_chain_is_iterative_and_keeps_source_order():
+    # Regression: recursive _conjuncts failed around Python's recursion limit.
+    expr = rr.parse_predicate(_and_chain(3000))
+    conjuncts = rr._conjuncts(expr)
+    assert len(conjuncts) == 3000
+    assert conjuncts[0].sql(dialect="oracle") == "A.C1 = 1"
+    assert conjuncts[-1].sql(dialect="oracle") == "A.C3000 = 3000"
+
+
+def test_atoms_large_and_statement_is_iterative():
+    tree = parse_one(f"SELECT A.X FROM T A WHERE {_and_chain(3000)}", read="oracle")
+    atoms = rr._atoms(tree)
+    assert len(atoms) == 3000
+    assert atoms[0].sql(dialect="oracle") == "A.C1 = 1"
+    assert atoms[-1].sql(dialect="oracle") == "A.C3000 = 3000"
+
+
+def test_full_rewrite_large_unchanged_and_chain_does_not_fail_closed():
+    sql = f"SELECT A.X FROM T A WHERE {_and_chain(1500)}"
+    original, suggested = _trees(sql, sql)
+    assert rr.verify_predicate_changes(original, suggested) == (True, None)
+
+
 # --- full rewrite predicate check ------------------------------------------
 def _trees(orig: str, sugg: str):
     return parse_one(orig, read="oracle"), parse_one(sugg, read="oracle")

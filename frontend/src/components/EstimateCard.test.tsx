@@ -3,80 +3,116 @@ import { render, screen } from "@testing-library/react";
 import EstimateCard from "./EstimateCard";
 import { makeAi } from "../test/fixtures";
 
-describe("EstimateCard (improvement-potential level, 2026-09-17)", () => {
-  it("renders the level, its hint, its basis and the caveat, never a percentage", () => {
-    const { container } = render(
+const pass = { status: "PASS" as const, label: "符合中心規範", notice_count: 0, block_count: 0 };
+const block = { status: "BLOCK" as const, label: "不符合中心規範", notice_count: 0, block_count: 1 };
+
+describe("EstimateCard — 建議採用狀態", () => {
+  it("renames the old predicted-effect card and never shows a high/medium/low performance gauge", () => {
+    render(
       <EstimateCard
+        compliance={pass}
         ai={makeAi({
-          estimated_improvement_pct: 45,
-          improvement_potential: "high",
+          improvement_potential: "low",
           improvement_potential_basis: ["規則檢核：1 項提醒"],
+          suggested_sql: { available: false, reason: "需確認。", sql: null, outcome: "advice_only" },
         })}
       />,
     );
-    const block = screen.getByTestId("potential");
-    expect(block.textContent).toContain("高");
-    expect(block.textContent).toContain("有明確且已確認可行的改善點，建議優先處理。");
-    expect(block.textContent).toContain("規則檢核：1 項提醒");
-    expect(block.textContent).toContain("此改善等級由程式規則檢核與系統驗證結果推算，未經測試機實際驗證。");
-    expect(screen.queryByText(/%/)).toBeNull();
-    expect(container.querySelector(".potential-high")).toBeTruthy();
-    // 2026-09-17 (evening): the phrase appears exactly once — inside the
-    // circle. No 「改善潛力：」 heading, no repeat in the card description,
-    // and no head badge.
-    expect((container.textContent?.match(/改善潛力/g) ?? []).length).toBe(1);
-    expect(container.querySelector(".card-head .badge")).toBeNull();
+    expect(screen.getByText("建議採用狀態")).toBeTruthy();
+    expect(screen.queryByText("預估改善效果")).toBeNull();
+    expect(screen.queryByText("改善空間有限，或改法尚需人工確認。")).toBeNull();
+    expect(screen.getByTestId("adoption-confirm-first").textContent).toContain("請先確認");
   });
 
-  it("renders governance-only reminders as a human-confirmation note, never as 「目前寫法良好」", () => {
-    const { container } = render(
+  it("shows a deterministic confirmed state when a rewrite passed server verification", () => {
+    render(
       <EstimateCard
+        compliance={pass}
+        ai={makeAi({
+          improvement_potential: "medium",
+          improvement_potential_basis: ["已提供整段建議寫法，系統已確認查詢結果不變"],
+          suggested_sql: {
+            available: true,
+            reason: "系統可確認。",
+            sql: "SELECT A.ID FROM T A WHERE A.C IN ('1','2')",
+            outcome: "provided",
+          },
+        })}
+      />,
+    );
+    const note = screen.getByTestId("adoption-confirmed");
+    expect(note.textContent).toContain("系統確認");
+    expect(note.textContent).toContain("實際執行效率");
+  });
+
+  it("does not tell a BLOCK case that improvement space is limited", () => {
+    render(
+      <EstimateCard
+        compliance={block}
+        ai={makeAi({
+          improvement_potential: "low",
+          improvement_potential_basis: ["規則檢核：1 項不符合"],
+          advice: [{ title: "確認查詢範圍", explanation: "請確認實際需求。", example: null, impact: "high" }],
+          suggested_sql: { available: false, reason: "需確認查詢範圍。", sql: null, outcome: "advice_only" },
+        })}
+      />,
+    );
+    const note = screen.getByTestId("adoption-blocked");
+    expect(note.textContent).toContain("需要優先處理");
+    expect(note.textContent).toContain("不會自行猜測");
+    expect(note.textContent).not.toContain("改善空間有限");
+  });
+
+  it("renders governance-only reminders as confirmation-first, not as clean SQL", () => {
+    render(
+      <EstimateCard
+        compliance={pass}
         ai={makeAi({
           improvement_potential: "notice_only",
           improvement_potential_basis: ["規則檢核：1 項提醒（重要資料表）"],
+          advice: [],
+          suggested_sql: { available: false, reason: "請確認。", sql: null, outcome: "advice_only" },
         })}
       />,
     );
-    const note = screen.getByTestId("potential-notice-only");
-    expect(note.textContent).toContain("規則檢核有提醒事項，但未確認具體的 SQL 改善點，建議人工確認。");
-    expect(note.textContent).toContain("規則檢核：1 項提醒（重要資料表）");
-    expect(note.textContent).not.toContain("目前寫法良好");
-    // Amber "please confirm" surface, never the green 「良好」 one.
-    expect(note.className).toContain("ai-note-notice");
-    expect(note.className).not.toContain("ai-note-good");
-    expect(container.querySelector(".potential-high")).toBeNull();
-    expect(screen.queryByText(/%/)).toBeNull();
+    const note = screen.getByTestId("adoption-notice-only");
+    expect(note.textContent).toContain("有提醒事項");
+    expect(note.textContent).not.toContain("目前未發現需要調整");
   });
 
-  it("says the SQL is fine when no level was derived", () => {
-    render(<EstimateCard ai={makeAi({ improvement_potential: null, improvement_potential_basis: [] })} />);
-    expect(screen.getByTestId("potential-none").textContent).toContain("目前寫法良好");
-    expect(screen.queryByTestId("potential")).toBeNull();
-  });
-
-  it("shows the pending copy while ai.status is pending", () => {
+  it("uses a simple clean-state message when nothing was found", () => {
     render(
       <EstimateCard
-        ai={makeAi({ status: "pending", advice: [], suggested_sql: null, estimated_improvement_pct: null })}
+        compliance={pass}
+        ai={makeAi({
+          advice: [],
+          improvement_potential: null,
+          improvement_potential_basis: [],
+          suggested_sql: { available: false, reason: "目前未發現需要調整的寫法。", sql: null, outcome: "not_needed" },
+        })}
       />,
     );
-    expect(screen.getByText("AI 分析中，約需數十秒。")).toBeTruthy();
+    expect(screen.getByTestId("adoption-none").textContent).toContain("目前未發現需要調整");
   });
 
-  it("shows the backend's specific unavailable message when ai.status is unavailable", () => {
+  it("shows pending and unavailable states", () => {
+    const { unmount } = render(
+      <EstimateCard compliance={pass} ai={makeAi({ status: "pending", advice: [], suggested_sql: null })} />,
+    );
+    expect(screen.getByText("AI 分析中，約需數十秒。")).toBeTruthy();
+    unmount();
+
     render(
       <EstimateCard
+        compliance={pass}
         ai={makeAi({
           status: "unavailable",
           advice: [],
           suggested_sql: null,
-          estimated_improvement_pct: null,
           message: "智慧改善建議目前暫時無法使用，仍可依上方規則檢核結果進行確認。",
         })}
       />,
     );
-    expect(
-      screen.getByText("智慧改善建議目前暫時無法使用，仍可依上方規則檢核結果進行確認。"),
-    ).toBeTruthy();
+    expect(screen.getByText(/智慧改善建議目前暫時無法使用/)).toBeTruthy();
   });
 });

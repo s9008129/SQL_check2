@@ -12,6 +12,36 @@ describe("ImprovementAdvice", () => {
     ).toBeTruthy();
   });
 
+  it("labels opportunity separately from adoption safety", () => {
+    render(
+      <ImprovementAdvice
+        ai={makeAi({
+          advice: [
+            {
+              title: "合併同欄位 OR",
+              explanation: "可改成較精簡的 IN 寫法。",
+              before: "A.C = '1' OR A.C = '2'",
+              example: "A.C IN ('1','2')",
+              impact: "medium",
+              verification: "verified",
+            },
+            {
+              title: "確認關聯條件",
+              explanation: "請先確認兩張表正確的關聯欄位。",
+              example: null,
+              impact: "high",
+            },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText("改善機會：中")).toBeTruthy();
+    expect(screen.getByText("改善機會：高")).toBeTruthy();
+    expect(screen.getByText("系統已確認")).toBeTruthy();
+    expect(screen.getByText("方向建議")).toBeTruthy();
+    expect(screen.queryByText(/影響：/)).toBeNull();
+  });
+
   it("shows the pending copy while ai.status is pending", () => {
     render(
       <ImprovementAdvice

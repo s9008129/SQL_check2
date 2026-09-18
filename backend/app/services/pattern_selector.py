@@ -35,6 +35,10 @@ PATTERN_CATALOG_PATH = KNOWLEDGE_DIR / "pattern_catalog.yaml"
 
 MatchKind = Literal["exact", "family_signal"]
 
+SUPPORTED_EXACT_SOURCES = frozenset(
+    {"rule_engine", "rewrite_rules", "sql_parser_complexity_flag", "improvement_score_structure"}
+)
+
 
 @dataclass(frozen=True)
 class PatternMatch:
@@ -60,8 +64,8 @@ class PatternSelection:
 
     @property
     def context_candidate_ids(self) -> tuple[str, ...]:
-        """Future adapter input: only deterministic exact matches."""
-        return self.exact_ids
+        """Future adapter input: exact matches only, never OUT_OF_SCOPE."""
+        return tuple(match.pattern_id for match in self.exact if match.classification != "OUT_OF_SCOPE")
 
     def log_fields(self) -> dict[str, object]:
         """SQL-free diagnostics suitable for INFO logs / tests."""

@@ -120,7 +120,18 @@ def _rewrite_hits(statements: Sequence[ParsedStatement]) -> dict[str, set[int]]:
         # chains. Walking every expression keeps the selector aligned with
         # rewrite_rules without duplicating its pattern predicates here.
         for node in stmt.tree.walk():
-            if not isinstance(node, (exp.Predicate, exp.Or)):
+            if isinstance(node, exp.Or):
+                # Only evaluate the maximal OR chain. sqlglot represents a
+                # long chain as nested left-deep OR nodes; evaluating every
+                # nested node would falsely select OR_SAME_COLUMN_TO_IN for a
+                # 1001+ term chain merely because one inner prefix has <=1000
+                # terms. Parentheses do not create a new logical chain.
+                parent = node.parent
+                while isinstance(parent, exp.Paren):
+                    parent = parent.parent
+                if isinstance(parent, exp.Or):
+                    continue
+            elif not isinstance(node, exp.Predicate):
                 continue
             rw = rewrite_rules.derive(node)
             if rw is not None:

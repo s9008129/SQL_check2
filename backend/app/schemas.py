@@ -173,16 +173,18 @@ class AiResult(BaseModel):
     summary: str | None = None
     advice: list[AdviceItem] = Field(default_factory=list)
     suggested_sql: SuggestedSql | None = None
-    # Kept for the archive/analytics only; the UI no longer shows a
-    # percentage (2026-09-17 user decision: the number was never measured).
+    # Backward-compatible wire field only. SQLCheck no longer asks Gemma to
+    # guess a percentage and the server returns null because no post-change
+    # performance measurement exists at analysis time.
     estimated_improvement_pct: int | None = None
     # 2026-09-17: deterministic improvement-potential level derived by the
     # server from server-observable facts only (rule findings, whether a
     # fragment was revalidated as result-preserving, whether a full rewrite
     # passed re-validation) — see ai_service.improvement_potential. The
     # model's own `impact` never sets this level.
-    #   high/medium/low — confirmed improvement evidence exists
-    #   "notice_only"   — only governance reminders (e.g. R007 重要資料表)
+    #   high/medium    — one or more server-confirmed rewrite evidences
+    #   low            — a concrete issue/advice exists but no confirmed rewrite
+    #   "notice_only"  — only governance reminders (e.g. R007 重要資料表)
     #                     with no confirmed SQL-writing improvement point;
     #                     the UI must NOT say 「目前寫法良好」 for this
     #   None            — nothing was found at all

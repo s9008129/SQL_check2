@@ -12,12 +12,17 @@
 # skills/sqlcheck-oracle-review/SKILL.md for the full explanation):
 #   VERIFIED_REWRITE — the rewritten form is equivalent for every input,
 #     proven by backend/app/services/rewrite_rules.py WITHOUT relying on an
-#     unverified precondition (column datatype, time component, collation…).
+#     unverified precondition (column datatype, time component, collation…),
+#     AND the rewritten SQL stays executable on the target Oracle version
+#     (e.g. within Oracle's 1000-expression IN-list limit). Logical
+#     equivalence alone is not enough.
 #     A rewrite_rules.py rule existing is NOT by itself proof: two of the
 #     four runtime rules are only ADVICE_ONLY here because their equivalence
-#     depends on a precondition the runtime states but never checks (see
-#     `runtime_gap`). This is the only class a future Pattern Selector may
-#     treat as proven — and only for the forms the entry authorizes.
+#     depends on a precondition the runtime states but never checks, and the
+#     two Class A entries authorize less than the runtime accepts (see
+#     `authorized_boundary` / `runtime_gap`). This is the only class a future
+#     Pattern Selector may treat as proven — and only for the forms and
+#     boundaries the entry authorizes.
 #   ADVICE_ONLY — a reasonable direction, but SQLCheck cannot prove the
 #     rewritten SQL returns the same rows in every case. May be explained and
 #     suggested; must never become an automatic "已驗證" rewrite.
@@ -104,6 +109,14 @@
 #   verification.mechanism  deterministic_python | none. deterministic_python
 #                          means a governance-accepted proof exists, so it is
 #                          only used by VERIFIED_REWRITE entries.
+#   authorized_boundary    optional; the input range a VERIFIED_REWRITE is
+#                          authorized for when the rewritten SQL has an Oracle
+#                          limit the original does not. Fields:
+#                          max_in_list_expressions (int, ≤ 1000),
+#                          oracle_version, description_zh_tw. Inputs outside
+#                          the boundary are not authorized, even if the
+#                          runtime still derives them (record that as a
+#                          runtime_gap).
 #   runtime_gap            REQUIRED whenever the runtime (rewrite_rules.py)
 #                          does more than this entry authorizes — i.e. it
 #                          labels a fragment verified/corrected for a form
@@ -144,8 +157,8 @@ patterns:
   # (`_RULES`). Each runtime rule has exactly one entry here, but the entry's
   # classification is a governance judgment, not a copy of what the runtime
   # does: TRUNC_EQ_TO_RANGE and NVL_EQ_TO_OR_IS_NULL are ADVICE_ONLY with a
-  # recorded runtime_gap, and SUBSTR_EQ_TO_LIKE authorizes only its canonical
-  # LIKE form.
+  # recorded runtime_gap, SUBSTR_EQ_TO_LIKE authorizes only its canonical
+  # LIKE form, and OR_SAME_COLUMN_TO_IN authorizes only 1–1000 values.
   # ===========================================================================
   - id: SUBSTR_EQ_TO_LIKE
     name_zh_tw: SUBSTR 定位比對改為 LIKE／範圍
@@ -321,7 +334,11 @@ patterns:
     rationale_zh_tw: >
       col = a OR col = b [OR ...]（全部比較同一欄位、皆為等於比較字面值或
       bind 參數）與 col IN (a, b, ...) 邏輯上完全相同，是純粹的語法糖轉換。
-      不同欄位的 OR 串接不屬於本規則（見 OR_CROSS_COLUMN_TO_UNION_ALL）。
+      但改寫後的 SQL 還必須能在 Oracle 執行：Oracle 19c 單一運算式的 IN 清單
+      最多 1000 個 expression，原本的 OR 串沒有這個限制，所以本 pattern 只
+      授權 1～1000 個值（見 authorized_boundary）；超過 1000 個值的 OR 串不能
+      改成單一 IN。不同欄位的 OR 串接不屬於本規則（見
+      OR_CROSS_COLUMN_TO_UNION_ALL）。
     allowed_behavior:
       explain: true
       advice: true
@@ -333,9 +350,40 @@ patterns:
     verification:
       required_for_rewrite: true
       mechanism: deterministic_python
+    authorized_boundary:
+      max_in_list_expressions: 1000
+      oracle_version: "19c"
+      description_zh_tw: >
+        只授權改寫後 IN 清單含 1～1000 個 expression 的情況；超過 1000 個時，
+        改寫後的 SQL 會超出 Oracle 19c IN 清單上限而無法執行，即使邏輯等價
+        也不在授權範圍。
+    runtime_gap:
+      kind: unauthorized_accepted_form
+      runtime_rule: or_eq_to_in
+      not_authorized_forms:
+        - "col IN (v1, …, vN)，N > 1000（超過 Oracle 19c 單一 IN 清單 1000 個 expression 的上限）"
+      description_zh_tw: >
+        既有 rewrite_rules._rule_or_eq_to_in 沒有檢查值的數量，規則邏輯本身會
+        把任意長度的同欄位 OR 串推導成單一 IN（2026-09-18 在開發機把 Python
+        recursion limit 暫時調高後量測，1001、1500、3000 個值都會推導出 IN）。
+        在預設 recursion limit（1000）下，直接呼叫時 997 個值以上會在規則內
+        遞迴展開 OR 時觸發 RecursionError，被 derive() 捕捉後回傳 None，片段
+        標為 unverified，所以目前超過 1000 的情況剛好會被擋下；但這是遞迴
+        深度的副作用，不是治理上的邊界：門檻會隨 recursion limit 與呼叫堆疊
+        深度改變（Web 請求路徑堆疊較深，門檻會更低），也會連帶把一部分 1000
+        以內的合法情況標成 unverified。
+      required_action_zh_tw: >
+        本 PR 不修改 Runtime。Phase 2（Pattern Selector）之前需另開 correctness
+        PR，在 _rule_or_eq_to_in 明確檢查值的數量 ≤ 1000（並改成不依賴遞迴深度
+        的展開方式）；完成前，未來的 selector 不得自動套用超過 1000 個值的
+        改寫。
     sources:
       - type: internal
         ref: backend/app/services/rewrite_rules.py::_rule_or_eq_to_in
+      - type: oracle_documentation
+        ref: https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/IN-Condition.html
+      - type: internal
+        ref: "PR #2 third-party review round 2 item 1 (2026-09-18)"
 
   # ===========================================================================
   # Class B — ADVICE_ONLY

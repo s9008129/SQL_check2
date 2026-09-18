@@ -12,7 +12,7 @@ not enough on its own; see the runtime gaps below.
 | Catalog id | rewrite_rules.py rule | Authorized form |
 |---|---|---|
 | `SUBSTR_EQ_TO_LIKE` | `substr_eq_to_like` | `SUBSTR(col,p,n)='v'` ⇔ `col LIKE '<p-1 underscores>v%'` (len(v)=n, no wildcard in v). Canonical LIKE form **only**. |
-| `OR_SAME_COLUMN_TO_IN` | `or_eq_to_in` | `col=a OR col=b [...]` (same column, all equality) ⇔ `col IN (a,b,...)` |
+| `OR_SAME_COLUMN_TO_IN` | `or_eq_to_in` | `col=a OR col=b [...]` (same column, all equality) ⇔ `col IN (a,b,...)`, **1–1000 values only** (`authorized_boundary`: an Oracle 19c IN list holds at most 1000 expressions) |
 
 To read the equivalence argument, read the rule function's docstring in
 `rewrite_rules.py`. This file only indexes which catalog id maps to which
@@ -30,6 +30,7 @@ Until then, a future selector must not treat these as proven.
 | `TRUNC_EQ_TO_RANGE` | ADVICE_ONLY | `unverified_precondition`: equivalence needs the right-hand side to have no time component; the runtime only prints this as an `assumption`, never checks it. |
 | `NVL_EQ_TO_OR_IS_NULL` | ADVICE_ONLY | `unverified_precondition`: NVL on character data returns VARCHAR2 (nonpadded comparison), while a CHAR column compared to a text literal is blank-padded — a `CHAR` value `'b  '` makes the two forms disagree. SQLCheck cannot see column types. |
 | `SUBSTR_EQ_TO_LIKE` (prefix-range form) | form not authorized | `unauthorized_accepted_form`: for p=1 the runtime also accepts `col >= 'v' AND col < next(v)`; range comparison depends on collation, which SQLCheck does not know. |
+| `OR_SAME_COLUMN_TO_IN` (more than 1000 values) | outside `authorized_boundary` | `unauthorized_accepted_form`: the rule has no count check, so its logic turns any-length OR chains into one IN list, which Oracle 19c rejects past 1000 expressions. Today such chains happen to fail inside the rule with a `RecursionError` that `derive()` swallows (≈997+ values at the default recursion limit), which is a side effect, not a boundary. |
 
 The machine-readable version of this table is each entry's `runtime_gap`
 block in `pattern_catalog.yaml`.
@@ -41,6 +42,10 @@ block in `pattern_catalog.yaml`.
   `_RULES` has exactly one catalog entry (of any class). A runtime rule
   classified below VERIFIED_REWRITE must declare a `runtime_gap`.
 - A VERIFIED_REWRITE entry can never carry an `unverified_precondition` gap.
+- An IN-producing VERIFIED_REWRITE must declare `max_in_list_expressions`
+  ≤ 1000, and a synthetic 1001-value probe (recursion limit raised so the
+  rule's logic is tested, not the accidental cutoff) must be recorded as a
+  `runtime_gap` for as long as the runtime still derives it.
 
 ## Do NOT add a pattern here just because it "looks obviously safe"
 

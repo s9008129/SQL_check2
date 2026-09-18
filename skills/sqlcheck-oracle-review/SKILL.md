@@ -53,9 +53,11 @@ and the compliance/optimization boundary. Then:
    precondition (with its own positive/negative/boundary tests) — never by
    adding an entry to the catalog alone, never because an external skill
    calls it safe, and never merely because a runtime rule already derives
-   it. Where the runtime already does more than governance certifies (TRUNC,
-   NVL, SUBSTR's prefix-range form), the catalog records a `runtime_gap`;
-   read it before relying on that runtime rule.
+   it. A proven rewrite must also produce SQL Oracle can execute (e.g. at
+   most 1000 expressions in one IN list). Where the runtime already does more
+   than governance certifies (TRUNC, NVL, SUBSTR's prefix-range form, OR→IN
+   beyond 1000 values), the catalog records a `runtime_gap`; read it before
+   relying on that runtime rule.
 
 ## Phase boundary (read before touching Runtime code)
 

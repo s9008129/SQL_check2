@@ -25,9 +25,10 @@ The order says who decides a runtime outcome; it does not mean the catalog
 must certify whatever a runtime rule does. The catalog never overrides
 `rewrite_rules.py` at runtime, but it also never classifies a runtime rule
 above what that rule actually proves. Where a runtime rule relies on a
-precondition it does not check (TRUNC, NVL) or accepts an extra form
-(SUBSTR's prefix-range form), the catalog classifies it lower and records a
-`runtime_gap`. The gap is closed in `rewrite_rules.py` by a separate
+precondition it does not check (TRUNC, NVL) or accepts more than governance
+authorizes (SUBSTR's prefix-range form; OR→IN with more than the 1000
+expressions an Oracle IN list allows), the catalog classifies it lower or
+narrows the authorized form/boundary, and records a `runtime_gap`. The gap is closed in `rewrite_rules.py` by a separate
 correctness PR, not by editing the catalog.
 
 ## Compliance rules ≠ generic optimization knowledge

@@ -43,6 +43,13 @@ _SPECIFIC_LIST_FOR_SOURCE = {
     "improvement_score_structure": "structure_keys",
 }
 
+# Oracle 19c: "You can specify up to 1000 expressions in expression_list."
+# https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/IN-Condition.html
+_ORACLE_IN_LIST_MAX_EXPRESSIONS = 1000
+# Runtime rewrite rules whose output is a single IN list.
+_IN_LIST_PRODUCING_RUNTIME_RULES = {"or_eq_to_in"}
+_VALID_BOUNDARY_KEYS = {"max_in_list_expressions", "oracle_version", "description_zh_tw"}
+
 # rule_engine rules that fire for a whole family, so they can never be the
 # specific detector of one pattern (PR #2 review item 4). Add a rule here
 # when its findings cover several catalog patterns at once.
@@ -336,6 +343,82 @@ def test_every_runtime_rewrite_rule_has_exactly_one_governance_entry(patterns: l
         assert len(owners.get(rule_name, [])) == 1, (
             f"runtime rewrite rule {rule_name!r} must have exactly one catalog entry, found {owners.get(rule_name, [])}"
         )
+
+
+def test_authorized_boundary_is_well_formed(patterns: list[dict[str, Any]]) -> None:
+    for p in patterns:
+        boundary = p.get("authorized_boundary")
+        if boundary is None:
+            continue
+        pid = p.get("id")
+        assert p.get("classification") == "VERIFIED_REWRITE", f"{pid}: authorized_boundary only applies to VERIFIED_REWRITE"
+        assert set(boundary) <= _VALID_BOUNDARY_KEYS, f"{pid}: unknown authorized_boundary key(s) {set(boundary) - _VALID_BOUNDARY_KEYS}"
+        limit = boundary.get("max_in_list_expressions")
+        assert isinstance(limit, int) and 1 <= limit <= _ORACLE_IN_LIST_MAX_EXPRESSIONS, (
+            f"{pid}: max_in_list_expressions must be an int in 1..{_ORACLE_IN_LIST_MAX_EXPRESSIONS}, got {limit!r}"
+        )
+        assert (boundary.get("description_zh_tw") or "").strip(), f"{pid}: authorized_boundary needs description_zh_tw"
+
+
+def _owner_of_runtime_rule(patterns: list[dict[str, Any]], rule_name: str) -> dict[str, Any]:
+    owners = [p for p in patterns if rule_name in ((p.get("detection") or {}).get("rewrite_rule_ids") or [])]
+    assert len(owners) == 1, f"{rule_name}: expected exactly one catalog owner, found {[p.get('id') for p in owners]}"
+    return owners[0]
+
+
+def test_in_list_verified_rewrite_never_authorizes_more_than_oracle_limit(patterns: list[dict[str, Any]]) -> None:
+    """PR #2 review round 2 item 1: a Class A rewrite must also produce SQL
+    Oracle can execute. A single IN list holds at most 1000 expressions, so
+    an IN-producing VERIFIED_REWRITE must declare a boundary that excludes a
+    synthetic 1001-value input."""
+    for rule_name in _IN_LIST_PRODUCING_RUNTIME_RULES:
+        p = _owner_of_runtime_rule(patterns, rule_name)
+        if p.get("classification") != "VERIFIED_REWRITE":
+            continue
+        limit = (p.get("authorized_boundary") or {}).get("max_in_list_expressions")
+        assert isinstance(limit, int), f"{p.get('id')}: IN-producing VERIFIED_REWRITE must declare max_in_list_expressions"
+        over_limit = _ORACLE_IN_LIST_MAX_EXPRESSIONS + 1
+        assert over_limit > limit, f"{p.get('id')}: a {over_limit}-value IN list must not be authorized"
+
+
+def _derive_same_column_or_chain(n: int):
+    """Derive a synthetic `A.C = 1 OR ... OR A.C = n` chain with the recursion
+    limit temporarily raised, so this probes the rule's logic rather than the
+    accidental RecursionError cutoff (~997 values at the default limit)."""
+    import sys
+
+    from app.services import rewrite_rules as rr
+
+    atom = rr.parse_predicate(" OR ".join(f"A.C = {i}" for i in range(1, n + 1)))
+    assert atom is not None, f"synthetic {n}-value OR chain failed to parse"
+    old_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(max(old_limit, 10 * n))
+    try:
+        return rr.derive(atom)
+    finally:
+        sys.setrecursionlimit(old_limit)
+
+
+def test_runtime_or_to_in_over_oracle_limit_is_recorded_as_runtime_gap(patterns: list[dict[str, Any]]) -> None:
+    """If the runtime rule's logic still turns a 1001-value OR chain into one
+    IN list, the catalog must say so explicitly. Once a correctness PR adds an
+    explicit ≤1000 check to rewrite_rules.py, the 1001 probe derives nothing
+    and the runtime_gap may be removed."""
+    inside = _derive_same_column_or_chain(_ORACLE_IN_LIST_MAX_EXPRESSIONS)
+    assert inside is not None and inside.rule == "or_eq_to_in", "probe sanity: 1000 values must still derive IN"
+
+    over = _derive_same_column_or_chain(_ORACLE_IN_LIST_MAX_EXPRESSIONS + 1)
+    if over is None:
+        return
+    assert over.canonical.count(",") + 1 == _ORACLE_IN_LIST_MAX_EXPRESSIONS + 1
+    p = _owner_of_runtime_rule(patterns, "or_eq_to_in")
+    gap = p.get("runtime_gap") or {}
+    if p.get("classification") == "VERIFIED_REWRITE":
+        assert gap.get("kind") == "unauthorized_accepted_form" and gap.get("runtime_rule") == "or_eq_to_in", (
+            f"{p.get('id')}: runtime derives IN lists over Oracle's limit; record it as an unauthorized_accepted_form runtime_gap"
+        )
+    else:
+        assert gap, f"{p.get('id')}: runtime derives IN lists over Oracle's limit; runtime_gap is required"
 
 
 def test_no_duplicate_source_of_truth_pattern_names(patterns: list[dict[str, Any]]) -> None:

@@ -30,7 +30,7 @@ column is a proposed disposition, not a governance decision.
 |---|---|---|---|---|---|---|
 | Subquery → JOIN conversion | Partially modeled (IN/EXISTS and NOT IN subquery forms only; general subquery → JOIN has no catalog entry) | Yes | B (`IN_SUBQUERY_TO_EXISTS`, `NOT_IN_SUBQUERY_TO_NOT_EXISTS`) | Duplicate rows if joined table isn't 1:1; NULL semantics differ for NOT IN | Advice only | `complexity_flags: not_in_subquery` |
 | Correlated subquery → window functions | Advice only, and blocked at candidate stage | Yes | B (`CORRELATED_SUBQUERY_TO_JOIN_OR_WINDOW`) | PARTITION BY/ORDER BY NULL-grouping and tie-break may not match original correlation | Advice only; already in `ai_gate.candidate_forbidden_complexity_flags` (`correlated_subquery`) so no full-rewrite candidate is even generated | `complexity_flags: correlated_subquery`; `app.yaml ai_gate.candidate_forbidden_complexity_flags` |
-| OR condition → UNION / UNION ALL | Advice only (cross-column); verified rewrite exists for the same-column special case | Yes | B (`OR_CROSS_COLUMN_TO_UNION_ALL`) for cross-column; **A** (`OR_SAME_COLUMN_TO_IN`) for same-column OR→IN, which is a *different* transform | Row duplication (UNION ALL) or dedup cost/semantics change (UNION) if branches overlap | Advice only for the general case; same-column OR→IN is already a proven, tested rewrite | `rules.yaml` R006 (family signal only: fires on any OR, cannot tell cross-column from same-column); cross-column case detected only by prompt check (5); same-column case by `rewrite_rules.py::_rule_or_eq_to_in` |
+| OR condition → UNION / UNION ALL | Advice only (cross-column); verified rewrite exists for the same-column special case | Yes | B (`OR_CROSS_COLUMN_TO_UNION_ALL`) for cross-column; **A** (`OR_SAME_COLUMN_TO_IN`) for same-column OR→IN, which is a *different* transform | Row duplication (UNION ALL) or dedup cost/semantics change (UNION) if branches overlap | Advice only for the general case; same-column OR→IN is already a proven, tested rewrite for up to 1000 values (Oracle IN-list limit; longer chains are a `runtime_gap`) | `rules.yaml` R006 (family signal only: fires on any OR, cannot tell cross-column from same-column); cross-column case detected only by prompt check (5); same-column case by `rewrite_rules.py::_rule_or_eq_to_in` |
 
 ## Index strategy techniques
 
@@ -103,13 +103,15 @@ column is a proposed disposition, not a governance decision.
   correlated subquery→window function — every one of these has a documented
   semantic trap in `skills/sqlcheck-oracle-review/references/advice-only-patterns.md`.
 - **Verified rewrite** (Class A, proven and tested today): SUBSTR equality →
-  canonical LIKE, and same-column OR → IN. These are the *only* patterns from
+  canonical LIKE, and same-column OR → IN with 1–1000 values (an Oracle 19c
+  IN list holds at most 1000 expressions). These are the *only* patterns from
   either the external skill or SQLCheck's own history that meet the bar for
   automatic-rewrite-eligible status — and even they are not wired to
   automatic application in this Phase (see `project-boundaries.md`).
 - **Runtime rules the catalog does not certify** (`runtime_gap`, a separate
   correctness PR is needed before Phase 2): TRUNC equality → range
   (unchecked time-component precondition), NVL equality → conditional
-  (CHAR blank-padded vs VARCHAR2 nonpadded comparison), and SUBSTR's p=1
-  prefix-range form (collation-dependent). See
+  (CHAR blank-padded vs VARCHAR2 nonpadded comparison), SUBSTR's p=1
+  prefix-range form (collation-dependent), and same-column OR → IN beyond
+  1000 values (no count check in the rule). See
   `skills/sqlcheck-oracle-review/references/safe-rewrites.md`.

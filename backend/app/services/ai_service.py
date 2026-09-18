@@ -576,9 +576,7 @@ def _advice_example_is_safe(source_sql: str, before: str | None, example: str) -
     # a whole statement, so identifier enforcement is conditional here.
     if source_sql and _introduces_unknown_identifiers(source_sql, example):
         return False
-    if _loses_typed_literal_wrapper(before, example):
-        return False
-    return True
+    return not _loses_typed_literal_wrapper(before, example)
 
 
 def _filter_advice(

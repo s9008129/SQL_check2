@@ -1,5 +1,7 @@
 name: Deploy Script CI
 
+# Validates the app/infra deployment split on Windows PowerShell.
+
 on:
   pull_request:
     paths:

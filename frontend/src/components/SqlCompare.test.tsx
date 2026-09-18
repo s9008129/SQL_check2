@@ -29,7 +29,7 @@ describe("SqlCompare", () => {
 
   it("shows the aligned diff without repeating the COST when there is a full rewrite", () => {
     render(<SqlCompare originalSql="SELECT 1 FROM DUAL;" ai={makeAi()} />);
-    expect(screen.getByRole("table", { name: "原始 SQL 與系統已確認的建議寫法逐行對照" })).toBeTruthy();
+    expect(screen.getByRole("table", { name: "原始 SQL 與查詢結果已確認的建議寫法逐行對照" })).toBeTruthy();
     expect(screen.queryByText(/COST/)).toBeNull();
     expect(screen.queryByText("複製建議寫法")).toBeNull();
   });
@@ -38,7 +38,7 @@ describe("SqlCompare", () => {
     render(<SqlCompare originalSql="SELECT 1 FROM DUAL;" ai={makeAi()} />);
     expect(screen.getByText("原寫法與建議寫法")).toBeTruthy();
     expect(screen.queryByText("優化前後比較")).toBeNull();
-    expect(screen.getAllByText("系統已確認的建議寫法").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("查詢結果已確認的建議寫法").length).toBeGreaterThan(0);
   });
 
   it("renders a line-aligned word-highlighted diff when a suggestion is available", () => {
@@ -51,7 +51,7 @@ describe("SqlCompare", () => {
         })}
       />,
     );
-    expect(screen.getByRole("table", { name: "原始 SQL 與系統已確認的建議寫法逐行對照" })).toBeTruthy();
+    expect(screen.getByRole("table", { name: "原始 SQL 與查詢結果已確認的建議寫法逐行對照" })).toBeTruthy();
     const marks = document.querySelectorAll("mark.diff-add");
     expect(marks.length).toBeGreaterThan(1); // legend + at least one real change
   });

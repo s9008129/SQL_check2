@@ -16,13 +16,14 @@
 #     AND the rewritten SQL stays executable on the target Oracle version
 #     (e.g. within Oracle's 1000-expression IN-list limit). Logical
 #     equivalence alone is not enough.
-#     A rewrite_rules.py rule existing is NOT by itself proof: two of the
-#     four runtime rules are only ADVICE_ONLY here because their equivalence
-#     depends on a precondition the runtime states but never checks, and the
-#     two Class A entries authorize less than the runtime accepts (see
-#     `authorized_boundary` / `runtime_gap`). This is the only class a future
-#     Pattern Selector may treat as proven — and only for the forms and
-#     boundaries the entry authorizes.
+#     A rewrite_rules.py rule existing is NOT by itself proof; runtime rules
+#     must meet this same bar. Since 2026-09-18 (Runtime Correctness v1) the
+#     runtime certifies exactly the Class A forms and boundaries below: the
+#     TRUNC and NVL rules were removed, SUBSTR accepts only its canonical LIKE
+#     form, and OR→IN is limited to 1000 values. tests/test_pattern_catalog.py
+#     probes the runtime and fails if the two drift apart. This is the only
+#     class a future Pattern Selector may treat as proven — and only for the
+#     forms and boundaries the entry authorizes.
 #   ADVICE_ONLY — a reasonable direction, but SQLCheck cannot prove the
 #     rewritten SQL returns the same rows in every case. May be explained and
 #     suggested; must never become an automatic "已驗證" rewrite.
@@ -124,6 +125,10 @@
 #                          change runtime behavior; it records the gap so a
 #                          separate correctness PR can close it before any
 #                          Pattern Selector (Phase 2) relies on this entry.
+#                          No entry declares one as of 2026-09-18; the probes
+#                          in tests/test_pattern_catalog.py require one to be
+#                          added if the runtime starts certifying an
+#                          uncertified form again.
 #     runtime_gap.kind     unverified_precondition (equivalence needs a
 #                          precondition the runtime only states as an
 #                          `assumption` text, never checks) |
@@ -153,12 +158,13 @@ catalog_version: 1
 
 patterns:
   # ===========================================================================
-  # Patterns governing the runtime rules in backend/app/services/rewrite_rules.py
-  # (`_RULES`). Each runtime rule has exactly one entry here, but the entry's
-  # classification is a governance judgment, not a copy of what the runtime
-  # does: TRUNC_EQ_TO_RANGE and NVL_EQ_TO_OR_IS_NULL are ADVICE_ONLY with a
-  # recorded runtime_gap, SUBSTR_EQ_TO_LIKE authorizes only its canonical
-  # LIKE form, and OR_SAME_COLUMN_TO_IN authorizes only 1–1000 values.
+  # Predicate rewrites the runtime (backend/app/services/rewrite_rules.py) has
+  # handled. Each rule in `_RULES` has exactly one entry here.
+  # SUBSTR_EQ_TO_LIKE (canonical LIKE only) and OR_SAME_COLUMN_TO_IN (1–1000
+  # values) are the two runtime rules, and the runtime enforces both limits.
+  # TRUNC_EQ_TO_RANGE and NVL_EQ_TO_OR_IS_NULL had runtime rules until
+  # 2026-09-18; they were removed because equivalence cannot be proven from
+  # SQL text, and both stay ADVICE_ONLY.
   # ===========================================================================
   - id: SUBSTR_EQ_TO_LIKE
     name_zh_tw: SUBSTR 定位比對改為 LIKE

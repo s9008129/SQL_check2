@@ -18,30 +18,32 @@ export const AI_UNAVAILABLE_MESSAGE =
 
 // 2026-09-17 — red warning under the SQL compare card title (user request:
 // suggestions are AI output and must be tried on a test DB first).
-export const SUGGESTED_SQL_WARNING = "AI 建議寫法僅供參考，採用前務必先於測試機驗證。";
+export const SUGGESTED_SQL_WARNING =
+  "請先看清楚每項建議的採用狀態；未經系統確認的示意方向請勿直接套用，實際效能仍需於測試機確認。";
 
 // 2026-09-17 — the three genuinely different "no rewrite" situations get
 // their own copy, so "SQL is already fine" never reads like a refusal.
-export const SUGGESTED_SQL_NOT_NEEDED_MESSAGE = "AI 檢視後認為目前寫法已良好，本次不需要改寫。";
+export const SUGGESTED_SQL_NOT_NEEDED_MESSAGE = "目前未發現需要調整的寫法。";
 // 2026-09-17 user feedback: keep this plain and short — the model's own
 // `reason` (rendered right under it) states the concrete point to confirm.
 export const SUGGESTED_SQL_ADVICE_ONLY_MESSAGE =
-  "改善方向請見上方「智慧改善建議」與下方逐段對照，採用前請先確認：";
+  "有改善方向，但正確改法需要先確認業務條件。";
 
 // Shown when nothing to improve was found (level null / outcome not_needed).
-export const ESTIMATE_NOT_NEEDED_MESSAGE = "目前寫法良好，規則檢核與 AI 建議都沒有發現明顯的改善空間。";
+export const ESTIMATE_NOT_NEEDED_MESSAGE = "目前未發現需要調整的地方。";
 
 // 2026-09-17 (evening user decision): governance-only reminders (重要資料表
 // R007 …) are a "please look at this", not a confirmed SQL writing problem.
 // This copy must never read like 「目前寫法良好」.
 export const ESTIMATE_NOTICE_ONLY_MESSAGE =
-  "規則檢核有提醒事項，但未確認具體的 SQL 改善點，建議人工確認。";
+  "有提醒事項，請確認實際查詢需求後再決定是否調整。";
 
 // 2026-09-17 user decision: the improvement "estimate" is a level derived
 // from deterministic rule findings plus server-verified rewrite evidence —
 // the model's own impact rating no longer influences it. Never a measured
 // number, so say so plainly.
-export const POTENTIAL_CAVEAT = "此改善等級由程式規則檢核與系統驗證結果推算，未經測試機實際驗證。";
+export const POTENTIAL_CAVEAT =
+  "此處說明建議目前可採用的程度，不代表實際效能提升幅度；效能仍需於測試環境確認。";
 export const POTENTIAL_LABEL: Record<"high" | "medium" | "low", string> = {
   high: "高",
   medium: "中",

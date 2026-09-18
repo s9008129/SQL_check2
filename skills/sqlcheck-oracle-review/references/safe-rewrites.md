@@ -36,9 +36,10 @@ block in `pattern_catalog.yaml`.
 
 ## Tests that keep this honest
 
-- `tests/test_pattern_catalog.py` checks that every catalog
-  `rewrite_rule_id` exists in `rewrite_rules._RULES`, and that a runtime rule
-  classified below VERIFIED_REWRITE declares a `runtime_gap`.
+- `tests/test_pattern_catalog.py` checks both directions: every catalog
+  `rewrite_rule_id` exists in `rewrite_rules._RULES`, and every rule in
+  `_RULES` has exactly one catalog entry (of any class). A runtime rule
+  classified below VERIFIED_REWRITE must declare a `runtime_gap`.
 - A VERIFIED_REWRITE entry can never carry an `unverified_precondition` gap.
 
 ## Do NOT add a pattern here just because it "looks obviously safe"

@@ -234,22 +234,25 @@ def test_referenced_structure_keys_exist_in_rules_yaml(patterns: list[dict[str, 
             assert key in known, f"{p.get('id')}: structure key {key!r} is not in rules.yaml structure.weights"
 
 
-def test_rewrite_rule_ids_reference_known_rewrite_rules_module_rules(patterns: list[dict[str, Any]]) -> None:
+def _runtime_rewrite_rule_names() -> set[str]:
+    """The `Rewrite.rule` names the runtime can emit, one per `_RULES`
+    function. The function-name suffix does NOT always match the emitted name
+    (`_rule_substr_eq` emits rule="substr_eq_to_like"), so read the literal
+    from each function's source instead of guessing."""
     import inspect
-    import re
 
     from app.services import rewrite_rules
 
-    # The `_RULES` function name suffix does NOT always match the `Rewrite.rule`
-    # string it emits (e.g. `_rule_substr_eq` emits rule="substr_eq_to_like").
-    # Extract the actual `rule="..."` literal from each function's source so
-    # this test breaks loudly if a rule is renamed/removed/added, without
-    # guessing from the function name.
-    documented_rule_names: set[str] = set()
+    names: set[str] = set()
     for fn in rewrite_rules._RULES:
-        match = re.search(r'rule="([a-z_]+)"', inspect.getsource(fn))
-        assert match, f"{fn.__name__}: could not find a rule=\"...\" literal in its source"
-        documented_rule_names.add(match.group(1))
+        found = re.findall(r'rule="([a-z_]+)"', inspect.getsource(fn))
+        assert len(set(found)) == 1, f"{fn.__name__}: expected exactly one rule=\"...\" literal, found {found}"
+        names.add(found[0])
+    return names
+
+
+def test_rewrite_rule_ids_reference_known_rewrite_rules_module_rules(patterns: list[dict[str, Any]]) -> None:
+    documented_rule_names = _runtime_rewrite_rule_names()
     for p in patterns:
         detection = p.get("detection") or {}
         for rid in detection.get("rewrite_rule_ids") or []:
@@ -317,6 +320,21 @@ def test_verified_rewrite_never_rests_on_an_unverified_precondition(patterns: li
         gap = p.get("runtime_gap") or {}
         assert gap.get("kind") != "unverified_precondition", (
             f"{p.get('id')}: a pattern with an unverified precondition cannot be VERIFIED_REWRITE"
+        )
+
+
+def test_every_runtime_rewrite_rule_has_exactly_one_governance_entry(patterns: list[dict[str, Any]]) -> None:
+    """Reverse direction of the check above (PR #2 review item 5): a rule
+    added to rewrite_rules._RULES without a catalog entry must fail here.
+    The entry may have any classification — what is locked is that a
+    governance decision exists, not that every runtime rule is Class A."""
+    owners: dict[str, list[str]] = {}
+    for p in patterns:
+        for rid in (p.get("detection") or {}).get("rewrite_rule_ids") or []:
+            owners.setdefault(rid, []).append(p.get("id"))
+    for rule_name in sorted(_runtime_rewrite_rule_names()):
+        assert len(owners.get(rule_name, [])) == 1, (
+            f"runtime rewrite rule {rule_name!r} must have exactly one catalog entry, found {owners.get(rule_name, [])}"
         )
 
 

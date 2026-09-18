@@ -132,7 +132,9 @@
 # A new VERIFIED_REWRITE entry additionally requires a corresponding rule in
 # rewrite_rules.py with its own positive/negative/boundary tests in
 # tests/test_rewrite_rules.py — this file alone never makes a rewrite
-# automatic.
+# automatic. Conversely, every rule in rewrite_rules._RULES must have exactly
+# one entry here (any classification); adding a runtime rule without one
+# fails tests/test_pattern_catalog.py.
 
 catalog_version: 1
 

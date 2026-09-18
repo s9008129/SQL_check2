@@ -30,10 +30,10 @@ const IMPACT_BADGE_TONE: Record<ImpactLevel, string> = {
 };
 
 function adoptionLabel(item: AiResult["advice"][number]): { text: string; tone: string } {
-  if (item.verification === "verified") return { text: "系統已確認", tone: "blue" };
-  if (item.verification === "corrected") return { text: "系統已修正", tone: "blue" };
+  if (item.verification === "verified") return { text: "查詢結果已確認", tone: "blue" };
+  if (item.verification === "corrected") return { text: "系統已修正寫法", tone: "blue" };
   if (item.example) return { text: "需確認後再改", tone: "yellow" };
-  return { text: "方向建議", tone: "gray" };
+  return { text: "需先確認", tone: "gray" };
 }
 
 /** 智慧改善建議：先讓業務 SQL 撰寫者知道「值不值得看」與「能不能直接採用」。 */

@@ -1,10 +1,10 @@
 """Integrity checks for backend/app/knowledge/pattern_catalog.yaml.
 
-This validates the knowledge ASSET only — pattern ids, classification rules,
-provenance, and the governance invariants from the SQLCheck Oracle Knowledge
-v1 Phase 1 design. It never initializes Ollama, never imports ai_service, and
-never touches the running request path: the catalog is not wired into the
-runtime yet (see skills/sqlcheck-oracle-review/references/project-boundaries.md).
+This validates the knowledge asset — pattern ids, classification rules,
+provenance, and governance invariants. Phase 2's pattern_selector.py reads the
+catalog in shadow mode, but these tests still never initialize Ollama and never
+need a live model or Oracle connection. Runtime selection behavior is covered
+separately by tests/test_pattern_selector.py.
 """
 
 from __future__ import annotations

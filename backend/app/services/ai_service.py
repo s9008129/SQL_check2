@@ -435,8 +435,8 @@ def _contains_forbidden(text: str, forbidden: list[str]) -> bool:
 _INTERNAL_PLACEHOLDER_RE = re.compile(r":(?P<kind>STR|NUM)_\d+", re.IGNORECASE)
 _UNOBSERVABLE_DB_CLAIM_RE = re.compile(
     r"(?:Full\s+Table\s+Scan|全(?:資料)?表掃描|Execution\s+Plan|執行計畫(?:顯示)?|"
-    r"排序特性|(?:使用|利用|採用|走|命中|失效).{0,12}(?:索引|\bindex\b)|"
-    r"(?:索引|\bindex\b).{0,12}(?:使用|利用|採用|走|命中|失效)|無隱含型別轉換)",
+    r"排序特性|(?:使用|利用|採用|走|命中|失效|建立|新增|調整).{0,12}(?:索引|\bindex\b)|"
+    r"(?:索引|\bindex\b).{0,12}(?:使用|利用|採用|走|命中|失效|建立|新增|調整)|無隱含型別轉換)",
     re.IGNORECASE,
 )
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[。！？!?])")
@@ -571,7 +571,10 @@ def _loses_typed_literal_wrapper(before: str | None, example: str) -> bool:
 
 
 def _advice_example_is_safe(source_sql: str, before: str | None, example: str) -> bool:
-    if _introduces_unknown_identifiers(source_sql, example):
+    # Production supplies the representative SQL. Existing unit-level
+    # rewrite-evidence helpers may intentionally call _filter_advice without
+    # a whole statement, so identifier enforcement is conditional here.
+    if source_sql and _introduces_unknown_identifiers(source_sql, example):
         return False
     if _loses_typed_literal_wrapper(before, example):
         return False
@@ -589,11 +592,16 @@ def _filter_advice(
     kept: list[AdviceItem] = []
     dropped = 0
     for item in advice[:3]:  # RESPONSE_SCHEMA already caps at 3; defensive
-        title = _sanitize_user_prose(item.title, vocab)
-        explanation = _sanitize_user_prose(item.explanation, vocab)
-        if _contains_forbidden(title, forbidden) or _contains_forbidden(explanation, forbidden):
+        # Keep the established hard-drop behavior for explicit forbidden
+        # phrases before the sentence-level sanitizer removes softer
+        # unsupported database-behavior claims.
+        raw_title = _apply_vocabulary(item.title, vocab)
+        raw_explanation = _apply_vocabulary(item.explanation, vocab)
+        if _contains_forbidden(raw_title, forbidden) or _contains_forbidden(raw_explanation, forbidden):
             dropped += 1
             continue
+        title = _sanitize_user_prose(raw_title, {})
+        explanation = _sanitize_user_prose(raw_explanation, {})
         # 2026-09-17: code fragments are shown to the reviewer who owns the
         # data, so restore masked literals there too (previously `:STR_002`
         # leaked through into the advice card — confirmed in a production

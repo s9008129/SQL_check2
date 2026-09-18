@@ -270,20 +270,21 @@ curl -sk https://10.97.15.58/api/health
 
 ## 7. 尚未完成／建議的下一步方向（依優先序）
 
-1. **安全缺口（高）— 程式已修，待主機驗收**：正式主機 Ollama 11434 曾被區網直連成功（違反
-   PRD §46），來源疑為 Ollama 安裝程式自建的放行規則。PR #1 Batch 1 已把 `deploy.ps1` Step 3
-   改成 fail-closed 稽核（見第 3 節 2026-09-17 段落），但**尚未在正式主機驗證**。請在正式主機
-   執行 `deploy.ps1`（或 `Get-NetFirewallRule -Direction Inbound | Get-NetFirewallPortFilter |`
-   `Where-Object LocalPort -eq 11434`）確認稽核結果，並完成三項驗收：容器能連
-   `host.docker.internal:11434`、`/api/health` 的 `ai_available: true`、第二台區網電腦
-   `Test-NetConnection <主機IP> -Port 11434` 必須失敗。
-2. **部署最新兩個 commit 並讓同仁實測**：重點看逐段對照的黃底標示、1366×768 筆電可讀性、列印 PDF。
-3. **before 片段校正**：模型偶爾跳行複製 before；可在後端用與前端 `locateOriginalFragment` 相同的 token 重疊邏輯校正到原始行。
-4. **蒐集檔分析**：`data/sql_archive/*.jsonl` 累積後統計 `rewrite_outcome` 分布；若 `rejected` 比例高，檢視複核是否過嚴（例如 GROUP BY 拆分在定寬欄位其實等價）。
-5. **prompt 微調候選**（要先用第 6 節直連驗證再改）：民國日期格式提示（7 碼 'YYYMMDD'）；引號一致性檢查更明確；不要把「確認查詢範圍」湊成建議。
-6. **R002 `restriction_verdicts`**：目前全 PASS 是業務決定；若中心日後要求較嚴，改 `rules.yaml` 即可，程式與測試已涵蓋 pass／review／block。
-7. **效能**：prompt 約 4,000 tokens，每次 prompt eval 佔多數時間；若要再快，可精簡 system prompt 或確認 Ollama prefix cache 有生效（keep_alive 30m）。
-8. 開發機 `_find_static_dir` 會優先選有 `.gitkeep` 的 `backend/static`（非空）而非 `frontend/dist`，本機看畫面要手動複製 dist；可考慮忽略只含 .gitkeep 的目錄。
+1. **核心 Knowledge Runtime（目前最高優先）**：先完成 Pattern Selector v1 shadow mode 的 review／merge；
+   selector 只能產生 exact 與 family_signal，且 family_signal 不得當成已命中知識。
+2. **Compact Context Adapter（下一個獨立 PR）**：只允許少量 exact pattern 進入 Gemma context；
+   先定 deterministic top-N／去重／token budget，仍不得讓 catalog 影響 compliance、指數或 rewrite proof。
+3. **Prompt slimming / A-B**：Context Adapter 穩定後，再縮短 system prompt 內重複的 optimization prose，
+   用 synthetic golden + 正式主機 Gemma 做 A/B；不要一邊接 catalog 一邊大改 prompt，否則無法歸因。
+4. **正式主機 Gemma 驗證**：核心程式碼穩定後再集中跑 prompt／context golden，確認 TRUNC／NVL
+   維持 advice_only、SUBSTR canonical LIKE、OR→IN <=1000，以及 selector/context 不造成新幻覺。
+5. **Windows Firewall / 11434 hardening（延後到核心功能完成後獨立處理）**：正式主機 10.97.15.58
+   目前 Step 3 會因既有 11434 規則 scope 不符而 fail-closed。這是已知部署／安全議題，不再作為
+   Knowledge／Selector／Context 開發 gate；最後再獨立修正式主機規則、deploy diagnostics 與三項 E2E
+   （container→Ollama、`/api/health`、第二台 LAN 11434 必須失敗）。
+6. **before 片段校正**：模型偶爾跳行複製 before；可在後端用與前端 `locateOriginalFragment` 相同的 token 重疊邏輯校正到原始行。
+7. **蒐集檔分析**：`data/sql_archive/*.jsonl` 累積後統計 `rewrite_outcome` 分布；若 `rejected` 比例高，檢視複核是否過嚴。
+8. **R002 `restriction_verdicts`**：目前全 PASS 是業務決定；若中心日後要求較嚴，改 `rules.yaml` 即可，程式與測試已涵蓋 pass／review／block。
 
 ## 8. 絕對不要做的事（來自 lessons.md 的血淚）
 

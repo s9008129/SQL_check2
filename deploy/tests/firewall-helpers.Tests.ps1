@@ -4,14 +4,14 @@
     Behavioural tests for the Ollama (TCP 11434) firewall helpers in deploy.ps1.
 
 .DESCRIPTION
-    deploy.ps1's Step 3 must guarantee that "only the SQLCheck container may
+    deploy-infra.ps1's firewall stage must guarantee that "only the SQLCheck container may
     reach this host's Ollama API" (PRD §46). The host-side commands themselves
     can only be exercised on the real Windows 11 + Docker Desktop host, but the
     decision logic (port matching, source-scope classification, same-name rule
     validation, fail-closed behaviour) is pure PowerShell and is tested here.
 
-    The tests parse deploy.ps1 with the PowerShell AST and dot-source only the
-    helper functions under test - deploy.ps1 itself is never executed, so
+    The tests parse deploy-infra.ps1 with the PowerShell AST and dot-source only the
+    helper functions under test - deploy-infra.ps1 itself is never executed, so
     nothing is deployed, no firewall rule is touched and no environment
     variable is changed. The firewall cmdlets are replaced by in-memory mocks.
 
@@ -26,9 +26,9 @@ $ErrorActionPreference = 'Stop'
 $script:Failures = 0
 $script:Checks = 0
 
-$deployScript = Join-Path (Split-Path -Parent $PSScriptRoot) 'deploy.ps1'
+$deployScript = Join-Path (Split-Path -Parent $PSScriptRoot) 'deploy-infra.ps1'
 if (-not (Test-Path $deployScript)) {
-    Write-Host "找不到 deploy.ps1: $deployScript" -ForegroundColor Red
+    Write-Host "找不到 deploy-infra.ps1: $deployScript" -ForegroundColor Red
     exit 2
 }
 
@@ -39,7 +39,7 @@ $tokens = $null
 $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($deployScript, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count -gt 0) {
-    Write-Host 'deploy.ps1 有語法錯誤，無法測試：' -ForegroundColor Red
+    Write-Host 'deploy-infra.ps1 有語法錯誤，無法測試：' -ForegroundColor Red
     foreach ($e in $parseErrors) {
         Write-Host ("  line {0}: {1}" -f $e.Extent.StartLineNumber, $e.Message)
     }
@@ -59,7 +59,7 @@ foreach ($f in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Lan
 }
 . ([scriptblock]::Create($source.ToString()))
 
-# deploy.ps1 defines these in its own scope; provide silent/recording stubs here.
+# deploy-infra.ps1 defines these in its own scope; provide silent/recording stubs here.
 $script:WarnLog = @()
 Set-Item -Path function:Write-Ok -Value { param([string]$Message) $script:LastOk = $Message }
 Set-Item -Path function:Write-Warn -Value {

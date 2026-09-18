@@ -109,6 +109,32 @@ def normalize_text(text: str) -> str | None:
     return normalize(expr) if expr is not None else None
 
 
+def query_skeleton_without_conditions(tree: exp.Expression) -> str:
+    """Canonical query structure with predicate bodies replaced by TRUE.
+
+    SQLCheck's verified runtime rewrites are predicate-only. This skeleton
+    therefore lets the full-rewrite validator prove that everything outside
+    WHERE/HAVING/JOIN-ON stayed unchanged: selected expressions, aliases,
+    FROM/subquery structure, GROUP BY, ORDER BY, DISTINCT, etc.
+
+    Predicate equivalence itself is checked separately by
+    verify_predicate_changes. Combining both checks is deliberately stricter
+    than comparing only column counts or flag sets.
+    """
+    copied = normalize_identifiers(tree.copy(), dialect=DIALECT)
+    for select in copied.find_all(exp.Select):
+        where = select.args.get("where")
+        if where is not None:
+            where.set("this", exp.true())
+        having = select.args.get("having")
+        if having is not None:
+            having.set("this", exp.true())
+        for join in select.args.get("joins") or []:
+            if join.args.get("on") is not None:
+                join.set("on", exp.true())
+    return copied.sql(dialect=DIALECT)
+
+
 def _conjuncts(expr: exp.Expression) -> list[exp.Expression]:
     """Conjuncts in source order, without depending on Python recursion depth.
 

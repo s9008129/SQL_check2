@@ -21,6 +21,15 @@ rewrite; whether that rewrite is *true* is decided by
 `ai_service.py::_revalidate_suggested_sql`'s structural comparison — never by
 asking the model again, and never by this catalog alone.
 
+The order says who decides a runtime outcome; it does not mean the catalog
+must certify whatever a runtime rule does. The catalog never overrides
+`rewrite_rules.py` at runtime, but it also never classifies a runtime rule
+above what that rule actually proves. Where a runtime rule relies on a
+precondition it does not check (TRUNC, NVL) or accepts an extra form
+(SUBSTR's prefix-range form), the catalog classifies it lower and records a
+`runtime_gap`. The gap is closed in `rewrite_rules.py` by a separate
+correctness PR, not by editing the catalog.
+
 ## Compliance rules ≠ generic optimization knowledge
 
 - **Compliance** (BLOCK / NOTICE / PASS / REVIEW) comes only from

@@ -60,7 +60,7 @@ that file is the authoritative rationale, this table is the index.
 
 | External pattern | SQLCheck support | Oracle applicable | Classification | Semantic risk | Recommendation | Related rule/flag |
 |---|---|---|---|---|---|---|
-| Function call avoidance in WHERE clauses | Already supported (advice) | Yes | B (`PREDICATE_FUNCTION_GENERIC`; specific proven forms are **A**: `SUBSTR_EQ_TO_LIKE`, `TRUNC_EQ_TO_RANGE`, `NVL_EQ_TO_OR_IS_NULL`) | Blanket function removal is a classic semantic trap (`UPPER_CASE_FOLD_REMOVAL`) | Advice only except the three proven SUBSTR/TRUNC/NVL forms | `rules.yaml` R005; `rewrite_rules.py` |
+| Function call avoidance in WHERE clauses | Already supported (advice) | Yes | B (`PREDICATE_FUNCTION_GENERIC`, `TRUNC_EQ_TO_RANGE`, `NVL_EQ_TO_OR_IS_NULL`); the only proven form is **A** `SUBSTR_EQ_TO_LIKE` (canonical LIKE form only) | Blanket function removal is a classic semantic trap (`UPPER_CASE_FOLD_REMOVAL`); TRUNC→range needs a time-free right-hand side and NVL→plain comparison differs for CHAR columns — both have a runtime rule with an unchecked precondition (`runtime_gap`) | Advice only, except SUBSTR equality → canonical LIKE | `rules.yaml` R005 (family signal); `rewrite_rules.py` |
 | Early filtering in WHERE clauses | Not currently a catalog entry | Yes (concept) | Candidate — likely **C** (informational; too generic to verify per-case) | None specific | Candidate to add as informational only | none |
 | Temporary table for complex multi-step calculations | Already supported (informational) | Yes | **C** (`LARGE_RESULT_SET_NO_LIMIT` is a related but distinct informational entry; a dedicated `TEMP_TABLE_FOR_COMPLEX_CALC` id is a candidate to add) | None specific; readability suggestion only | Informational only | none |
 
@@ -95,9 +95,14 @@ that file is the authoritative rationale, this table is the index.
   LEFT JOIN→INNER JOIN, DISTINCT removal, NOT IN→NOT EXISTS, OR→UNION,
   correlated subquery→window function — every one of these has a documented
   semantic trap in `skills/sqlcheck-oracle-review/references/advice-only-patterns.md`.
-- **Verified rewrite** (Class A, proven and tested today): SUBSTR equality→
-  LIKE/range, TRUNC equality→range, NVL equality→conditional, same-column
-  OR→IN. These are the *only* patterns from either the external skill or
-  SQLCheck's own history that meet the bar for automatic-rewrite-eligible
-  status — and even they are not wired to automatic application in this
-  Phase (see `project-boundaries.md`).
+- **Verified rewrite** (Class A, proven and tested today): SUBSTR equality →
+  canonical LIKE, and same-column OR → IN. These are the *only* patterns from
+  either the external skill or SQLCheck's own history that meet the bar for
+  automatic-rewrite-eligible status — and even they are not wired to
+  automatic application in this Phase (see `project-boundaries.md`).
+- **Runtime rules the catalog does not certify** (`runtime_gap`, a separate
+  correctness PR is needed before Phase 2): TRUNC equality → range
+  (unchecked time-component precondition), NVL equality → conditional
+  (CHAR blank-padded vs VARCHAR2 nonpadded comparison), and SUBSTR's p=1
+  prefix-range form (collation-dependent). See
+  `skills/sqlcheck-oracle-review/references/safe-rewrites.md`.

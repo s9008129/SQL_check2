@@ -29,6 +29,8 @@ _VALID_DETECTION_SOURCES = {
 }
 _ID_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _RULE_ID_RE = re.compile(r"^R\d{3}$")
+_VALID_SOURCE_TYPES = {"internal", "external_skill", "oracle_documentation"}
+_VALID_RUNTIME_GAP_KINDS = {"unverified_precondition", "unauthorized_accepted_form"}
 
 
 def _load_catalog() -> dict[str, Any]:
@@ -74,7 +76,7 @@ def test_every_pattern_has_provenance(patterns: list[dict[str, Any]]) -> None:
         sources = p.get("sources")
         assert isinstance(sources, list) and sources, f"{p.get('id')}: missing provenance (sources)"
         for s in sources:
-            assert s.get("type") in ("internal", "external_skill"), f"{p.get('id')}: bad source type {s!r}"
+            assert s.get("type") in _VALID_SOURCE_TYPES, f"{p.get('id')}: bad source type {s!r}"
             assert s.get("ref"), f"{p.get('id')}: source missing ref"
 
 
@@ -176,6 +178,57 @@ def test_verification_mechanism_is_declared(patterns: list[dict[str, Any]]) -> N
         )
         assert isinstance(verification.get("required_for_rewrite"), bool), (
             f"{p.get('id')}: verification.required_for_rewrite must be a bool"
+        )
+
+
+def test_deterministic_proof_mechanism_is_reserved_for_verified_rewrite(patterns: list[dict[str, Any]]) -> None:
+    """`deterministic_python` means a governance-accepted proof exists. A
+    runtime rule whose equivalence rests on an unchecked precondition (TRUNC,
+    NVL) must not claim it just because rewrite_rules.py has code for it."""
+    for p in patterns:
+        if (p.get("verification") or {}).get("mechanism") == "deterministic_python":
+            assert p.get("classification") == "VERIFIED_REWRITE", (
+                f"{p.get('id')}: only VERIFIED_REWRITE may declare a deterministic_python proof"
+            )
+
+
+def test_runtime_gap_is_well_formed(patterns: list[dict[str, Any]]) -> None:
+    for p in patterns:
+        gap = p.get("runtime_gap")
+        if gap is None:
+            continue
+        pid = p.get("id")
+        assert gap.get("kind") in _VALID_RUNTIME_GAP_KINDS, f"{pid}: illegal runtime_gap.kind {gap.get('kind')!r}"
+        rewrite_rule_ids = (p.get("detection") or {}).get("rewrite_rule_ids") or []
+        assert gap.get("runtime_rule") in rewrite_rule_ids, (
+            f"{pid}: runtime_gap.runtime_rule must be one of this pattern's rewrite_rule_ids"
+        )
+        assert (gap.get("description_zh_tw") or "").strip(), f"{pid}: runtime_gap needs description_zh_tw"
+        assert (gap.get("required_action_zh_tw") or "").strip(), f"{pid}: runtime_gap needs required_action_zh_tw"
+        if gap["kind"] == "unauthorized_accepted_form":
+            forms = gap.get("not_authorized_forms")
+            assert isinstance(forms, list) and forms, f"{pid}: unauthorized_accepted_form must list not_authorized_forms"
+
+
+def test_runtime_rule_not_certified_by_governance_must_declare_runtime_gap(patterns: list[dict[str, Any]]) -> None:
+    """rewrite_rules.py labels every derivable fragment verified/corrected. If
+    governance classifies that rule below VERIFIED_REWRITE, the mismatch must
+    be recorded explicitly — never left for a future selector to discover."""
+    for p in patterns:
+        rewrite_rule_ids = (p.get("detection") or {}).get("rewrite_rule_ids") or []
+        if rewrite_rule_ids and p.get("classification") != "VERIFIED_REWRITE":
+            assert p.get("runtime_gap"), (
+                f"{p.get('id')}: runtime rule {rewrite_rule_ids} is not VERIFIED_REWRITE here, so runtime_gap is required"
+            )
+
+
+def test_verified_rewrite_never_rests_on_an_unverified_precondition(patterns: list[dict[str, Any]]) -> None:
+    for p in patterns:
+        if p.get("classification") != "VERIFIED_REWRITE":
+            continue
+        gap = p.get("runtime_gap") or {}
+        assert gap.get("kind") != "unverified_precondition", (
+            f"{p.get('id')}: a pattern with an unverified precondition cannot be VERIFIED_REWRITE"
         )
 
 

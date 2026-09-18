@@ -9,7 +9,9 @@ duplicate of the catalog.
 
 | Catalog id | Semantic trap if treated as "always safe" |
 |---|---|
-| `PREDICATE_FUNCTION_GENERIC` | Only SUBSTR/TRUNC/NVL specific forms are proven (see `safe-rewrites.md`); other functions (TRIM, TO_CHAR, custom) have their own NULL/type/format semantics that must be checked case by case |
+| `PREDICATE_FUNCTION_GENERIC` | Only the SUBSTR equality → canonical LIKE form is proven (see `safe-rewrites.md`); other functions (TRIM, TO_CHAR, custom) have their own NULL/type/format semantics that must be checked case by case |
+| `TRUNC_EQ_TO_RANGE` | `TRUNC(col)=:X` → `col>=:X AND col<:X+1` only holds if `:X` has no time component; with `:X` = 10:00 the original matches nothing and the range matches 24 hours of rows. A runtime rule exists but its precondition is unchecked (`runtime_gap`) |
+| `NVL_EQ_TO_OR_IS_NULL` | NVL on character data returns VARCHAR2 (nonpadded comparison), a CHAR column vs a text literal is blank-padded: `CHAR(3)` value `'b  '` makes `NVL(col,'x')='b'` false but `col='b'` true. A runtime rule exists but cannot see column types (`runtime_gap`) |
 | `UPPER_CASE_FOLD_REMOVAL` | `WHERE UPPER(email)='ABC'` → `WHERE email='abc'` changes matched rows whenever real data has mixed case |
 | `IMPLICIT_TYPE_CONVERSION_MIXED_QUOTING` | Inconsistent quoting across similar columns (`COLL_YR = 107` vs `LEVY_TP = '1'`) may hide an implicit type conversion SQLCheck cannot see the actual column type to confirm |
 | `NOT_IN_SUBQUERY_TO_NOT_EXISTS` | `NOT IN` returns zero rows if the subquery can produce a `NULL` (three-valued logic); `NOT EXISTS` does not have this failure mode — but only matters if NULL is actually possible, which SQLCheck cannot confirm |

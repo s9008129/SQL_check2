@@ -10,11 +10,14 @@
 #
 # Governance model (four classes — see
 # skills/sqlcheck-oracle-review/SKILL.md for the full explanation):
-#   VERIFIED_REWRITE — backend/app/services/rewrite_rules.py can prove the
-#     specific rewritten form is equivalent. Today this is the ONLY class the
-#     running system is allowed to turn into an automatic "建議寫法" without
-#     a human confirming it first — and only through rewrite_rules.py, never
-#     through this file.
+#   VERIFIED_REWRITE — the rewritten form is equivalent for every input,
+#     proven by backend/app/services/rewrite_rules.py WITHOUT relying on an
+#     unverified precondition (column datatype, time component, collation…).
+#     A rewrite_rules.py rule existing is NOT by itself proof: two of the
+#     four runtime rules are only ADVICE_ONLY here because their equivalence
+#     depends on a precondition the runtime states but never checks (see
+#     `runtime_gap`). This is the only class a future Pattern Selector may
+#     treat as proven — and only for the forms the entry authorizes.
 #   ADVICE_ONLY — a reasonable direction, but SQLCheck cannot prove the
 #     rewritten SQL returns the same rows in every case. May be explained and
 #     suggested; must never become an automatic "已驗證" rewrite.
@@ -83,10 +86,31 @@
 #   verification.required_for_rewrite  true if any rewrite claim for this
 #                          pattern must be proven before being shown as
 #                          "verified"/"corrected" rather than "unverified".
-#   verification.mechanism  deterministic_python | none.
-#   sources                provenance: where this pattern's knowledge came
-#                          from (internal SQLCheck design decision, or the
-#                          external awesome-copilot sql-optimization skill).
+#   verification.mechanism  deterministic_python | none. deterministic_python
+#                          means a governance-accepted proof exists, so it is
+#                          only used by VERIFIED_REWRITE entries.
+#   runtime_gap            REQUIRED whenever the runtime (rewrite_rules.py)
+#                          does more than this entry authorizes — i.e. it
+#                          labels a fragment verified/corrected for a form
+#                          governance does not certify. The catalog does not
+#                          change runtime behavior; it records the gap so a
+#                          separate correctness PR can close it before any
+#                          Pattern Selector (Phase 2) relies on this entry.
+#     runtime_gap.kind     unverified_precondition (equivalence needs a
+#                          precondition the runtime only states as an
+#                          `assumption` text, never checks) |
+#                          unauthorized_accepted_form (the runtime also
+#                          accepts an extra output form this entry does not
+#                          authorize; listed in not_authorized_forms).
+#     runtime_gap.runtime_rule  the rewrite_rules.py rule id with the gap.
+#     runtime_gap.not_authorized_forms  forms a future selector must never
+#                          pick automatically (required for
+#                          unauthorized_accepted_form).
+#     runtime_gap.description_zh_tw / required_action_zh_tw  why, and what
+#                          must happen before Phase 2.
+#   sources                provenance: internal (SQLCheck code/decision),
+#                          external_skill (github/awesome-copilot
+#                          sql-optimization) or oracle_documentation.
 #
 # Adding a pattern: append an entry, run
 #   cd backend && uv run pytest tests/test_pattern_catalog.py -q
@@ -99,8 +123,12 @@ catalog_version: 1
 
 patterns:
   # ===========================================================================
-  # Class A — VERIFIED_REWRITE (mirrors backend/app/services/rewrite_rules.py
-  # exactly; one entry per `_RULES` function there).
+  # Patterns governing the runtime rules in backend/app/services/rewrite_rules.py
+  # (`_RULES`). Each runtime rule has exactly one entry here, but the entry's
+  # classification is a governance judgment, not a copy of what the runtime
+  # does: TRUNC_EQ_TO_RANGE and NVL_EQ_TO_OR_IS_NULL are ADVICE_ONLY with a
+  # recorded runtime_gap, and SUBSTR_EQ_TO_LIKE authorizes only its canonical
+  # LIKE form.
   # ===========================================================================
   - id: SUBSTR_EQ_TO_LIKE
     name_zh_tw: SUBSTR 定位比對改為 LIKE／範圍
@@ -112,11 +140,13 @@ patterns:
       rewrite_rule_ids: [substr_eq_to_like]
       rule_ids: [R005]
     rationale_zh_tw: >
-      SUBSTR(col, p, n) = 'v' 等價於 col LIKE '<p-1 個底線>v%'（p=1 時額外接受
-      上下界寫法），因為 SUBSTR 取出的固定長度片段等於 v 若且唯若該位置的字元
-      恰好是 v，這與 LIKE 樣式的語意相同，且對 NULL 值的行為一致。系統只接受
-      這個推導結果，不接受模型自創的萬用字元位置（正式案例：模型曾把
-      SUBSTR(MANAGE_CD,6,3)='551' 誤改為 LIKE '__%551%'，語意不同）。
+      本 pattern 只認可 canonical LIKE 形式：SUBSTR(col, p, n) = 'v' 等價於
+      col LIKE '<p-1 個底線>v%'（len(v) = n 且 v 不含 % 或 _），因為 SUBSTR
+      取出的固定長度片段等於 v 若且唯若該位置的字元恰好是 v，這與 LIKE 樣式
+      的語意相同，且對 NULL 值的行為一致。系統只接受這個推導結果，不接受模型
+      自創的萬用字元位置（正式案例：模型曾把 SUBSTR(MANAGE_CD,6,3)='551' 誤改
+      為 LIKE '__%551%'，語意不同）。p=1 時 runtime 另外接受的上下界寫法
+      不在本 pattern 的認可範圍內，見 runtime_gap。
     allowed_behavior:
       explain: true
       advice: true
@@ -128,68 +158,123 @@ patterns:
     verification:
       required_for_rewrite: true
       mechanism: deterministic_python
+    runtime_gap:
+      kind: unauthorized_accepted_form
+      runtime_rule: substr_eq_to_like
+      not_authorized_forms:
+        - "col >= 'v' AND col < '<next(v)>'   (p = 1 的上下界寫法)"
+      description_zh_tw: >
+        既有 rewrite_rules._rule_substr_eq 在 p=1 時，也把
+        col >= 'v' AND col < _next_prefix(v) 列為 accepted form，
+        verify_fragment 會把這種寫法標成 verified。範圍比較的結果取決於
+        collation（NLS_COMP／NLS_SORT 與資料的 collation 設定），而
+        _next_prefix() 的 docstring 自己也說明沒有 collation 資訊就無法得出
+        一般性的安全後繼值；SQLCheck 沒有 session 或欄位的 collation context。
+      required_action_zh_tw: >
+        本 PR 不修改 rewrite_rules.py。Phase 2（Pattern Selector）之前需另開
+        correctness PR，決定移除這個 accepted form 或加上可驗證的 collation
+        前提；在那之前，未來的 selector 只能自動選用 canonical LIKE 形式。
     sources:
       - type: internal
         ref: backend/app/services/rewrite_rules.py::_rule_substr_eq
+      - type: internal
+        ref: backend/app/services/rewrite_rules.py::_next_prefix
       - type: internal
         ref: Handoff.md 2026-09-17 深夜（三）
 
   - id: TRUNC_EQ_TO_RANGE
     name_zh_tw: TRUNC 日期等式改為範圍比對
     category: predicate
-    classification: VERIFIED_REWRITE
+    classification: ADVICE_ONLY
     oracle_applicable: true
     detection:
       source: rewrite_rules
       rewrite_rule_ids: [trunc_eq_to_range]
       rule_ids: [R005]
     rationale_zh_tw: >
-      TRUNC(col) = X 等價於 col >= X AND col < X + 1，前提是 X 為不含時分秒的
-      日期值（此前提由系統以 assumption 文字揭露給審核者，不代表系統已驗證
-      X 本身不含時間）。TRUNC(col, '格式') 帶格式參數的用法不在此規則範圍內。
+      TRUNC(col) = X 與 col >= X AND col < X + 1 只有在 X 不含時分秒時才等價。
+      若 X（綁定變數或運算式）實際帶有時間，例如當天 10:00，原條件因 TRUNC
+      結果一定是午夜而不會命中任何資料，範圍寫法卻會回傳當天 10:00 到隔天
+      10:00 的資料，兩者結果不同。SQLCheck 看不到綁定變數的實際值，無法證明
+      這個前提，因此只能提供方向並寫明前提。TRUNC(col, '格式') 帶格式參數的
+      用法不在此規則範圍內。
     allowed_behavior:
       explain: true
       advice: true
-      automatic_rewrite: true
+      automatic_rewrite: false
     prohibited_claims:
       - index_usage
       - execution_plan
       - post_rewrite_cost
     verification:
       required_for_rewrite: true
-      mechanism: deterministic_python
+      mechanism: none
+    runtime_gap:
+      kind: unverified_precondition
+      runtime_rule: trunc_eq_to_range
+      description_zh_tw: >
+        既有 rewrite_rules._rule_trunc_eq 只把「假設 X 為不含時分秒的日期值」
+        寫成給審核者看的 assumption 文字，沒有驗證 X 真的不含時間；
+        verify_fragment 仍會把符合推導的片段標成 verified 或 corrected。
+      required_action_zh_tw: >
+        本 PR 不修改 Runtime。Phase 2（Pattern Selector）之前需另開 correctness
+        PR，加入可驗證前提的 deterministic gate（例如只在 X 是明確不含時間的
+        日期字面值時才推導），或把 runtime 的標示降為未驗證；完成前不得升為
+        VERIFIED_REWRITE，未來 selector 也不得自動信任這條 runtime rule。
     sources:
       - type: internal
         ref: backend/app/services/rewrite_rules.py::_rule_trunc_eq
+      - type: internal
+        ref: "PR #2 third-party review item 1 (2026-09-18)"
 
   - id: NVL_EQ_TO_OR_IS_NULL
     name_zh_tw: NVL 預設值比對改為明確條件
     category: predicate
-    classification: VERIFIED_REWRITE
+    classification: ADVICE_ONLY
     oracle_applicable: true
     detection:
       source: rewrite_rules
       rewrite_rule_ids: [nvl_eq]
       rule_ids: [R005]
     rationale_zh_tw: >
-      NVL(col, 'a') = 'b'：當 a == b 時等價於 (col = 'b' OR col IS NULL)（NULL
-      也會被 NVL 代換成 'a' 而符合比對）；當 a != b 時等價於 col = 'b'（NULL
-      只會被代換成 'a'，不可能等於 'b'）。這是逐案代入即可證明的邏輯等價，
-      不依賴業務假設。
+      只看 NULL 代換的邏輯時，NVL(col, 'a') = 'b' 在 a == b 時對應
+      (col = 'b' OR col IS NULL)，a != b 時對應 col = 'b'；但 Oracle 的比較
+      語意還受欄位資料型別影響，SQLCheck 看不到欄位型別。NVL 的 expr1 為文字
+      資料時回傳 VARCHAR2，而 VARCHAR2 與文字常數比較採 nonpadded semantics；
+      CHAR 欄位直接與文字常數比較則採 blank-padded semantics。因此 CHAR(3)
+      欄位值 'b  ' 會讓 NVL(col,'x') = 'b' 為 false、col = 'b' 為 true，兩種
+      寫法回傳的資料不同。在無法確認欄位不是 CHAR／NCHAR 之前只能提供方向。
     allowed_behavior:
       explain: true
       advice: true
-      automatic_rewrite: true
+      automatic_rewrite: false
     prohibited_claims:
       - index_usage
       - execution_plan
       - post_rewrite_cost
     verification:
       required_for_rewrite: true
-      mechanism: deterministic_python
+      mechanism: none
+    runtime_gap:
+      kind: unverified_precondition
+      runtime_rule: nvl_eq
+      description_zh_tw: >
+        既有 rewrite_rules._rule_nvl_eq 沒有欄位型別資訊，也沒有附任何
+        assumption，就把推導結果當成等價；verify_fragment 會把符合推導的片段
+        標成 verified 或 corrected，CHAR／NCHAR 欄位時這個標示可能是錯的。
+      required_action_zh_tw: >
+        本 PR 不修改 Runtime。Phase 2（Pattern Selector）之前需另開 correctness
+        PR，加入能證明欄位不是 CHAR／NCHAR（或其他型別前提）的 deterministic
+        gate，或把 runtime 的標示降為未驗證；完成前不得升為 VERIFIED_REWRITE。
     sources:
       - type: internal
         ref: backend/app/services/rewrite_rules.py::_rule_nvl_eq
+      - type: oracle_documentation
+        ref: https://docs.oracle.com/en/database/oracle/oracle-database/26/sqlrf/NVL.html
+      - type: oracle_documentation
+        ref: https://docs.oracle.com/en/database/oracle/oracle-database/26/sqlrf/Data-Type-Comparison-Rules.html
+      - type: internal
+        ref: "PR #2 third-party review item 2 (2026-09-18)"
 
   - id: OR_SAME_COLUMN_TO_IN
     name_zh_tw: 同欄位 OR 串接改為 IN
@@ -233,8 +318,11 @@ patterns:
     rationale_zh_tw: >
       條件欄位套用函數（TRIM／TO_CHAR／自訂函數等未被 rewrite_rules.py 涵蓋
       的形式）通常有機會改寫成欄位本身的直接比較，但每種函數的等價改法都需
-      要個別驗證語意（型別、NULL 行為、格式假設），系統目前只對
-      SUBSTR／TRUNC／NVL 三種形式建立了證明；其餘一律只能提供方向。
+      要個別驗證語意（型別、NULL 行為、格式假設）。治理上目前只認可
+      SUBSTR 等於比對改為 canonical LIKE 這一種形式為已證明（見
+      SUBSTR_EQ_TO_LIKE）；TRUNC／NVL 雖有 runtime rule，但仍有未驗證前提
+      （見 TRUNC_EQ_TO_RANGE、NVL_EQ_TO_OR_IS_NULL 的 runtime_gap）。其餘
+      一律只能提供方向。
     allowed_behavior:
       explain: true
       advice: true

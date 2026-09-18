@@ -49,8 +49,9 @@ is reshaped around what SQLCheck can actually verify:
 
 1. Decide the classification honestly. Default to ADVICE_ONLY unless you can
    point to a specific deterministic proof mechanism (a `rewrite_rules.py`
-   function with tests) for VERIFIED_REWRITE, or to the OUT_OF_SCOPE list in
-   `project-boundaries.md` for OUT_OF_SCOPE.
+   function with tests, whose preconditions are checked rather than only
+   stated as an `assumption`) for VERIFIED_REWRITE, or to the OUT_OF_SCOPE
+   list in `project-boundaries.md` for OUT_OF_SCOPE.
 2. Append one entry to `pattern_catalog.yaml` with real provenance (an
    internal file/line or the external skill).
 3. Run `cd backend && uv run pytest tests/test_pattern_catalog.py -q`.

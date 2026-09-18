@@ -49,9 +49,13 @@ and the compliance/optimization boundary. Then:
    authority — it explains and drafts; deterministic code verifies.
 5. **When in doubt about equivalence, classify down, not up.** A rewrite
    moves from ADVICE_ONLY to VERIFIED_REWRITE only when
-   `backend/app/services/rewrite_rules.py` gains a new proven rule (with its
-   own positive/negative/boundary tests) — never by adding an entry to the
-   catalog alone, and never because an external skill calls it safe.
+   `backend/app/services/rewrite_rules.py` proves it without an unchecked
+   precondition (with its own positive/negative/boundary tests) — never by
+   adding an entry to the catalog alone, never because an external skill
+   calls it safe, and never merely because a runtime rule already derives
+   it. Where the runtime already does more than governance certifies (TRUNC,
+   NVL, SUBSTR's prefix-range form), the catalog records a `runtime_gap`;
+   read it before relying on that runtime rule.
 
 ## Phase boundary (read before touching Runtime code)
 

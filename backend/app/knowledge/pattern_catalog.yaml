@@ -174,7 +174,10 @@ patterns:
   # ===========================================================================
   - id: SUBSTR_EQ_TO_LIKE
     name_zh_tw: SUBSTR 定位比對改為 LIKE
-    model_guidance_zh_tw: >\n      系統已能以確定性規則驗證符合條件的 SUBSTR 等式改寫；只使用系統認可的 canonical LIKE 形式，\n      不要自行改變萬用字元位置，也不要改成依賴 collation 的上下界範圍。\n    category: predicate
+    model_guidance_zh_tw: >
+      系統已能以確定性規則驗證符合條件的 SUBSTR 等式改寫；只使用系統認可的 canonical LIKE 形式，
+      不要自行改變萬用字元位置，也不要改成依賴 collation 的上下界範圍。
+    category: predicate
     classification: VERIFIED_REWRITE
     oracle_applicable: true
     detection:
@@ -300,7 +303,10 @@ patterns:
 
   - id: OR_SAME_COLUMN_TO_IN
     name_zh_tw: 同欄位 OR 串接改為 IN
-    model_guidance_zh_tw: >\n      只有同一欄位、全部為等於比較時可改成 IN；單一 IN 最多 1000 個值。\n      跨欄位 OR 或超過 1000 個值都不得當成已驗證改寫。\n    category: predicate
+    model_guidance_zh_tw: >
+      只有同一欄位、全部為等於比較時可改成 IN；單一 IN 最多 1000 個值。
+      跨欄位 OR 或超過 1000 個值都不得當成已驗證改寫。
+    category: predicate
     classification: VERIFIED_REWRITE
     oracle_applicable: true
     detection:
@@ -457,7 +463,10 @@ patterns:
 
   - id: NOT_IN_SUBQUERY_TO_NOT_EXISTS
     name_zh_tw: NOT IN 子查詢改為 NOT EXISTS
-    model_guidance_zh_tw: >\n      只提供 advice_only：NOT IN 與 NOT EXISTS 的 NULL 語意可能不同。\n      未確認子查詢欄位是否可能為 NULL 前，不要產生完整自動改寫。\n    category: subquery
+    model_guidance_zh_tw: >
+      只提供 advice_only：NOT IN 與 NOT EXISTS 的 NULL 語意可能不同。
+      未確認子查詢欄位是否可能為 NULL 前，不要產生完整自動改寫。
+    category: subquery
     classification: ADVICE_ONLY
     oracle_applicable: true
     detection:
@@ -589,7 +598,10 @@ patterns:
 
   - id: CORRELATED_SUBQUERY_TO_JOIN_OR_WINDOW
     name_zh_tw: 相關子查詢改為 JOIN 或視窗函數
-    model_guidance_zh_tw: >\n      只提供 advice_only：相關子查詢改成 JOIN／視窗函數可能改變重複列、聚合或結果語意。\n      可提醒評估，但不要自動改寫。\n    category: subquery
+    model_guidance_zh_tw: >
+      只提供 advice_only：相關子查詢改成 JOIN／視窗函數可能改變重複列、聚合或結果語意。
+      可提醒評估，但不要自動改寫。
+    category: subquery
     classification: ADVICE_ONLY
     oracle_applicable: true
     detection:
@@ -621,7 +633,10 @@ patterns:
 
   - id: DISTINCT_REMOVAL
     name_zh_tw: 移除 DISTINCT
-    model_guidance_zh_tw: >\n      只提供 advice_only：移除 DISTINCT 前必須確認重複列是否原本就是查詢語意的一部分，\n      以及 JOIN 是否會產生重複資料；不可自動移除。\n    category: distinct
+    model_guidance_zh_tw: >
+      只提供 advice_only：移除 DISTINCT 前必須確認重複列是否原本就是查詢語意的一部分，
+      以及 JOIN 是否會產生重複資料；不可自動移除。
+    category: distinct
     classification: ADVICE_ONLY
     oracle_applicable: true
     detection:
@@ -714,7 +729,10 @@ patterns:
 
   - id: LEADING_WILDCARD_LIKE
     name_zh_tw: LIKE 前置萬用字元
-    model_guidance_zh_tw: >\n      R004 已確認為前置萬用字元。可提醒業務是否能改成較窄的比對方式，\n      但沒有可保證等價的自動改寫，也不可宣稱索引或執行計畫行為。\n    category: predicate
+    model_guidance_zh_tw: >
+      R004 已確認為前置萬用字元。可提醒業務是否能改成較窄的比對方式，
+      但沒有可保證等價的自動改寫，也不可宣稱索引或執行計畫行為。
+    category: predicate
     classification: ADVICE_ONLY
     oracle_applicable: true
     detection:
@@ -749,7 +767,10 @@ patterns:
 
   - id: CARTESIAN_JOIN_MISSING_CONDITION
     name_zh_tw: 缺少 JOIN 條件（實質笛卡兒積）
-    model_guidance_zh_tw: >\n      已偵測缺少 JOIN 條件的結構。應提醒確認是否為刻意的笛卡兒積；\n      不要猜測或自行補上 JOIN 條件。\n    category: join
+    model_guidance_zh_tw: >
+      已偵測缺少 JOIN 條件的結構。應提醒確認是否為刻意的笛卡兒積；
+      不要猜測或自行補上 JOIN 條件。
+    category: join
     classification: ADVICE_ONLY
     oracle_applicable: true
     detection:
@@ -779,7 +800,10 @@ patterns:
   # ===========================================================================
   - id: SELECT_STAR
     name_zh_tw: SELECT * 使用星號
-    model_guidance_zh_tw: >\n      這是資訊性提醒：若業務只需要部分欄位，可建議明列欄位；\n      不要宣稱一定能改善實際效能。\n    category: structure
+    model_guidance_zh_tw: >
+      這是資訊性提醒：若業務只需要部分欄位，可建議明列欄位；
+      不要宣稱一定能改善實際效能。
+    category: structure
     classification: INFORMATIONAL
     oracle_applicable: true
     detection:
@@ -806,7 +830,10 @@ patterns:
 
   - id: IMPORTANT_TABLE_USAGE
     name_zh_tw: 查詢重要資料表
-    model_guidance_zh_tw: >\n      這是治理提醒，不是效能缺陷證據。依中心規範提醒重要資料表的查詢範圍、時段與測試環境要求，\n      不要把它當成已確認的 SQL 改善點。\n    category: table_usage
+    model_guidance_zh_tw: >
+      這是治理提醒，不是效能缺陷證據。依中心規範提醒重要資料表的查詢範圍、時段與測試環境要求，
+      不要把它當成已確認的 SQL 改善點。
+    category: table_usage
     classification: INFORMATIONAL
     oracle_applicable: true
     detection:
@@ -835,7 +862,10 @@ patterns:
 
   - id: STRUCTURAL_COMPLEXITY_MANY_TABLES
     name_zh_tw: 關聯資料表數量偏多
-    model_guidance_zh_tw: >\n      這是結構複雜度提醒：關聯資料表較多時可建議逐段確認條件與必要性；\n      沒有執行計畫或統計資訊時，不可推論實際效能或索引使用。\n    category: structure
+    model_guidance_zh_tw: >
+      這是結構複雜度提醒：關聯資料表較多時可建議逐段確認條件與必要性；
+      沒有執行計畫或統計資訊時，不可推論實際效能或索引使用。
+    category: structure
     classification: INFORMATIONAL
     oracle_applicable: true
     detection:

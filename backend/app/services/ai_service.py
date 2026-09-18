@@ -374,12 +374,13 @@ def _build_payload(
     structure_flags: list[str] | None = None,
     knowledge_context: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    """PRD §20's field set plus two additive, non-sensitive fields (2026-09-
-    16): `literal_hints` (placeholder -> shape/length/wildcard, never the
-    actual value — lets the model reason about e.g. "this is a trailing-
-    wildcard LIKE pattern" without seeing real text) and `where_evidence`
-    (why R002 did not BLOCK a SELECT with no top-level WHERE, when
-    applicable). Never raw literals, never model/Docker/DB connection info.
+    """Build the de-identified <SQL_DATA> object sent to Gemma.
+
+    Besides the PRD core fields this includes non-sensitive deterministic
+    metadata: literal shape hints, WHERE-restriction evidence, parser structure
+    flags, and a bounded exact-only Pattern Catalog knowledge context. The
+    knowledge context contains static catalog prose only — never raw literals,
+    table names, model output, or DB/Docker connection information.
     """
     important_table_notices = list(
         dict.fromkeys(f.table for f in findings if f.rule_id == "R007" and f.table)

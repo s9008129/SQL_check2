@@ -1403,6 +1403,28 @@ def test_known_identifiers_are_allowed_through_example_guard():
     assert ai_service._introduces_unknown_identifiers(source, "WHERE A.STATUS IN ('A','B')") is False
 
 
+def test_invented_business_literal_is_blocked_even_when_column_is_known():
+    source = "SELECT A.ID FROM TEST_DATA A WHERE A.STATUS = 'A'"
+    assert ai_service._introduces_unknown_literals(source, "WHERE A.STATUS = 'B'") is True
+
+
+def test_like_wildcard_reposition_keeps_same_literal_core():
+    source = "SELECT A.ID FROM TEST_DATA A WHERE A.NAME LIKE '%ACME'"
+    assert ai_service._introduces_unknown_literals(source, "WHERE A.NAME LIKE 'ACME%'") is False
+
+
+def test_substr_to_like_derived_wildcards_are_not_treated_as_new_business_value():
+    source = "SELECT A.ID FROM TEST_DATA A WHERE SUBSTR(A.CODE_COL,6,3) = '551'"
+    assert ai_service._introduces_unknown_literals(source, "WHERE A.CODE_COL LIKE '_____551%'") is False
+
+
+def test_splitting_unknown_business_constant_is_blocked():
+    source = "SELECT A.ID FROM TEST_DATA A WHERE A.COL_A || A.COL_B = '551'"
+    assert ai_service._introduces_unknown_literals(
+        source, "WHERE A.COL_A = '55' AND A.COL_B = '1'"
+    ) is True
+
+
 def test_typed_date_wrapper_loss_blocks_executable_looking_example():
     before = "TRUNC(A.UPDATE_TIME) = DATE '2026-09-18'"
     example = "A.UPDATE_TIME >= '2026-09-18' AND A.UPDATE_TIME < '2026-09-18' + 1"

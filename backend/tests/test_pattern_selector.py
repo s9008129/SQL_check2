@@ -1,5 +1,5 @@
 from app.schemas import Finding
-from app.services.pattern_selector import select_patterns
+from app.services.pattern_selector import PatternMatch, PatternSelection, select_patterns
 from app.services.sql_parser import parse_sql_text
 
 
@@ -127,3 +127,26 @@ def test_log_fields_are_sql_free_and_context_candidates_are_exact_only():
     assert secret not in blob
     assert "TAX_PRIVATE" not in blob
     assert selection.context_candidate_ids == selection.exact_ids
+
+
+def test_out_of_scope_exact_match_can_never_become_context_candidate():
+    selection = PatternSelection(
+        exact=(
+            PatternMatch(
+                pattern_id="INDEX_ADVISORY",
+                classification="OUT_OF_SCOPE",
+                match_kind="exact",
+                statement_indexes=(0,),
+                signals=("synthetic:test",),
+            ),
+            PatternMatch(
+                pattern_id="SELECT_STAR",
+                classification="INFORMATIONAL",
+                match_kind="exact",
+                statement_indexes=(0,),
+                signals=("flag:select_star",),
+            ),
+        )
+    )
+    assert selection.exact_ids == ("INDEX_ADVISORY", "SELECT_STAR")
+    assert selection.context_candidate_ids == ("SELECT_STAR",)

@@ -119,6 +119,11 @@ improvement_score:
     max: 15
     many_tables_threshold: 4
     subquery_depth_threshold: 2
+    # 這裡是「改善指數」的產品層級下限，不是新增中心規範。
+    # cartesian_join（多表但缺少關聯條件）即使有 WHERE，也不應在摘要卡顯示「目前良好」。
+    # 中心規範 PASS/BLOCK 仍完全由 rules 區塊決定。
+    score_floors:
+      cartesian_join: 60
     weights:
       many_tables: 4
       cartesian_join: 6

@@ -9,8 +9,8 @@ describe("SummaryCards — improvement colour states", () => {
     const { container } = render(<SummaryCards result={result} />);
     expect(screen.getByText("68 / 100")).toBeTruthy();
     expect(screen.getByTestId("improvement-level").textContent).toBe("建議改善");
-    expect(screen.getByText("改善指數")).toBeTruthy();
-    expect(screen.queryByText("改善優先指數")).toBeNull();
+    expect(screen.getByText("改善優先指數")).toBeTruthy();
+    expect(screen.queryByText("改善指數")).toBeNull();
     expect(screen.queryByText("67")).toBeNull();
     expect(container.querySelector(".tone-yellow")).toBeTruthy();
   });

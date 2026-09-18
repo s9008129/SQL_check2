@@ -241,6 +241,20 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 - Prompt slimming 暫不和本 Phase 混做；先在正式主機用同一版程式做 context on/off golden A/B，
   確認品質再另開 PR，才能知道改善或退步是 context 還是 prompt 改動造成。
 
+### 2026-09-18 App-only Deployment split
+- 日常正式部署入口改為 `deploy/deploy.ps1`：只處理 Git ff-only 更新、.env、rollback image、
+  build、TLS、單一 sqlcheck service recreate、health 與 smoke test。
+- `deploy/deploy.ps1` **不修改** Windows Firewall、TCP 11434、OLLAMA_HOST、Ollama process 或
+  Windows Trusted Root。正式主機已知的 11434 hardening 不再卡日常 application deploy。
+- 舊的 firewall-aware 部署流程完整保留成 `deploy/deploy-infra.ps1`，只在最後做正式主機
+  infrastructure/security hardening 時使用。
+- App deploy 失敗時，除了 image rollback，也會回復本次部署前的 .env；rollback point 優先取
+  「目前執行中 container 的 image id」，避免 latest tag 在 build 後已指向新版而失去真正上一版。
+- 新增 `Deploy Script CI`（Windows runner）：PowerShell parser、App-only policy boundary、
+  firewall helper regression 都是 merge gate。
+- 正式主機後續標準流程：先 `git pull --ff-only origin main`，再
+  `pwsh -NoProfile -File .\deploy\deploy.ps1 -SkipPull -RequireAi`。
+
 ## 4. 「AI 沒給建議寫法」的判讀順序（接手後最常被問）
 
 1. 看 API 回應或畫面的 outcome：
@@ -296,15 +310,14 @@ curl -sk https://10.97.15.58/api/health
 
 ## 7. 尚未完成／建議的下一步方向（依優先序）
 
-1. **Compact Context Adapter（目前核心）**：完成 exact-only context 的 CI／review／merge；family_signal、
-   OUT_OF_SCOPE、非 representative statement 都不得進模型。
-2. **正式主機 Gemma A/B 驗證**：Context Adapter merge 後才通知正式機 git pull；用
-   `SQLCHECK_KNOWLEDGE_CONTEXT_ENABLED=true/false` 跑同一組 golden，比較 advice/rewrite 品質與 latency。
-3. **Prompt slimming / A-B**：只有 context on/off 基線穩定後才縮短 system prompt 內重複 optimization prose；
-   不和 context 接線同 PR，避免無法歸因。
-4. **Knowledge coverage 精進**：依正式 SQL／去識別化 archive 的實際缺口補「specific detector → catalog guidance」，
+1. **正式主機統一更新 + Gemma A/B 驗證（目前核心）**：PR #6 Compact Context 已 merge；
+   App-only deploy split 通過後才通知正式機一次 git pull。用同一組 golden 跑 Context on/off，
+   比較 advice/rewrite 品質與 latency。
+2. **Prompt slimming / A-B**：只有正式機 context on/off 基線穩定後，才縮短 system prompt 內重複 optimization prose；
+   不和 context 接線混在同一變更，避免無法歸因。
+3. **Knowledge coverage 精進**：依正式 SQL／去識別化 archive 的實際缺口補「specific detector → catalog guidance」，
    不把 family signal 直接升級成 exact，也不新增無法證明的 rewrite。
-5. **Windows Firewall / 11434 hardening（延後到核心功能完成後獨立處理）**：正式主機 10.97.15.58
+4. **Windows Firewall / 11434 hardening（最後獨立處理）**：正式主機 10.97.15.58
    目前 Step 3 會因既有 11434 規則 scope 不符而 fail-closed。這是已知部署／安全議題，不再作為
    Knowledge／Selector／Context 開發 gate；最後再獨立修正式主機規則、deploy diagnostics 與三項 E2E
    （container→Ollama、`/api/health`、第二台 LAN 11434 必須失敗）。

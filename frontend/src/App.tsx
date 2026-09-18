@@ -137,7 +137,7 @@ export default function App() {
             <div className="brand-mark">SQL</div>
             <div>
               <div className="brand-title">SQLCheck AI</div>
-              <div className="brand-sub">SQL 效能優化助手</div>
+              <div className="brand-sub">SQL 智慧效能檢核與改善助手</div>
             </div>
           </div>
           <div className="top-actions">
@@ -191,7 +191,7 @@ export default function App() {
                     申請單號 <span>{result.application_no}</span>
                   </div>
                   <h1>SQL 效能檢核結果</h1>
-                  <p>依中心規範與智慧改善建議產生的檢核結果。</p>
+                  <p>依中心規範、SQL 結構檢查與智慧改善建議產生的結果。</p>
                 </div>
                 <span className={`status-pill status-pill-${complianceTone(result.compliance.status)}`}>
                   {complianceIcon(result.compliance.status)} {result.compliance.label}

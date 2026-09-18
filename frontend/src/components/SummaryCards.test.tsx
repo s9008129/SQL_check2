@@ -45,6 +45,30 @@ describe("SummaryCards — improvement colour states", () => {
     expect(list.textContent).not.toContain("佔規範門檻");
   });
 
+  it("shows structure score floors as minimums, not additive points", () => {
+    const result = makeResult({
+      improvement: {
+        score: 60,
+        level: "IMPROVE",
+        label: "建議改善",
+        color: "yellow",
+        breakdown: [
+          {
+            component: "structure_floor",
+            label: "需優先確認的 SQL 結構",
+            score: 60,
+            detail: "缺少資料表關聯條件，改善優先指數至少為 60。",
+          },
+        ],
+      },
+    });
+    render(<SummaryCards result={result} />);
+    fireEvent.click(screen.getByRole("button", { name: /指數組成/ }));
+    const list = screen.getByTestId("breakdown-list");
+    expect(list.textContent).toContain("至少 60 分");
+    expect(list.textContent).not.toContain("+60 分");
+  });
+
   it("renders the green 目前良好 state", () => {
     const result = makeResult({
       improvement: { score: 20, level: "GOOD", label: "目前良好", color: "green", breakdown: [] },

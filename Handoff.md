@@ -200,6 +200,26 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 - `tests/test_pattern_catalog.py` 以合成探測直接呼叫 runtime：runtime 若再認證 catalog 不認可的
   寫法，而 catalog 沒有對應的 runtime_gap，測試會失敗。
 
+### 2026-09-18 Pattern Selector v1 — Phase 2 Shadow Mode
+- 新增 `backend/app/services/pattern_selector.py`，開始在 Runtime **唯讀**載入
+  `pattern_catalog.yaml`，但目前仍不把 catalog 內容送進 Gemma。
+- Selector 將結果嚴格分成兩層：
+  - `exact`：已有特定 deterministic detector 命中（rule_engine rule id、rewrite_rules rule、
+    sql_parser complexity flag、或既有 many_tables threshold）。
+  - `family_signal`：只有 R005／R006／outer_join／group_by 等較寬的 family signal 命中；
+    **不得**當成特定 pattern 已確認，也不得進入未來 context candidate。
+- `context_candidate_ids` 只取 exact，且即使未來 OUT_OF_SCOPE pattern 有 detector，也明確排除，
+  避免 INDEX／Execution Plan 等 Class D 知識被送進模型。
+- `ai_service.get_ai_result` 目前只在 shadow mode 呼叫 selector，INFO log 僅記錄 pattern id/count；
+  不記 SQL、literal、table name、模型文字。selector 若失敗只 warning，既有 AI path 照常執行
+  （fail-open diagnostics），不會把整次分析降級。
+- 本 Phase **沒有**改 Gemma payload、system prompt、candidate gate、compliance、改善指數、
+  改善潛力、rewrite verification、API schema 或前端。下一階段 Compact Context Adapter 才會
+  研究如何只注入少量 exact pattern；family_signal 在沒有特定 detector 前一律不可注入。
+- 正式主機 10.97.15.58 的 11434 / Windows Firewall 問題依專案 owner 決策暫時與核心開發解耦：
+  目前不修改該主機防火牆設定，也不讓 Step 3 驗收阻擋 Knowledge／Selector／Context 核心工作；
+  最後再獨立做正式主機 security hardening 與驗收。
+
 ## 4. 「AI 沒給建議寫法」的判讀順序（接手後最常被問）
 
 1. 看 API 回應或畫面的 outcome：

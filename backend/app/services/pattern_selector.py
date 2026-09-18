@@ -95,6 +95,11 @@ def clear_catalog_cache() -> None:
     _catalog_patterns.cache_clear()
 
 
+def get_catalog_pattern(pattern_id: str) -> dict[str, Any] | None:
+    """Return one catalog entry by stable id without exposing loader details."""
+    return next((pattern for pattern in _catalog_patterns() if pattern.get("id") == pattern_id), None)
+
+
 def _statement_indexes_for_rule_ids(findings: Sequence[Finding], rule_ids: Iterable[str]) -> tuple[int, ...]:
     wanted = set(rule_ids)
     return tuple(sorted({f.statement_index for f in findings if f.rule_id in wanted}))

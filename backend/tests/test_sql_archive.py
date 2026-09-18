@@ -100,6 +100,31 @@ def test_build_record_includes_expected_top_level_fields():
         assert key in record
 
 
+def test_build_record_keeps_non_sensitive_advice_verification_metadata():
+    kwargs = _base_kwargs("SELECT A.X FROM T A WHERE A.Y = 'A' OR A.Y = 'B'")
+    kwargs["ai_result"] = AiResult(
+        status="ok",
+        summary="s",
+        advice=[
+            AdviceItem(
+                title="合併同欄位條件",
+                explanation="可改成 IN。",
+                before="A.Y = 'A' OR A.Y = 'B'",
+                example="A.Y IN ('A','B')",
+                impact="medium",
+                verification="verified",
+            )
+        ],
+        suggested_sql=SuggestedSql(available=False, reason="r", outcome="advice_only"),
+    )
+    record = sql_archive.build_record(**kwargs)
+    advice = record["ai"]["advice"][0]
+    assert advice["verification"] == "verified"
+    assert advice["example_available"] is True
+    assert "example" not in advice
+    assert "before" not in advice
+
+
 def test_build_record_includes_rewrite_outcome():
     kwargs = _base_kwargs("SELECT A.X FROM T A WHERE A.Y = 1")
     kwargs["ai_result"] = AiResult(

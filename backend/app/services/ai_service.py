@@ -621,16 +621,22 @@ def _introduces_unknown_literals(source_sql: str, example: str) -> bool:
     return not proposed_numbers.issubset(source_numbers)
 
 
-def _advice_example_is_safe(source_sql: str, before: str | None, example: str) -> bool:
+def _advice_example_safety_issue(source_sql: str, before: str | None, example: str) -> str | None:
     # Production supplies the representative SQL. Existing unit-level
     # rewrite-evidence helpers may intentionally call _filter_advice without
-    # a whole statement, so identifier enforcement is conditional here.
+    # a whole statement, so provenance enforcement is conditional here.
     if source_sql:
         if _introduces_unknown_identifiers(source_sql, example):
-            return False
+            return "unknown_identifier"
         if _introduces_unknown_literals(source_sql, example):
-            return False
-    return not _loses_typed_literal_wrapper(before, example)
+            return "unknown_literal"
+    if _loses_typed_literal_wrapper(before, example):
+        return "typed_literal"
+    return None
+
+
+def _advice_example_is_safe(source_sql: str, before: str | None, example: str) -> bool:
+    return _advice_example_safety_issue(source_sql, before, example) is None
 
 
 def _filter_advice(
@@ -660,14 +666,33 @@ def _filter_advice(
         # printout). Prose fields are never un-masked.
         example = unmask_sql(item.example, reverse_map or {}) if item.example else None
         before = unmask_sql(item.before, reverse_map or {}) if item.before else None
-        if example and not _advice_example_is_safe(source_sql, before, example):
-            logger.info("ai_service: advice SQL example hidden by deterministic safety guard")
+        safety_issue = _advice_example_safety_issue(source_sql, before, example) if example else None
+        if safety_issue is not None:
+            logger.info("ai_service: advice SQL example hidden by deterministic safety guard: %s", safety_issue)
             example = None
             before = None
-            if "系統不顯示可直接套用的寫法" not in explanation:
+            # Once the model has demonstrated that this advice depends on an
+            # invented identifier/value or lost typed-literal context, do not
+            # keep its accompanying prose: the same hallucinated detail may
+            # be repeated there. Replace it with a server-owned, useful
+            # business instruction instead of merely appending a warning.
+            if safety_issue == "unknown_identifier":
+                title = "請先確認查詢條件或資料表關聯"
                 explanation = (
-                    explanation.rstrip("。") +
-                    "。這個方向需要原 SQL 未提供的業務資訊或資料型態前提，系統不顯示可直接套用的寫法。"
+                    "這個改善方向需要原 SQL 未提供的欄位或關聯資訊。"
+                    "請先確認實際查詢範圍或正確的資料表關聯欄位，系統不會自行猜測。"
+                )
+            elif safety_issue == "unknown_literal":
+                title = "請先確認業務條件"
+                explanation = (
+                    "這個改善方向需要原 SQL 未提供的業務值或切分規則。"
+                    "請先確認實際條件，系統不會自行編造可直接套用的值。"
+                )
+            else:
+                title = "請先確認日期或時間條件"
+                explanation = (
+                    "這個改善方向涉及日期／時間常數的型態前提。"
+                    "系統目前無法確認可直接套用的改寫，因此只保留方向提醒。"
                 )
         if before and not example:
             # A "before" with nothing to compare against is useless to the

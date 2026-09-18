@@ -38,23 +38,10 @@ export const ESTIMATE_NOT_NEEDED_MESSAGE = "目前未發現需要調整的地方
 export const ESTIMATE_NOTICE_ONLY_MESSAGE =
   "有提醒事項，請確認實際查詢需求後再決定是否調整。";
 
-// 2026-09-17 user decision: the improvement "estimate" is a level derived
-// from deterministic rule findings plus server-verified rewrite evidence —
-// the model's own impact rating no longer influences it. Never a measured
-// number, so say so plainly.
+// The adoption-status card explains trust/actionability, not measured
+// performance improvement.
 export const POTENTIAL_CAVEAT =
   "此處說明建議目前可採用的程度，不代表實際效能提升幅度；效能仍需於測試環境確認。";
-export const POTENTIAL_LABEL: Record<"high" | "medium" | "low", string> = {
-  high: "高",
-  medium: "中",
-  low: "低",
-};
-export const POTENTIAL_HINT: Record<"high" | "medium" | "low", string> = {
-  high: "有明確且已確認可行的改善點，建議優先處理。",
-  medium: "有值得調整的地方，可安排時間評估。",
-  low: "改善空間有限，或改法尚需人工確認。",
-};
-
 // Lightweight loading copy while ai.status === "pending" (PRD §51's spirit:
 // AI is never a single point of failure, so the rest of the page is fully
 // usable while this is showing).

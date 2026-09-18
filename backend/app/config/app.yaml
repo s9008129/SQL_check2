@@ -66,6 +66,7 @@ ollama:
 # 只允許 Pattern Selector 的 exact match；family_signal / OUT_OF_SCOPE 永不注入。
 # 保留開關是為了正式主機 A/B 或快速回復，不需要改程式碼。
 knowledge_context:
+  # 正式機 A/B／緊急回復只需設環境變數 false，不必改 catalog 或 rollback commit。
   enabled_env: SQLCHECK_KNOWLEDGE_CONTEXT_ENABLED
   enabled: true
   max_patterns: 4

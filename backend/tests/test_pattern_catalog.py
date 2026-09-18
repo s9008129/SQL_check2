@@ -31,6 +31,25 @@ _ID_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _RULE_ID_RE = re.compile(r"^R\d{3}$")
 _VALID_SOURCE_TYPES = {"internal", "external_skill", "oracle_documentation"}
 _VALID_RUNTIME_GAP_KINDS = {"unverified_precondition", "unauthorized_accepted_form"}
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
+_RULES_YAML = _BACKEND_DIR / "app" / "config" / "rules.yaml"
+_SQL_PARSER_PY = _BACKEND_DIR / "app" / "services" / "sql_parser.py"
+
+# Which specific-id list belongs to which deterministic detection.source.
+_SPECIFIC_LIST_FOR_SOURCE = {
+    "rule_engine": "rule_ids",
+    "rewrite_rules": "rewrite_rule_ids",
+    "sql_parser_complexity_flag": "complexity_flags",
+    "improvement_score_structure": "structure_keys",
+}
+
+# rule_engine rules that fire for a whole family, so they can never be the
+# specific detector of one pattern (PR #2 review item 4). Add a rule here
+# when its findings cover several catalog patterns at once.
+_FAMILY_ONLY_RULE_IDS = {
+    "R005": "fires on any function applied to a condition column",
+    "R006": "fires on any OR, same-column or cross-column",
+}
 
 
 def _load_catalog() -> dict[str, Any]:
@@ -142,8 +161,77 @@ def test_detection_source_is_declared_and_legal(patterns: list[dict[str, Any]]) 
 def test_rule_ids_are_well_formed_when_present(patterns: list[dict[str, Any]]) -> None:
     for p in patterns:
         detection = p.get("detection") or {}
-        for rid in detection.get("rule_ids") or []:
+        family = detection.get("family_signals") or {}
+        for rid in (detection.get("rule_ids") or []) + (family.get("rule_ids") or []):
             assert _RULE_ID_RE.match(rid), f"{p.get('id')}: malformed rule_id {rid!r}"
+
+
+def test_specific_detection_lists_match_source(patterns: list[dict[str, Any]]) -> None:
+    """`source` names the detector that hits THIS pattern specifically. Only
+    the id list belonging to that source may be filled; `none` and
+    `prompt_heuristic_only` mean no specific deterministic detector, so all
+    four lists must be empty (family-level signals go in family_signals)."""
+    all_lists = set(_SPECIFIC_LIST_FOR_SOURCE.values())
+    for p in patterns:
+        detection = p.get("detection") or {}
+        source = detection.get("source")
+        expected = _SPECIFIC_LIST_FOR_SOURCE.get(source)
+        if expected is not None:
+            assert detection.get(expected), f"{p.get('id')}: source {source!r} needs a non-empty {expected}"
+        for key in all_lists - {expected}:
+            assert not detection.get(key), (
+                f"{p.get('id')}: {key} is only allowed with its own source, got source={source!r}"
+            )
+
+
+def test_family_only_rules_are_never_specific_detectors(patterns: list[dict[str, Any]]) -> None:
+    for p in patterns:
+        for rid in (p.get("detection") or {}).get("rule_ids") or []:
+            assert rid not in _FAMILY_ONLY_RULE_IDS, (
+                f"{p.get('id')}: {rid} {_FAMILY_ONLY_RULE_IDS.get(rid)}; list it under family_signals instead"
+            )
+
+
+def test_family_signals_are_well_formed(patterns: list[dict[str, Any]]) -> None:
+    for p in patterns:
+        family = (p.get("detection") or {}).get("family_signals")
+        if family is None:
+            continue
+        assert set(family) <= {"rule_ids", "complexity_flags", "qualifier_zh_tw"}, (
+            f"{p.get('id')}: unknown family_signals key(s) {set(family) - {'rule_ids', 'complexity_flags', 'qualifier_zh_tw'}}"
+        )
+        assert family.get("rule_ids") or family.get("complexity_flags"), f"{p.get('id')}: empty family_signals"
+        assert (family.get("qualifier_zh_tw") or "").strip(), (
+            f"{p.get('id')}: family_signals needs qualifier_zh_tw saying what the signal cannot tell apart"
+        )
+
+
+def test_referenced_rule_ids_exist_in_rules_yaml(patterns: list[dict[str, Any]]) -> None:
+    rules = yaml.safe_load(_RULES_YAML.read_text(encoding="utf-8"))
+    known = {r["id"] for r in rules["rules"]}
+    for p in patterns:
+        detection = p.get("detection") or {}
+        family = detection.get("family_signals") or {}
+        for rid in (detection.get("rule_ids") or []) + (family.get("rule_ids") or []):
+            assert rid in known, f"{p.get('id')}: rule_id {rid!r} is not defined in rules.yaml"
+
+
+def test_referenced_complexity_flags_are_emitted_by_sql_parser(patterns: list[dict[str, Any]]) -> None:
+    emitted = set(re.findall(r'flags\.add\("([a-z_]+)"\)', _SQL_PARSER_PY.read_text(encoding="utf-8")))
+    assert emitted, "could not find any flags.add(...) in sql_parser.py"
+    for p in patterns:
+        detection = p.get("detection") or {}
+        family = detection.get("family_signals") or {}
+        for flag in (detection.get("complexity_flags") or []) + (family.get("complexity_flags") or []):
+            assert flag in emitted, f"{p.get('id')}: complexity flag {flag!r} is never emitted by sql_parser.py"
+
+
+def test_referenced_structure_keys_exist_in_rules_yaml(patterns: list[dict[str, Any]]) -> None:
+    rules = yaml.safe_load(_RULES_YAML.read_text(encoding="utf-8"))
+    known = set(rules["improvement_score"]["structure"]["weights"])
+    for p in patterns:
+        for key in (p.get("detection") or {}).get("structure_keys") or []:
+            assert key in known, f"{p.get('id')}: structure key {key!r} is not in rules.yaml structure.weights"
 
 
 def test_rewrite_rule_ids_reference_known_rewrite_rules_module_rules(patterns: list[dict[str, Any]]) -> None:

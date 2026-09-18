@@ -40,18 +40,18 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
 - important_table_notices：命中重要資料表清單的表格名稱。
 - candidate_allowed：是否允許你提供「建議寫法」（suggested_sql）。
 - literal_hints：針對 sanitized_sql 中每一個佔位符（例如 :STR_001）額外提供的結構資訊，
-  格式為 {kind: "string"或"number", length: 原始內容字元數, wildcard:
+  格式包含 {kind: "string"或"number", length: 原始內容字元數, wildcard:
   "none"/"leading"/"trailing"/"both"（該字串是否為 LIKE 前置／後置／雙邊萬用字元
-  樣式）, shape: "digits"/"alnum"/"text"}。這些資訊**不含實際值**，只是讓你能判斷
-  「這是一個前置萬用字元的 LIKE 樣式」「這是一串純數字」之類的結構特徵，藉此提出更具體
-  的改善建議（注意：wildcard 為 "trailing" 的後置萬用字元不屬於 R004（前置萬用字元）的
-  命中範圍，是否及如何改善仍需依實際資料庫環境確認，不要把它當成改善對象提出；只有
-  "leading"／"both" 才值得提醒）。
+  樣式）, shape: "digits"/"alnum"/"text"}；若原本是 Oracle 的 DATE 或 TIMESTAMP
+  typed literal，另可能有 oracle_literal_type: "date" 或 "timestamp"。這些資訊**不含實際值**，
+  只是保留必要的結構與型態資訊，避免把日期／時間常數誤當一般文字。wildcard 為 "trailing"
+  的後置萬用字元不屬於 R004 的命中範圍，不要主動把它當成改善對象；只有 "leading"／"both"
+  才值得提醒。
 - structure_flags：系統解析器對這段 SQL 偵測到的結構特徵，是**既定事實**，請逐一對照檢查：
-  not_in_subquery（NOT IN 子查詢：若子查詢欄位可能為 NULL，整個條件會不回傳任何資料，
-  且通常 NOT EXISTS 較有機會被有效率地處理——這是需要業務確認的 advice_only 情況）、
-  distinct（DISTINCT，若同時有多個 JOIN，常是用來掩蓋 JOIN 產生的重複列，值得提醒確認
-  JOIN 鍵值是否完整）、outer_join、group_by_aggregate、select_star（SELECT *，建議明列
+  not_in_subquery（NOT IN 子查詢：若子查詢欄位可能為空值（NULL），改成 NOT EXISTS
+  可能得到不同結果，因此只能提醒確認，不可直接改寫）、
+  distinct（DISTINCT，若同時有多個 JOIN，可提醒確認重複資料是否來自關聯條件，以及
+  DISTINCT 是否真的是業務上需要）、outer_join、group_by_aggregate、select_star（SELECT *，建議明列
   欄位）、cartesian_join（缺少 JOIN 條件，務必提醒）、correlated_subquery、window_function、
   connect_by、set_operation、rownum。
 - knowledge_context：系統從 Pattern Catalog 中依 **確定性 exact match** 挑出的少量靜態知識，
@@ -85,8 +85,9 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
 1. summary：用平實的繁體中文（台灣用語）簡短說明這段 SQL 目前的狀況與規則引擎發現了
    什麼，讓不熟悉技術的同仁也看得懂。
 2. advice：最多 3 項具體改善建議，每項包含 title（標題）、explanation（說明原因）、
-   example（示範寫法片段）、可選的 impact（low/medium/high，代表你主觀認為此建議的
-   影響程度）。內容需針對這段 SQL 的實際寫法給建議，不要給空泛的通用建議。
+   example（示範寫法片段）、可選的 impact（low/medium/high）。impact 在畫面會顯示成
+   「改善機會」，代表這項寫法值得檢視的程度，不代表實際效能提升幅度，也不代表已經量測
+   改寫後的 COST 或執行時間。內容需針對這段 SQL 的實際寫法給建議，不要給空泛的通用建議。
    - 只有在「不需要猜測新欄位、新資料表、新 JOIN 關聯、新業務常數或未知資料型態」時，
      才可以在 example 填入具體 SQL 片段。若需要上述任一前提，example 必須填空字串 ""，
      explanation 則直接說明「要先確認什麼」以及「不確認就修改可能改變什麼」。

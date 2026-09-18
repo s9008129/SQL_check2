@@ -382,43 +382,33 @@ def test_in_list_verified_rewrite_never_authorizes_more_than_oracle_limit(patter
 
 
 def _derive_same_column_or_chain(n: int):
-    """Derive a synthetic `A.C = 1 OR ... OR A.C = n` chain with the recursion
-    limit temporarily raised, so this probes the rule's logic rather than the
-    accidental RecursionError cutoff (~997 values at the default limit)."""
-    import sys
-
+    """Derive a synthetic `A.C = 1 OR ... OR A.C = n` chain at the default
+    recursion limit (the runtime flattens OR chains iteratively)."""
     from app.services import rewrite_rules as rr
 
     atom = rr.parse_predicate(" OR ".join(f"A.C = {i}" for i in range(1, n + 1)))
     assert atom is not None, f"synthetic {n}-value OR chain failed to parse"
-    old_limit = sys.getrecursionlimit()
-    sys.setrecursionlimit(max(old_limit, 10 * n))
-    try:
-        return rr.derive(atom)
-    finally:
-        sys.setrecursionlimit(old_limit)
+    return rr.derive(atom)
 
 
-def test_runtime_or_to_in_over_oracle_limit_is_recorded_as_runtime_gap(patterns: list[dict[str, Any]]) -> None:
-    """If the runtime rule's logic still turns a 1001-value OR chain into one
-    IN list, the catalog must say so explicitly. Once a correctness PR adds an
-    explicit ≤1000 check to rewrite_rules.py, the 1001 probe derives nothing
-    and the runtime_gap may be removed."""
-    inside = _derive_same_column_or_chain(_ORACLE_IN_LIST_MAX_EXPRESSIONS)
-    assert inside is not None and inside.rule == "or_eq_to_in", "probe sanity: 1000 values must still derive IN"
+def test_runtime_or_to_in_matches_catalog_boundary_and_gap(patterns: list[dict[str, Any]]) -> None:
+    """The runtime must never authorize more than the catalog boundary, and
+    the catalog's runtime_gap must exist exactly when the runtime still
+    derives an IN list past that boundary."""
+    from app.services import rewrite_rules as rr
 
-    over = _derive_same_column_or_chain(_ORACLE_IN_LIST_MAX_EXPRESSIONS + 1)
-    if over is None:
-        return
-    assert over.canonical.count(",") + 1 == _ORACLE_IN_LIST_MAX_EXPRESSIONS + 1
     p = _owner_of_runtime_rule(patterns, "or_eq_to_in")
-    gap = p.get("runtime_gap") or {}
-    if p.get("classification") == "VERIFIED_REWRITE":
-        assert gap.get("kind") == "unauthorized_accepted_form" and gap.get("runtime_rule") == "or_eq_to_in", (
-            f"{p.get('id')}: runtime derives IN lists over Oracle's limit; record it as an unauthorized_accepted_form runtime_gap"
-        )
-    else:
-        assert gap, f"{p.get('id')}: runtime derives IN lists over Oracle's limit; runtime_gap is required"
+    limit = (p.get("authorized_boundary") or {}).get("max_in_list_expressions")
+    assert isinstance(limit, int)
+    assert limit >= rr.ORACLE_IN_LIST_MAX_EXPRESSIONS, "runtime IN-list limit exceeds the catalog's authorized boundary"
+
+    inside = _derive_same_column_or_chain(rr.ORACLE_IN_LIST_MAX_EXPRESSIONS)
+    assert inside is not None and inside.rule == "or_eq_to_in", "probe sanity: the runtime limit itself must still derive IN"
+    runtime_accepts_over_limit = _derive_same_column_or_chain(limit + 1) is not None
+    assert runtime_accepts_over_limit == bool(p.get("runtime_gap")), (
+        f"{p.get('id')}: runtime {'still derives' if runtime_accepts_over_limit else 'no longer derives'} "
+        f"a {limit + 1}-value IN list, so runtime_gap must {'be declared' if runtime_accepts_over_limit else 'be removed'}"
+    )
 
 
 def test_no_duplicate_source_of_truth_pattern_names(patterns: list[dict[str, Any]]) -> None:

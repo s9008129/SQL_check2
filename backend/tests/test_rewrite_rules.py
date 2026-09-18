@@ -2,6 +2,7 @@
 equivalence. These tests pin every rule's equivalence argument and the
 production case that motivated the module."""
 
+import pytest
 from sqlglot import parse_one
 
 from app.services import rewrite_rules as rr
@@ -232,4 +233,90 @@ def test_full_rewrite_adding_condition_rejected():
 
 def test_full_rewrite_reordering_conditions_ok():
     o, s = _trees("SELECT A.X FROM T A WHERE A.Y = 1 AND A.Z = 2", "SELECT A.X FROM T A WHERE A.Z = 2 AND A.Y = 1")
+    assert rr.verify_predicate_changes(o, s) == (True, None)
+
+
+# --- OR → IN: Oracle 19c 1000-expression boundary (2026-09-18) -------------
+# One IN list holds at most 1000 expressions, so only 2..1000 same-column
+# equality terms may become IN. Longer chains are refused by an explicit
+# count guard, never by a crash, and the OR flattening is iterative so the
+# default recursion limit is irrelevant (it used to fail at ~997 terms).
+def _or_chain(n: int, col: str = "A.C") -> str:
+    return " OR ".join(f"{col} = {i}" for i in range(1, n + 1))
+
+
+def _in_list(n: int, col: str = "A.C") -> str:
+    return f"{col} IN ({', '.join(str(i) for i in range(1, n + 1))})"
+
+
+@pytest.mark.parametrize("n", [2, 10, 999, 1000])
+def test_or_to_in_within_oracle_limit_is_derived_and_verified(n):
+    rw = rr._rule_or_eq_to_in(rr.parse_predicate(_or_chain(n)))
+    assert rw is not None and rw.rule == "or_eq_to_in"
+    assert rw.canonical.count(",") + 1 == n
+    assert _v(_or_chain(n), _in_list(n)).status == "verified"
+
+
+@pytest.mark.parametrize("n", [1001, 1500, 3000])
+def test_or_to_in_over_oracle_limit_is_refused_by_the_guard_not_a_crash(n):
+    atom = rr.parse_predicate(_or_chain(n))
+    assert rr._rule_or_eq_to_in(atom) is None  # called directly: no exception to swallow
+    assert rr.derive(atom) is None
+    v = _v(_or_chain(n), _in_list(n))
+    assert v.status == "unverified"
+    assert v.example == _in_list(n)
+
+
+def test_or_to_in_limit_matches_oracle_19c_documentation():
+    assert rr.ORACLE_IN_LIST_MAX_EXPRESSIONS == 1000
+
+
+def test_flatten_or_is_iterative_and_keeps_source_order():
+    # 5000 terms at the default recursion limit: a recursive flatten raised
+    # RecursionError at ~997.
+    disjuncts = rr._flatten_or(rr.parse_predicate(_or_chain(5000)))
+    assert len(disjuncts) == 5000
+    assert [d.expression.sql() for d in disjuncts[:3]] == ["1", "2", "3"]
+    assert disjuncts[-1].expression.sql() == "5000"
+
+
+def test_or_to_in_keeps_value_order():
+    rw = rr.derive(rr.parse_predicate("A.C = 3 OR A.C = 1 OR A.C = 2"))
+    assert rw is not None and rw.canonical == "A.C IN (3, 1, 2)"
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        "A.C = 1 OR A.D = 2",  # cross-column
+        "A.C = 1 OR A.C > 2",  # mixed operator
+        "A.C = 1 OR A.C IN (2, 3)",
+        "A.C = 1 OR A.C IS NULL",
+        "A.C = 1 OR A.C LIKE '2%'",
+        "A.C <> 1 OR A.C <> 2",  # non-equality
+        "A.C >= 1 OR A.C >= 2",
+        "A.C = B.D OR A.C = 1",  # column on the right-hand side
+        "NOT A.C = 1 OR A.C = 2",
+        "A.C = 1 OR (A.C = 2 AND A.D = 3)",  # nested parentheses hiding an AND
+        "(A.C = 1 OR A.D = 2) OR A.C = 3",  # nested parentheses hiding another column
+    ],
+)
+def test_or_chains_that_are_not_same_column_equality_are_never_rewritten(predicate):
+    assert rr.derive(rr.parse_predicate(predicate)) is None
+
+
+def test_or_chain_grouped_only_by_parentheses_is_still_same_column():
+    # Parentheses that only group same-column equality terms change nothing.
+    rw = rr.derive(rr.parse_predicate("(A.C = 1 OR A.C = 2) OR A.C = 3"))
+    assert rw is not None and rw.canonical == "A.C IN (1, 2, 3)"
+
+
+def test_full_rewrite_with_in_list_over_oracle_limit_is_rejected():
+    o, s = _trees(f"SELECT A.X FROM T A WHERE {_or_chain(1001)}", f"SELECT A.X FROM T A WHERE {_in_list(1001)}")
+    ok, why = rr.verify_predicate_changes(o, s)
+    assert ok is False and why == rr.REASON_UNVERIFIABLE_CHANGE
+
+
+def test_full_rewrite_with_in_list_at_oracle_limit_is_accepted():
+    o, s = _trees(f"SELECT A.X FROM T A WHERE {_or_chain(1000)}", f"SELECT A.X FROM T A WHERE {_in_list(1000)}")
     assert rr.verify_predicate_changes(o, s) == (True, None)

@@ -305,7 +305,10 @@ patterns:
       但改寫後的 SQL 還必須能在 Oracle 執行：Oracle 19c 單一運算式的 IN 清單
       最多 1000 個 expression，原本的 OR 串沒有這個限制，所以本 pattern 只
       授權 1～1000 個值（見 authorized_boundary）；超過 1000 個值的 OR 串不能
-      改成單一 IN。不同欄位的 OR 串接不屬於本規則（見
+      改成單一 IN。runtime 自 2026-09-18 起以明確的數量檢查
+      （rewrite_rules.ORACLE_IN_LIST_MAX_EXPRESSIONS）只在 2～1000 個值時推導
+      （1 個值本來就沒有 OR），並以非遞迴方式展開 OR 串，不再依賴 Python
+      遞迴深度。不同欄位的 OR 串接不屬於本規則（見
       OR_CROSS_COLUMN_TO_UNION_ALL）。
     allowed_behavior:
       explain: true
@@ -325,29 +328,11 @@ patterns:
         只授權改寫後 IN 清單含 1～1000 個 expression 的情況；超過 1000 個時，
         改寫後的 SQL 會超出 Oracle 19c IN 清單上限而無法執行，即使邏輯等價
         也不在授權範圍。
-    runtime_gap:
-      kind: unauthorized_accepted_form
-      runtime_rule: or_eq_to_in
-      not_authorized_forms:
-        - "col IN (v1, …, vN)，N > 1000（超過 Oracle 19c 單一 IN 清單 1000 個 expression 的上限）"
-      description_zh_tw: >
-        既有 rewrite_rules._rule_or_eq_to_in 沒有檢查值的數量，規則邏輯本身會
-        把任意長度的同欄位 OR 串推導成單一 IN（2026-09-18 在開發機把 Python
-        recursion limit 暫時調高後量測，1001、1500、3000 個值都會推導出 IN）。
-        在預設 recursion limit（1000）下，直接呼叫時 997 個值以上會在規則內
-        遞迴展開 OR 時觸發 RecursionError，被 derive() 捕捉後回傳 None，片段
-        標為 unverified，所以目前超過 1000 的情況剛好會被擋下；但這是遞迴
-        深度的副作用，不是治理上的邊界：門檻會隨 recursion limit 與呼叫堆疊
-        深度改變（Web 請求路徑堆疊較深，門檻會更低），也會連帶把一部分 1000
-        以內的合法情況標成 unverified。
-      required_action_zh_tw: >
-        本 PR 不修改 Runtime。Phase 2（Pattern Selector）之前需另開 correctness
-        PR，在 _rule_or_eq_to_in 明確檢查值的數量 ≤ 1000（並改成不依賴遞迴深度
-        的展開方式）；完成前，未來的 selector 不得自動套用超過 1000 個值的
-        改寫。
     sources:
       - type: internal
         ref: backend/app/services/rewrite_rules.py::_rule_or_eq_to_in
+      - type: internal
+        ref: backend/tests/test_rewrite_rules.py OR → IN 段落（2／10／999／1000 推導；1001／1500／3000 由數量檢查拒絕）
       - type: oracle_documentation
         ref: https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/IN-Condition.html
       - type: internal

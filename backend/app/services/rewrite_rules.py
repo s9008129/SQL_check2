@@ -38,6 +38,11 @@ DIALECT = "oracle"
 
 _WILDCARD_RE = re.compile(r"[%_]")
 
+# Oracle 19c SQL Reference, IN Condition: "You can specify up to 1000
+# expressions in expression_list." An OR chain has no such limit, so a longer
+# chain cannot be rewritten into one IN list (the result would not execute).
+ORACLE_IN_LIST_MAX_EXPRESSIONS = 1000
+
 # Reviewer-facing rejection reasons (plain language, no "等價" jargon —
 # 2026-09-17 user request): say that the query result might change.
 REASON_UNVERIFIABLE_CHANGE = "建議寫法改動了條件，系統無法確認查詢結果是否相同"
@@ -161,23 +166,33 @@ def _rule_substr_eq(pred: exp.Expression) -> Rewrite | None:
     return Rewrite(rule="substr_eq_to_like", canonical=canonical, accepted=(normalize_text(canonical) or canonical,))
 
 
-def _rule_or_eq_to_in(atom: exp.Expression) -> Rewrite | None:
-    """col = a OR col = b [OR ...]  →  col IN (a, b, ...). Exact."""
-    if not isinstance(atom, exp.Or):
-        return None
+def _flatten_or(atom: exp.Expression) -> list[exp.Expression]:
+    """Disjuncts of an OR chain in source order, looking through parentheses.
+    Iterative on purpose: sqlglot builds `a OR b OR c ...` as a left-deep
+    tree, so recursion depth grows with chain length (~1000 terms hit
+    Python's default recursion limit before 2026-09-18)."""
     disjuncts: list[exp.Expression] = []
-
-    def flatten(e: exp.Expression) -> None:
+    stack = [atom]
+    while stack:
+        e = stack.pop()
         if isinstance(e, exp.Or):
-            flatten(e.this)
-            flatten(e.expression)
+            stack.append(e.expression)  # right side popped after the left
+            stack.append(e.this)
         elif isinstance(e, exp.Paren):
-            flatten(e.this)
+            stack.append(e.this)
         else:
             disjuncts.append(e)
+    return disjuncts
 
-    flatten(atom)
-    if len(disjuncts) < 2:
+
+def _rule_or_eq_to_in(atom: exp.Expression) -> Rewrite | None:
+    """col = a OR col = b [OR ...]  →  col IN (a, b, ...). Exact, for 2 to
+    ORACLE_IN_LIST_MAX_EXPRESSIONS values; a longer chain is not rewritten
+    because the single IN list would exceed Oracle's limit."""
+    if not isinstance(atom, exp.Or):
+        return None
+    disjuncts = _flatten_or(atom)
+    if len(disjuncts) < 2 or len(disjuncts) > ORACLE_IN_LIST_MAX_EXPRESSIONS:
         return None
     col_sql: str | None = None
     values: list[str] = []

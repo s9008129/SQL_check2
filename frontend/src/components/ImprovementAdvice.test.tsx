@@ -37,8 +37,8 @@ describe("ImprovementAdvice", () => {
     );
     expect(screen.getByText("改善機會：中")).toBeTruthy();
     expect(screen.getByText("改善機會：高")).toBeTruthy();
-    expect(screen.getByText("系統已確認")).toBeTruthy();
-    expect(screen.getByText("方向建議")).toBeTruthy();
+    expect(screen.getByText("查詢結果已確認")).toBeTruthy();
+    expect(screen.getByText("需先確認")).toBeTruthy();
     expect(screen.queryByText(/影響：/)).toBeNull();
   });
 

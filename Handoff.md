@@ -255,6 +255,28 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 - 正式主機後續標準流程：先 `git pull --ff-only origin main`，再
   `pwsh -NoProfile -File .\deploy\deploy.ps1 -SkipPull -RequireAi`。
 
+### 2026-09-18 Business-Readable Advice v1（PR #8）
+- 產品定位由「AI 幫你猜更快的 SQL」收斂為「中心規範確定性檢核 + 地端 Gemma 白話輔導 + Python 安全複核」。Gemma 可以積極提出方向，但不得把未知業務條件包裝成可直接套用的 SQL。
+- 正式使用者 persona 是「懂業務邏輯、會寫 SQL，但不是 Oracle DBA」。畫面只要求同仁理解：哪裡值得注意、為什麼、怎麼處理、目前能不能直接採用。
+- UI 語意：
+  - `影響` → `改善機會`（值得檢視程度，不是實際效能提升幅度）。
+  - `預估改善效果` → `建議採用狀態`。
+  - `優化前後比較` → `原寫法與建議寫法`。
+  - `改善指數` → `改善優先指數`，避免被誤認為效能分數。
+  - unverified 片段顯示 `示意方向（請勿直接套用）`；verified/corrected 才能稱為系統確認的建議寫法。
+- Runtime anti-hallucination：
+  - advice example 若引入原 SQL 未出現的欄位／資料表／別名，伺服器隱藏 SQL 片段但保留有用的文字方向；
+  - 遺失 DATE/TIMESTAMP typed-literal wrapper 的 example 不顯示成可執行 SQL；
+  - `:STR_xxx`／`:NUM_xxx` 不得出現在人類可見 prose；
+  - 索引／Execution Plan 等 SQLCheck 無法觀測的資料庫行為宣稱由 prompt + server prose guard 雙層收斂。
+- Prompt 的最高原則改成「不知道就不要猜 SQL」；缺 WHERE、未知 JOIN key、未知 datatype 等資訊不足情境改為 prose-first，不為了填 example 而生成欄位或條件。
+- 同欄位 OR→IN 的 advice fragment 現在可先移除純語法 wrapper `WHERE`／`ON` 再驗證；不擴大 rewrite authority。
+- Cartesian join 沒有被新增為中心規範 BLOCK；但 rules.yaml 新增產品層 `structure.score_floors.cartesian_join=60`，讓缺少資料表關聯條件的 SQL 至少顯示「建議改善」，不再出現 compliance PASS + 改善優先指數「目前良好」的矛盾。
+- Gemma response schema 不再要求模型猜 `estimated_improvement_pct`；API 欄位暫留相容，正式模型不再花 token 猜百分比。
+- 新增 `docs/115-sqlcheck-innovation-positioning.md`：115 年創新項目的真實可行銷定位、頁面語意與年度 KPI 證據原則。
+- 新增 Frontend CI；本輪 merge gate 為 Backend CI（pytest + Ruff）與 Frontend CI（Vitest + build）全綠。
+- 正式機 Gemma live 驗證仍須於 merge/deploy 後重跑 Round 1 的 10 cases，至少人工確認 T01/T05/T07/T10。
+
 ## 4. 「AI 沒給建議寫法」的判讀順序（接手後最常被問）
 
 1. 看 API 回應或畫面的 outcome：

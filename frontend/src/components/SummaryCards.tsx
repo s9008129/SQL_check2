@@ -95,7 +95,7 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
 
       <div className={`metric tone-${improvementColor}`}>
         <div className="m-top">
-          <div className="m-label">改善指數</div>
+          <div className="m-label">改善優先指數</div>
           <div className="m-icon m-icon-text" data-testid="improvement-level">
             {improvement.label}
           </div>
@@ -103,7 +103,7 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
         <div className="score-line">
           <div className={`m-value${improvementColor === "red" ? " m-value-bad" : ""}`}>{improvement.score} / 100</div>
         </div>
-        <div className="m-sub">分數越高，代表值得優先檢視的項目越多</div>
+        <div className="m-sub">分數越高，代表越需要優先檢視與改善</div>
         {improvement.breakdown.length > 0 && (
           <>
             <button

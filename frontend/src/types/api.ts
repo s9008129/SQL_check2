@@ -21,6 +21,7 @@ export type ImprovementBreakdownComponent =
   | "rule_findings"
   | "structure"
   | "cost_ratio"
+  | "structure_floor"
   | "block_floor";
 
 // ---------------------------------------------------------------------------

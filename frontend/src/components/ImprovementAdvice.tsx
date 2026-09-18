@@ -6,10 +6,9 @@ export interface ImprovementAdviceProps {
 }
 
 // 2026-09-17 (evening user decision): every AI advice card keeps the same
-// AI-owned purple/neutral surface — a large red card made an "AI 認為影響高"
-// suggestion look as severe as a 不符合 finding. The impact level is now
-// carried by a thin left colour bar (a-high/a-medium/a-low, see app.css)
-// plus the small badge below; the surface itself must stay neutral.
+// AI-owned purple/neutral surface — red is reserved for definite BLOCK /
+// non-compliance. Improvement opportunity is advisory and must not visually
+// look like a formal rule violation.
 const IMPACT_TONE: Record<ImpactLevel, string> = {
   high: "a-high",
   medium: "a-medium",
@@ -26,7 +25,7 @@ const IMPACT_LABEL: Record<ImpactLevel, string> = {
 const IMPACT_BADGE_TONE: Record<ImpactLevel, string> = {
   low: "gray",
   medium: "yellow",
-  high: "red",
+  high: "purple",
 };
 
 function adoptionLabel(item: AiResult["advice"][number]): { text: string; tone: string } {

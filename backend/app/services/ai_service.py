@@ -941,11 +941,13 @@ def _finalize(
         rules_config,
         important_tables_config,
     )
-    # The UI intentionally stopped presenting model-guessed improvement
-    # percentages. Keep the API field for backward compatibility, but the
-    # model is no longer asked to estimate a number and the server always
-    # returns null.
-    pct = None
+    # Backward compatibility: older/mocked callers may still include the
+    # deprecated percentage field. Current Gemma is no longer asked for it
+    # (it is absent from RESPONSE_SCHEMA / system prompt), so production
+    # responses naturally remain null.
+    has_fragments = any(item.example for item in advice)
+    effective_estimate_allowed = estimate_allowed or (estimate_with_fragments and has_fragments)
+    pct = _clamp_round_pct(raw.estimated_improvement_pct, effective_estimate_allowed)
 
     # 2026-09-17: a `:STR_001` the model made up (not in the reverse map, not
     # in the user's SQL) must not reach the reviewer — see masking.py.

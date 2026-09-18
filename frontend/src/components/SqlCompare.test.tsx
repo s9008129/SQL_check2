@@ -24,7 +24,7 @@ describe("SqlCompare", () => {
       />,
     );
     expect(screen.queryByTestId("sql-editor-原始 SQL")).toBeNull();
-    expect(screen.getByTestId("compare-verdict").textContent).toContain("不需要改寫");
+    expect(screen.getByTestId("compare-verdict").textContent).toContain("目前未發現需要調整的寫法");
   });
 
   it("shows the aligned diff without repeating the COST when there is a full rewrite", () => {

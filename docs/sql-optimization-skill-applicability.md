@@ -9,19 +9,26 @@ apply automatically — see
 
 The source document's own methodology is Identify → Analyze → Optimize →
 Test → Monitor → Iterate, against a live database the assistant can query
-directly. It states its rewrites (subquery→JOIN, correlated subquery→window
-function, OR→UNION, etc.) as universally applicable improvements with **no
-equivalence caveats or correctness warnings** — this is exactly why SQLCheck
-needs its own governance layer instead of adopting the source verbatim.
+directly. Many of its examples are presented as direct `❌ BAD` / `✅ GOOD`
+pairs (for example correlated subquery → window function, OFFSET → cursor
+pagination, `SELECT *` → explicit columns). The examples do not state the
+conditions under which the rewritten query returns the same rows — NULL
+handling, duplicate rows, outer-join row preservation, datatype or collation
+— which is the semantic-equivalence proof SQLCheck needs before treating a
+rewrite as safe. That gap is why SQLCheck keeps its own governance layer
+instead of adopting the source verbatim.
 
-Every row below maps to a `backend/app/knowledge/pattern_catalog.yaml` entry;
-that file is the authoritative rationale, this table is the index.
+Rows that name a catalog id map to that
+`backend/app/knowledge/pattern_catalog.yaml` entry; that file is the
+authoritative rationale, this table is the index. Rows marked **Not currently
+modeled / candidate only** have no catalog entry yet: their classification
+column is a proposed disposition, not a governance decision.
 
 ## Query rewriting patterns
 
 | External pattern | SQLCheck support | Oracle applicable | Classification | Semantic risk | Recommendation | Related rule/flag |
 |---|---|---|---|---|---|---|
-| Subquery → JOIN conversion | Advice only | Yes | B (`IN_SUBQUERY_TO_EXISTS` covers IN/EXISTS side; general subquery→JOIN has no dedicated catalog id beyond `NOT_IN_SUBQUERY_TO_NOT_EXISTS`) | Duplicate rows if joined table isn't 1:1; NULL semantics differ for NOT IN | Advice only | `complexity_flags: not_in_subquery` |
+| Subquery → JOIN conversion | Partially modeled (IN/EXISTS and NOT IN subquery forms only; general subquery → JOIN has no catalog entry) | Yes | B (`IN_SUBQUERY_TO_EXISTS`, `NOT_IN_SUBQUERY_TO_NOT_EXISTS`) | Duplicate rows if joined table isn't 1:1; NULL semantics differ for NOT IN | Advice only | `complexity_flags: not_in_subquery` |
 | Correlated subquery → window functions | Advice only, and blocked at candidate stage | Yes | B (`CORRELATED_SUBQUERY_TO_JOIN_OR_WINDOW`) | PARTITION BY/ORDER BY NULL-grouping and tie-break may not match original correlation | Advice only; already in `ai_gate.candidate_forbidden_complexity_flags` (`correlated_subquery`) so no full-rewrite candidate is even generated | `complexity_flags: correlated_subquery`; `app.yaml ai_gate.candidate_forbidden_complexity_flags` |
 | OR condition → UNION / UNION ALL | Advice only (cross-column); verified rewrite exists for the same-column special case | Yes | B (`OR_CROSS_COLUMN_TO_UNION_ALL`) for cross-column; **A** (`OR_SAME_COLUMN_TO_IN`) for same-column OR→IN, which is a *different* transform | Row duplication (UNION ALL) or dedup cost/semantics change (UNION) if branches overlap | Advice only for the general case; same-column OR→IN is already a proven, tested rewrite | `rules.yaml` R006 (family signal only: fires on any OR, cannot tell cross-column from same-column); cross-column case detected only by prompt check (5); same-column case by `rewrite_rules.py::_rule_or_eq_to_in` |
 
@@ -39,13 +46,13 @@ that file is the authoritative rationale, this table is the index.
 | External pattern | SQLCheck support | Oracle applicable | Classification | Semantic risk | Recommendation | Related rule/flag |
 |---|---|---|---|---|---|---|
 | INNER vs LEFT/RIGHT JOIN type choice | Advice only | Yes | B (`LEFT_JOIN_TO_INNER_JOIN`) | **Unsafe for automatic rewrite**: silently drops main-table rows with no matching side row | Advice only; `_revalidate_suggested_sql`'s `join_sides` structural comparison already rejects any full-rewrite that changes JOIN type | `complexity_flags: outer_join` (family signal only: fires on LEFT/RIGHT/FULL/(+)); `ai_service._revalidate_suggested_sql` (`join_sides`) guards full rewrites |
-| Filtering conditions moved into JOIN vs WHERE | Advice only | Yes | B (`JOIN_CONDITION_PLACEMENT` concept folded into general OUTER JOIN caution — no separate catalog id yet; candidate to add) | Changes which outer-side rows survive for OUTER JOIN; safe for INNER JOIN | Advice only for OUTER JOIN; candidate for a dedicated catalog entry in a future phase | none yet |
+| Filtering conditions moved into JOIN vs WHERE | Not currently modeled / candidate only | Yes | Candidate only — likely B if added as `JOIN_CONDITION_PLACEMENT`; no catalog entry today | Changes which outer-side rows survive for OUTER JOIN; safe for INNER JOIN | Advice only for OUTER JOIN; candidate for a dedicated catalog entry in a future phase | none yet |
 
 ## Pagination strategies
 
 | External pattern | SQLCheck support | Oracle applicable | Classification | Semantic risk | Recommendation | Related rule/flag |
 |---|---|---|---|---|---|---|
-| Cursor-based / ID-based pagination | Not supported | Yes (concept) | Informational only, not currently a catalog entry (candidate to add as Class B if a detector is built) | Needs a stable unique monotonic sort key; also an application-layer change beyond the submitted SQL text | Advice only if ever added; do not treat as SQL-text-verifiable | none |
+| Cursor-based / ID-based pagination | Not currently modeled / candidate only | Yes (concept) | Candidate only — likely B if added as `CURSOR_BASED_PAGINATION`; no catalog entry today | Needs a stable unique monotonic sort key; also an application-layer change beyond the submitted SQL text | Advice only if ever added; do not treat as SQL-text-verifiable | none |
 
 ## Data access patterns
 
@@ -53,8 +60,8 @@ that file is the authoritative rationale, this table is the index.
 |---|---|---|---|---|---|---|
 | Explicit column selection (avoid `SELECT *`) | Already supported (informational) | Yes | **C** (`SELECT_STAR`) | None — but "faster" is not provable from SQL text alone | Informational only | `complexity_flags: select_star` |
 | `EXISTS` instead of `IN` for subqueries | Advice only | Yes | B (`IN_SUBQUERY_TO_EXISTS`, and `NOT_IN_SUBQUERY_TO_NOT_EXISTS` for the NOT IN case) | NOT IN + possible NULL in subquery = zero rows ever (three-valued logic); DISTINCT/set-op subqueries can also differ | Advice only | `complexity_flags: not_in_subquery` |
-| Conditional aggregation (CASE WHEN) to replace multiple queries | Advice only | Yes | B (`CONDITIONAL_AGGREGATION_CASE_WHEN` — candidate to add; folded conceptually under `GROUP_BY_STRUCTURAL_REWRITE` today) | Requires knowing the original multiple queries agreed on filters/timing, which SQLCheck cannot see from one submitted statement | Advice only | none |
-| Batch INSERT over row-by-row | Not supported, and must not be | Yes (concept) | **D** — out of scope (application/transaction redesign, not a single-statement rewrite) | N/A | Out of scope | none |
+| Conditional aggregation (CASE WHEN) to replace multiple queries | Not currently modeled / candidate only | Yes | Candidate only — likely B if added as `CONDITIONAL_AGGREGATION_CASE_WHEN`; no catalog entry today (`GROUP_BY_STRUCTURAL_REWRITE` covers a different transform) | Requires knowing the original multiple queries agreed on filters/timing, which SQLCheck cannot see from one submitted statement | Advice only | none |
+| Batch INSERT over row-by-row | Not currently modeled; out of scope | Yes (concept) | Would be **D** (application/transaction redesign, not a single-statement rewrite); no catalog entry today | N/A | Out of scope | none |
 
 ## Query structure optimization
 
@@ -62,21 +69,21 @@ that file is the authoritative rationale, this table is the index.
 |---|---|---|---|---|---|---|
 | Function call avoidance in WHERE clauses | Already supported (advice) | Yes | B (`PREDICATE_FUNCTION_GENERIC`, `TRUNC_EQ_TO_RANGE`, `NVL_EQ_TO_OR_IS_NULL`); the only proven form is **A** `SUBSTR_EQ_TO_LIKE` (canonical LIKE form only) | Blanket function removal is a classic semantic trap (`UPPER_CASE_FOLD_REMOVAL`); TRUNC→range needs a time-free right-hand side and NVL→plain comparison differs for CHAR columns — both have a runtime rule with an unchecked precondition (`runtime_gap`) | Advice only, except SUBSTR equality → canonical LIKE | `rules.yaml` R005 (family signal); `rewrite_rules.py` |
 | Early filtering in WHERE clauses | Not currently a catalog entry | Yes (concept) | Candidate — likely **C** (informational; too generic to verify per-case) | None specific | Candidate to add as informational only | none |
-| Temporary table for complex multi-step calculations | Already supported (informational) | Yes | **C** (`LARGE_RESULT_SET_NO_LIMIT` is a related but distinct informational entry; a dedicated `TEMP_TABLE_FOR_COMPLEX_CALC` id is a candidate to add) | None specific; readability suggestion only | Informational only | none |
+| Temporary table for complex multi-step calculations | Not currently modeled / candidate only | Yes (concept) | Candidate only — likely **C** if added as `TEMP_TABLE_FOR_COMPLEX_CALC`; no catalog entry today | None specific; readability suggestion only | Candidate to add as informational only | none |
 
 ## Performance monitoring
 
 | External pattern | SQLCheck support | Oracle applicable | Classification | Semantic risk | Recommendation | Related rule/flag |
 |---|---|---|---|---|---|---|
 | Execution plan examination | Not supported, and must not be | Yes (concept) | **D** (`EXECUTION_PLAN_CLAIM`, `FULL_TABLE_SCAN_CLAIM`) | N/A — SQLCheck has no plan access | Out of scope | `app.yaml ai_guard.forbidden_phrases` |
-| Slow query log analysis (MySQL-specific) | Not applicable | **No** (MySQL, not Oracle) | **D** (`MONITORING_AND_PROFILING` — candidate to add; not yet in catalog) | N/A | Out of scope / not applicable to Oracle | none |
-| DB-specific monitoring views (`pg_stat_statements`, `sys.dm_exec_query_stats`) | Not applicable | **No** (PostgreSQL/SQL Server, not Oracle) | **D** | N/A | Out of scope / not applicable to Oracle | none |
+| Slow query log analysis (MySQL-specific) | Not applicable | **No** (MySQL, not Oracle) | Would be **D** if added as `MONITORING_AND_PROFILING`; no catalog entry today | N/A | Out of scope / not applicable to Oracle | none |
+| DB-specific monitoring views (`pg_stat_statements`, `sys.dm_exec_query_stats`) | Not applicable | **No** (PostgreSQL/SQL Server, not Oracle) | Would be **D**; no catalog entry today | N/A | Out of scope / not applicable to Oracle | none |
 
 ## Summary
 
-- **Already supported** (as informational or advice, with existing rule/flag
-  linkage): function-avoidance-in-WHERE (partially proven), SELECT *,
-  EXISTS-vs-IN family, temp-table guidance, LEFT/RIGHT JOIN caution.
+- **Already supported** (as informational or advice, with a catalog entry):
+  function-avoidance-in-WHERE (only SUBSTR → canonical LIKE is proven),
+  SELECT *, EXISTS-vs-IN family, LEFT/RIGHT JOIN caution.
 - **Candidate to add** (plausible catalog entries not yet written; not
   authorized for this Phase to add proactively — flag for a future PR):
   dedicated `JOIN_CONDITION_PLACEMENT`, `CONDITIONAL_AGGREGATION_CASE_WHEN`,
@@ -87,10 +94,10 @@ that file is the authoritative rationale, this table is the index.
   GROUP BY restructuring, string-concat predicate splitting.
 - **Informational only** (Class C): SELECT *, important-table usage,
   structural complexity, large result sets.
-- **Out of scope** (Class D): all index advisory, execution plan / FTS /
-  cardinality / statistics / actual-runtime / post-rewrite-COST claims,
-  partition and physical/host tuning, batch-DML redesign, and
-  non-Oracle-specific monitoring tooling.
+- **Out of scope** (Class D in the catalog): all index advisory, execution
+  plan / FTS / cardinality / statistics / actual-runtime / post-rewrite-COST
+  claims, partition and physical/host tuning. Also out of scope but with no
+  catalog entry yet: batch-DML redesign and non-Oracle monitoring tooling.
 - **Unsafe for automatic rewrite** even where SQLCheck does offer advice:
   LEFT JOIN→INNER JOIN, DISTINCT removal, NOT IN→NOT EXISTS, OR→UNION,
   correlated subquery→window function — every one of these has a documented

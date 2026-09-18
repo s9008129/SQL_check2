@@ -175,8 +175,8 @@ patterns:
   - id: SUBSTR_EQ_TO_LIKE
     name_zh_tw: SUBSTR 定位比對改為 LIKE
     model_guidance_zh_tw: >
-      系統已能以確定性規則驗證符合條件的 SUBSTR 等式改寫；只使用系統認可的 canonical LIKE 形式，
-      不要自行改變萬用字元位置，也不要改成依賴 collation 的上下界範圍。
+      系統已能用確定性規則確認符合條件的 SUBSTR 等式改寫；只使用系統認可的 LIKE 寫法，
+      不要自行改變萬用字元位置，也不要改成會受資料庫文字排序規則影響的上下界範圍。
     category: predicate
     classification: VERIFIED_REWRITE
     oracle_applicable: true
@@ -464,8 +464,8 @@ patterns:
   - id: NOT_IN_SUBQUERY_TO_NOT_EXISTS
     name_zh_tw: NOT IN 子查詢改為 NOT EXISTS
     model_guidance_zh_tw: >
-      只提供 advice_only：NOT IN 與 NOT EXISTS 的 NULL 語意可能不同。
-      未確認子查詢欄位是否可能為 NULL 前，不要產生完整自動改寫。
+      只提供 advice_only：如果子查詢欄位可能出現空值（NULL），NOT IN 與 NOT EXISTS
+      可能查出不同結果。未確認空值情況前，不要產生完整自動改寫。
     category: subquery
     classification: ADVICE_ONLY
     oracle_applicable: true
@@ -599,8 +599,8 @@ patterns:
   - id: CORRELATED_SUBQUERY_TO_JOIN_OR_WINDOW
     name_zh_tw: 相關子查詢改為 JOIN 或視窗函數
     model_guidance_zh_tw: >
-      只提供 advice_only：相關子查詢改成 JOIN／視窗函數可能改變重複列、聚合或結果語意。
-      可提醒評估，但不要自動改寫。
+      只提供 advice_only：相關子查詢改成 JOIN／視窗函數，可能改變重複資料、彙總方式或查詢結果。
+      可以提醒使用者評估，但不要自動改寫。
     category: subquery
     classification: ADVICE_ONLY
     oracle_applicable: true
@@ -634,8 +634,8 @@ patterns:
   - id: DISTINCT_REMOVAL
     name_zh_tw: 移除 DISTINCT
     model_guidance_zh_tw: >
-      只提供 advice_only：移除 DISTINCT 前必須確認重複列是否原本就是查詢語意的一部分，
-      以及 JOIN 是否會產生重複資料；不可自動移除。
+      只提供 advice_only：移除 DISTINCT 前必須先確認重複資料是否原本就應該被排除，
+      以及資料表關聯是否會產生重複資料；不可自動移除。
     category: distinct
     classification: ADVICE_ONLY
     oracle_applicable: true

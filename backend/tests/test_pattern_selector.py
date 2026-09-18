@@ -1,0 +1,129 @@
+from app.schemas import Finding
+from app.services.pattern_selector import select_patterns
+from app.services.sql_parser import parse_sql_text
+
+
+def _parsed(sql: str):
+    return parse_sql_text(sql).statements
+
+
+def _finding(rule_id: str, index: int = 0) -> Finding:
+    return Finding(rule_id=rule_id, status="NOTICE", fact="synthetic", statement_index=index)
+
+
+def _rules(threshold: int = 4) -> dict:
+    return {"improvement_score": {"structure": {"many_tables_threshold": threshold}}}
+
+
+def test_clean_sql_selects_nothing():
+    selection = select_patterns(_parsed("SELECT A.X FROM T A WHERE A.X = 1"), [], _rules())
+    assert selection.exact_ids == ()
+    assert selection.family_signal_ids == ()
+
+
+def test_rewrite_rules_produce_exact_matches_without_using_rule_family_as_proof():
+    sql = "SELECT A.X FROM T A WHERE SUBSTR(A.C,1,3)='107' AND (A.Y=1 OR A.Y=2)"
+    selection = select_patterns(_parsed(sql), [_finding("R005"), _finding("R006")], _rules())
+    assert "SUBSTR_EQ_TO_LIKE" in selection.exact_ids
+    assert "OR_SAME_COLUMN_TO_IN" in selection.exact_ids
+    # Broad R005/R006 signals remain explicitly ambiguous; they are never
+    # promoted into future context candidates merely because the rule fired.
+    assert selection.context_candidate_ids == selection.exact_ids
+    assert "OR_CROSS_COLUMN_TO_UNION_ALL" in selection.family_signal_ids
+
+
+def test_or_over_oracle_limit_is_not_an_exact_verified_pattern():
+    chain = " OR ".join(f"A.C = {i}" for i in range(1, 1002))
+    selection = select_patterns(_parsed(f"SELECT A.X FROM T A WHERE {chain}"), [_finding("R006")], _rules())
+    assert "OR_SAME_COLUMN_TO_IN" not in selection.exact_ids
+    assert "OR_SAME_COLUMN_TO_IN" in selection.family_signal_ids
+
+
+def test_rule_engine_exact_sources_select_leading_wildcard_and_important_table():
+    statements = _parsed("SELECT A.X FROM WIIT001 A WHERE A.N LIKE '%ABC'")
+    selection = select_patterns(statements, [_finding("R004"), _finding("R007")], _rules())
+    assert "LEADING_WILDCARD_LIKE" in selection.exact_ids
+    assert "IMPORTANT_TABLE_USAGE" in selection.exact_ids
+
+
+def test_complexity_flags_select_exact_catalog_patterns():
+    cases = [
+        ("SELECT A.X FROM T A WHERE A.K NOT IN (SELECT B.K FROM U B)", "NOT_IN_SUBQUERY_TO_NOT_EXISTS"),
+        ("SELECT A.X FROM T A WHERE EXISTS (SELECT 1 FROM U B WHERE B.K = A.K)", "CORRELATED_SUBQUERY_TO_JOIN_OR_WINDOW"),
+        ("SELECT DISTINCT A.X FROM T A WHERE A.X=1", "DISTINCT_REMOVAL"),
+        ("SELECT A.X FROM T A, U B WHERE A.X=1", "CARTESIAN_JOIN_MISSING_CONDITION"),
+        ("SELECT * FROM T A WHERE A.X=1", "SELECT_STAR"),
+    ]
+    for sql, expected in cases:
+        selection = select_patterns(_parsed(sql), [], _rules())
+        assert expected in selection.exact_ids, (sql, selection.exact_ids)
+
+
+def test_many_tables_uses_same_threshold_contract_as_improvement_score():
+    sql = (
+        "SELECT A.X FROM T1 A "
+        "JOIN T2 B ON B.K=A.K JOIN T3 C ON C.K=A.K JOIN T4 D ON D.K=A.K "
+        "WHERE A.X=1"
+    )
+    assert "STRUCTURAL_COMPLEXITY_MANY_TABLES" in select_patterns(_parsed(sql), [], _rules(4)).exact_ids
+    assert "STRUCTURAL_COMPLEXITY_MANY_TABLES" not in select_patterns(_parsed(sql), [], _rules(5)).exact_ids
+
+
+def test_family_signals_stay_separate_from_exact_matches():
+    function_selection = select_patterns(
+        _parsed("SELECT A.X FROM T A WHERE UPPER(A.N)='ABC'"), [_finding("R005")], _rules()
+    )
+    assert "UPPER_CASE_FOLD_REMOVAL" not in function_selection.exact_ids
+    assert "UPPER_CASE_FOLD_REMOVAL" in function_selection.family_signal_ids
+    assert "PREDICATE_FUNCTION_GENERIC" in function_selection.family_signal_ids
+
+    outer = select_patterns(
+        _parsed("SELECT A.X FROM T A LEFT JOIN U B ON B.K=A.K WHERE A.X=1"), [], _rules()
+    )
+    assert "LEFT_JOIN_TO_INNER_JOIN" not in outer.exact_ids
+    assert "LEFT_JOIN_TO_INNER_JOIN" in outer.family_signal_ids
+
+    grouped = select_patterns(_parsed("SELECT A.X, COUNT(*) FROM T A GROUP BY A.X"), [], _rules())
+    assert "GROUP_BY_STRUCTURAL_REWRITE" not in grouped.exact_ids
+    assert "GROUP_BY_STRUCTURAL_REWRITE" in grouped.family_signal_ids
+
+
+def test_none_and_out_of_scope_patterns_are_never_selected_without_a_detector():
+    selection = select_patterns(_parsed("SELECT A.X FROM T A WHERE A.X=1"), [], _rules())
+    forbidden = {
+        "IN_SUBQUERY_TO_EXISTS",
+        "STRING_CONCAT_PREDICATE_SPLIT",
+        "LARGE_RESULT_SET_NO_LIMIT",
+        "INDEX_ADVISORY",
+        "EXECUTION_PLAN_CLAIM",
+        "FULL_TABLE_SCAN_CLAIM",
+        "CARDINALITY_SELECTIVITY_DISTRIBUTION",
+        "ACTUAL_RUNTIME_IMPROVEMENT_CLAIM",
+        "POST_REWRITE_ORACLE_COST_CLAIM",
+        "PARTITION_RECOMMENDATION",
+        "PHYSICAL_STORAGE_AND_HOST_TUNING",
+    }
+    assert forbidden.isdisjoint(selection.exact_ids)
+    assert forbidden.isdisjoint(selection.family_signal_ids)
+
+
+def test_exact_match_order_follows_catalog_order():
+    sql = (
+        "SELECT * FROM T A WHERE SUBSTR(A.C,1,3)='107' "
+        "AND (A.Y=1 OR A.Y=2) AND A.N LIKE '%ABC'"
+    )
+    selection = select_patterns(_parsed(sql), [_finding("R005"), _finding("R006"), _finding("R004")], _rules())
+    ids = selection.exact_ids
+    assert ids.index("SUBSTR_EQ_TO_LIKE") < ids.index("OR_SAME_COLUMN_TO_IN")
+    assert ids.index("OR_SAME_COLUMN_TO_IN") < ids.index("LEADING_WILDCARD_LIKE")
+    assert ids.index("LEADING_WILDCARD_LIKE") < ids.index("SELECT_STAR")
+
+
+def test_log_fields_are_sql_free_and_context_candidates_are_exact_only():
+    secret = "SECRET_LITERAL_9487"
+    statements = _parsed(f"SELECT A.X FROM TAX_PRIVATE A WHERE SUBSTR(A.C,1,3)='107' AND A.N='{secret}'")
+    selection = select_patterns(statements, [_finding("R005")], _rules())
+    blob = repr(selection.log_fields())
+    assert secret not in blob
+    assert "TAX_PRIVATE" not in blob
+    assert selection.context_candidate_ids == selection.exact_ids

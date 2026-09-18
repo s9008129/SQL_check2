@@ -205,7 +205,7 @@ export default function App() {
                 parseMessage={result.parse_message}
               />
               <ImprovementAdvice ai={result.ai} />
-              <EstimateCard ai={result.ai} />
+              <EstimateCard ai={result.ai} compliance={result.compliance} />
               <SqlCompare originalSql={submittedSql} ai={result.ai} />
               <PrintFooter applicationNo={result.application_no} onScrollToInput={scrollToInput} />
             </>

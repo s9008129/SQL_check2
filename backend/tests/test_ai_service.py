@@ -378,6 +378,56 @@ def test_system_prompt_requires_checklist_before_not_needed():
     assert "重新推導每一個條件改寫" in ai_service.SYSTEM_PROMPT
 
 
+@pytest.mark.parametrize(
+    "overclaim",
+    [
+        "本來就能以範圍方式",  # trailing wildcard stated as an Oracle execution fact
+        "範圍方式處理",
+        "建立文字索引",  # index recommendation (INDEX_ADVISORY is out of scope)
+        "效能相同",
+        "語意完全相同",
+        "TRUNC 等於、NVL 等於",  # old list of "system-derived" rewrites
+        "A.COL >= '114' AND A.COL < '115'`）",  # prefix-range offered as an accepted form
+    ],
+)
+def test_system_prompt_has_no_overclaiming_or_unprovable_rewrite_wording(overclaim):
+    # 2026-09-18 Runtime Correctness v1: SQLCheck has no execution plan, index
+    # metadata or statistics, and the runtime only derives SUBSTR→LIKE and
+    # same-column OR→IN. The prompt must not claim more than that.
+    assert overclaim not in ai_service.SYSTEM_PROMPT
+
+
+def test_system_prompt_keeps_r004_scope_and_derived_rewrite_list():
+    prompt = ai_service.SYSTEM_PROMPT
+    assert "不屬於 R004 的命中範圍" in prompt
+    assert "是否及如何改善仍需依實際資料庫環境確認" in prompt
+    assert "只有前置萬用字元" in prompt
+    assert "目前只有 SUBSTR 等於、同欄位 OR 串成" in prompt
+    assert "超過 1000 個值不要合併成單一 IN" in prompt
+
+
+def test_system_prompt_provided_example_is_derivable_and_advice_only_example_is_not():
+    # The prompt's "provided" example must pass the runtime's own predicate
+    # check, and its "advice_only" TRUNC/NVL example must not — otherwise the
+    # prompt steers the model into rewrites the server rejects.
+    from sqlglot import parse_one
+
+    from app.services import rewrite_rules
+
+    provided_orig = "WHERE SUBSTR(A.MANAGE_CD,6,3) = '551' AND A.STATUS = :STR_001"
+    provided_sugg = "WHERE A.MANAGE_CD LIKE '_____551%' AND A.STATUS = :STR_001"
+    advice_orig = "WHERE TRUNC(A.TXN_DATE) = :STR_001 AND NVL(A.S,'N') = 'N'"
+    for fragment in (provided_orig, provided_sugg, advice_orig):
+        assert fragment in ai_service.SYSTEM_PROMPT
+
+    def tree(where: str):
+        return parse_one(f"SELECT A.X FROM T A {where}", read="oracle")
+
+    assert rewrite_rules.verify_predicate_changes(tree(provided_orig), tree(provided_sugg)) == (True, None)
+    advice_sugg = "WHERE A.TXN_DATE >= :STR_001 AND A.TXN_DATE < :STR_001 + 1 AND (A.S = 'N' OR A.S IS NULL)"
+    assert rewrite_rules.verify_predicate_changes(tree(advice_orig), tree(advice_sugg))[0] is False
+
+
 def test_system_prompt_tells_model_how_to_word_advice_only_reason():
     # 2026-09-17 user feedback: plain language, state the fact to confirm,
     # no 「故不自動產生建議寫法」 closing clause (the UI already says that).

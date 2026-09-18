@@ -118,6 +118,18 @@ def compute(
     raw = base + cost_score
     score = max(0, min(max_score, round(raw)))
 
+    # Product-semantics floor for deterministic SQL structures that should
+    # never read as 「目前良好」 even when they are not a formal center-policy
+    # violation. Values remain configuration-driven in rules.yaml.
+    structure_floor = 0
+    score_floors = st_cfg.get("score_floors", {})
+    for stmt in statements:
+        for flag in stmt.complexity_flags:
+            structure_floor = max(structure_floor, int(score_floors.get(flag, 0)))
+    structure_floor_applied = structure_floor > 0 and score < structure_floor
+    if structure_floor_applied:
+        score = min(max_score, structure_floor)
+
     has_block = any(f.status == "BLOCK" for f in findings)
     floor_applied = False
     if has_block and score < block_floor:
@@ -156,6 +168,18 @@ def compute(
             ),
         ),
     ]
+    if structure_floor_applied:
+        breakdown.append(
+            ImprovementBreakdownItem(
+                component="structure_floor",
+                label="需優先確認的 SQL 結構",
+                score=float(structure_floor),
+                detail=(
+                    "系統偵測到多表查詢缺少明確關聯條件；這不是新增中心規範，"
+                    f"但為避免畫面誤顯示「目前良好」，改善指數至少為 {structure_floor}。"
+                ),
+            )
+        )
     if floor_applied:
         breakdown.append(
             ImprovementBreakdownItem(

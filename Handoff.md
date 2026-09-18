@@ -254,9 +254,14 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 
 ## 5. 目前狀態與驗證數據
 
-- 最新狀態：後端 359 項測試 = 2 failed／357 passed（2 項 `tests/test_main.py` 為 macOS `/private/var` 路徑語意的既有失敗，與本 PR 無關）、前端 74 項測試、ruff、build 全過（2026-09-17 PR #1）。docx 三層巢狀真實案例已用本機程式碼直連正式主機 Gemma4 驗證（num_ctx 16384、43 秒、中文 advice_only）。
-- 正式主機最後一次由使用者部署的版本在 `6a7294c` 之前；**`80f78e8`（放大字級）、`815c056`（全頁視覺）與本次畫面調整尚未部署**，需 `git pull` + `deploy\deploy.ps1`。
-- 使用者人工驗證（test_01～03.pdf）：多重缺陷 SQL、笛卡兒積 SQL、乾淨 SQL 三案皆符合預期。
+- GitHub Actions `Backend CI` 已成為 backend PR/main 的固定 gate。Compact Context v1 最新 CI：
+  **499 passed / Ruff All checks passed**（2026-09-18，PR #6）。前一個 Large-AND robustness PR #5
+  為 484 passed / Ruff clean；Pattern Selector PR #4 為 481 passed / Ruff clean。
+- 前端本輪沒有修改；最近一次既有前端基線為 74 項測試與 build 全過。不要因 backend CI 綠燈
+  宣稱重新跑過前端。
+- 正式主機尚未用 Compact Context 版本做 Gemma live A/B。project owner 已要求：先把核心程式與
+  Skill 修到 review/CI 完成，再一次通知正式主機 git pull；因此不要提早要求正式機更新。
+- 既有人工驗證（test_01～03.pdf）：多重缺陷 SQL、笛卡兒積 SQL、乾淨 SQL 三案皆符合當時版本預期。
 - 報告：`E2E_TEST_report_20260917.md`、`E2E_TEST_report_20260917_round2.md`、`SQLCheck2_E2E_test_report_20260916.md`。
 
 ## 6. 開發機驗證方法（不需部署）

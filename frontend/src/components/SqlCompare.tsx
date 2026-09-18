@@ -69,7 +69,7 @@ function toSegments(originalSql: string, advice: AdviceItem[]): Segment[] {
 }
 
 /**
- * 優化前後比較區 (PRD §33 「SQL 寫法比較」), 2026-09-17 layout: a one-line AI
+ * 原寫法與建議寫法區 (PRD §33 「SQL 寫法比較」), 2026-09-17 layout: a one-line AI
  * verdict, then — when a full rewrite exists — the whole statement as a
  * line-aligned, word-highlighted diff, then every advice item with a SQL
  * fragment as its own before/after diff. The old side-by-side editor panes

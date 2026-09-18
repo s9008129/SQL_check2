@@ -257,7 +257,7 @@ mark.legend{margin:0 3px}
    only by a thin left colour bar plus the small badge (ImprovementAdvice.tsx),
    which is what the user asked for: 小面積語意色. */
 .a-high,.a-medium,.a-low{background:var(--purple-soft);border-color:#e3dcff;border-left-width:4px}
-.a-high{border-left-color:#d13f47}
+.a-high{border-left-color:var(--purple)}
 .a-medium{border-left-color:#e0a83a}
 .a-low{border-left-color:#c3c9d6}
 .ai-note{font-size:13px;color:var(--muted)}

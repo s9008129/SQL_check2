@@ -133,12 +133,13 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
     else:
         ai_result = AiResult(status="pending")
 
+    # 2026-09-17 使用者決策：指數完全由確定性事實計算，AI 建議（數量與 impact）
+    # 不得影響分數；因此這裡不再傳入任何 AI 輸出。
     improvement = improvement_score.compute(
         parsed.statements,
         findings,
         payload.cost,
         settings.rules_config,
-        ai_advice=ai_result.advice if ai_result.status == "ok" else None,
     )
 
     statements_summary = [

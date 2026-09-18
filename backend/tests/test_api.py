@@ -118,32 +118,42 @@ async def test_analyze_missing_where_is_block(client):
     assert resp.json()["compliance"]["status"] == "BLOCK"
 
 
-async def test_analyze_with_ai_true_calls_ai_service_and_recomputes_score(client, monkeypatch):
+async def test_analyze_ai_advice_never_moves_the_improvement_index(client, monkeypatch):
+    # 2026-09-17 user decision: the 0-100 index is deterministic. Even with a
+    # full AI response whose advice is all marked impact=high, /api/analyze
+    # must return exactly the same score / level / breakdown as the same
+    # request run with include_ai=false.
     async def _fake_ai(**kwargs):
         return AiResult(
             status="ok",
             summary="測試摘要",
-            advice=[AdviceItem(title="t", explanation="e", impact="high")],
+            advice=[AdviceItem(title="t", explanation="e", impact="high") for _ in range(3)],
             suggested_sql=SuggestedSql(available=False, reason="測試"),
             estimated_improvement_pct=45,
         )
 
     monkeypatch.setattr(api_module.ai_service, "get_ai_result", _fake_ai)
-    resp = await client.post(
-        "/api/analyze",
-        json={
-            "application_no": "A1",
-            "cost": 68420,
-            "sql": "SELECT A.X FROM HOUT120 A WHERE TRUNC(A.TXN_DATE) = :D",
-            "include_ai": True,
-        },
-    )
-    assert resp.status_code == 200
-    data = resp.json()
+    body = {
+        "application_no": "A1",
+        "cost": 68420,
+        "sql": "SELECT A.X FROM HOUT120 A WHERE TRUNC(A.TXN_DATE) = :D",
+    }
+    without_ai = await client.post("/api/analyze", json={**body, "include_ai": False})
+    with_ai = await client.post("/api/analyze", json={**body, "include_ai": True})
+    assert without_ai.status_code == 200
+    assert with_ai.status_code == 200
+
+    data = with_ai.json()
     assert data["ai"]["status"] == "ok"
     assert data["ai"]["estimated_improvement_pct"] == 45
-    ai_component = next(b for b in data["improvement"]["breakdown"] if b["component"] == "ai_adjustment")
-    assert ai_component["score"] > 0
+
+    baseline = without_ai.json()["improvement"]
+    assert data["improvement"]["score"] == baseline["score"]
+    assert data["improvement"]["level"] == baseline["level"]
+    assert [b["component"] for b in data["improvement"]["breakdown"]] == [
+        b["component"] for b in baseline["breakdown"]
+    ]
+    assert "ai_adjustment" not in {b["component"] for b in data["improvement"]["breakdown"]}
 
 
 async def test_analyze_returns_safe_500_when_rule_pipeline_raises_unexpectedly(client, monkeypatch):

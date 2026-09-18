@@ -104,9 +104,7 @@ class ComplianceResult(BaseModel):
 
 
 class ImprovementBreakdownItem(BaseModel):
-    component: Literal[
-        "rule_findings", "structure", "cost_ratio", "ai_adjustment", "block_floor"
-    ]
+    component: Literal["rule_findings", "structure", "cost_ratio", "block_floor"]
     label: str
     score: float
     # 2026-09-17: one plain-language sentence per component ("目前 COST 約為
@@ -179,10 +177,16 @@ class AiResult(BaseModel):
     # percentage (2026-09-17 user decision: the number was never measured).
     estimated_improvement_pct: int | None = None
     # 2026-09-17: deterministic improvement-potential level derived by the
-    # server from facts (rule findings, advice impact × verification, whether
-    # a full rewrite passed) — see ai_service.improvement_potential. None
-    # means "nothing to improve was found".
-    improvement_potential: Literal["high", "medium", "low"] | None = None
+    # server from server-observable facts only (rule findings, whether a
+    # fragment was revalidated as result-preserving, whether a full rewrite
+    # passed re-validation) — see ai_service.improvement_potential. The
+    # model's own `impact` never sets this level.
+    #   high/medium/low — confirmed improvement evidence exists
+    #   "notice_only"   — only governance reminders (e.g. R007 重要資料表)
+    #                     with no confirmed SQL-writing improvement point;
+    #                     the UI must NOT say 「目前寫法良好」 for this
+    #   None            — nothing was found at all
+    improvement_potential: Literal["high", "medium", "low", "notice_only"] | None = None
     # Plain-language lines explaining what the level was derived from.
     improvement_potential_basis: list[str] = Field(default_factory=list)
     message: str | None = None

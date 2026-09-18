@@ -142,7 +142,10 @@ def get_settings() -> Settings:
         ),
         num_ctx=_env_int(
             ollama_section.get("num_ctx_env", "OLLAMA_NUM_CTX"),
-            int(ollama_section.get("num_ctx_default", 8192)),
+            # 2026-09-17: fallback kept in sync with app.yaml's num_ctx_default
+            # (16384, not the old 8192) — app.yaml is the source of truth, this
+            # only applies if that key ever goes missing.
+            int(ollama_section.get("num_ctx_default", 16384)),
         ),
         num_predict=int(ollama_section.get("num_predict", 1024)),
         temperature=float(ollama_section.get("temperature", 0.2)),

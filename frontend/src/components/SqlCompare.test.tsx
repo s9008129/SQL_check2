@@ -56,7 +56,7 @@ describe("SqlCompare", () => {
     expect(marks.length).toBeGreaterThan(1); // legend + at least one real change
   });
 
-  it("shows the red warning that suggestions must be tested first", () => {
+  it("shows the amber warning that suggestions must be tested first", () => {
     render(<SqlCompare originalSql="SELECT 1 FROM DUAL;" ai={makeAi()} />);
     expect(screen.getByRole("note").textContent).toContain("測試機");
   });

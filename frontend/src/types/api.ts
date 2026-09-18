@@ -21,7 +21,6 @@ export type ImprovementBreakdownComponent =
   | "rule_findings"
   | "structure"
   | "cost_ratio"
-  | "ai_adjustment"
   | "block_floor";
 
 // ---------------------------------------------------------------------------
@@ -128,7 +127,12 @@ export interface SuggestedSql {
   outcome?: RewriteOutcome;
 }
 
-export type ImprovementPotential = "high" | "medium" | "low";
+/**
+ * Server-derived improvement potential. "notice_only" means the only findings
+ * were governance reminders (e.g. R007 重要資料表) with no confirmed SQL
+ * writing-level improvement point — it must never be rendered as 「寫法良好」.
+ */
+export type ImprovementPotential = "high" | "medium" | "low" | "notice_only";
 
 export interface AiResult {
   status: AiStatus;

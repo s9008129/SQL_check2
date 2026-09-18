@@ -5,9 +5,11 @@ export interface ImprovementAdviceProps {
   ai: AiResult;
 }
 
-// 2026-09-17: card tint now carries meaning — it follows the AI's impact
-// level (high = red-soft, medium = yellow-soft, low = blue-soft) instead of
-// cycling through decorative colours by position.
+// 2026-09-17 (evening user decision): every AI advice card keeps the same
+// AI-owned purple/neutral surface — a large red card made an "AI 認為影響高"
+// suggestion look as severe as a 不符合 finding. The impact level is now
+// carried by a thin left colour bar (a-high/a-medium/a-low, see app.css)
+// plus the small badge below; the surface itself must stay neutral.
 const IMPACT_TONE: Record<ImpactLevel, string> = {
   high: "a-high",
   medium: "a-medium",

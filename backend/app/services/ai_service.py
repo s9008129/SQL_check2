@@ -8,7 +8,10 @@ here because every function below exists to defend one of these):
 - The AI never decides compliance, never decides the improvement score,
   never invents Execution Plan / index / full-table-scan facts, and never
   fabricates a post-improvement Oracle COST. It only explains, advises, and
-  optionally proposes one rewrite / one heuristic improvement percentage.
+  optionally proposes one rewrite (which the server re-validates).
+- The improvement-potential level is derived server-side from verified
+  evidence only (`improvement_potential`): the model's own impact rating is
+  reference material for the advice card and can never raise the level.
 - The AI is never a single point of failure: every failure mode (connection
   refused, timeout, invalid JSON even after one retry, or any unexpected
   bug in this module) degrades to `AiResult(status="unavailable", ...)`
@@ -53,27 +56,64 @@ DEGRADE_MESSAGE = "智慧改善建議目前暫時無法使用，仍可依上方�
 
 _VERIFIED = {"verified", "corrected"}
 
+# 2026-09-17: rule ids whose findings are about the SQL *writing* itself
+# (they describe a concrete, checkable statement pattern). R007 (重要資料表)
+# is deliberately NOT one of them: it is a governance reminder about the data
+# being touched, not evidence about how the SQL is written.
+_WRITE_STYLE_RULE_IDS = frozenset({"R004", "R005", "R006"})
+
+# 2026-09-17: last Ollama call's *diagnostics* only (latency + token counts),
+# for the production-host golden runner (backend/tests/golden/run_golden.py)
+# to record as evidence. Deliberately holds no prompt, SQL or response text.
+# `get_ai_result` resets it at the start of every call, and calls are
+# serialized by `_OLLAMA_SEMAPHORE`, so a sequential reader (the golden
+# runner) always sees the stats of the call it just made.
+LAST_CALL_STATS: dict[str, Any] = {}
+_STATS_NUMERIC_KEYS = ("eval_count", "prompt_eval_count", "total_duration_ms")
+
 
 def improvement_potential(result: AiResult, findings: list[Finding]) -> tuple[str | None, list[str]]:
-    """2026-09-17 user decision: the percentage the model used to give was
-    never measured (no plan, no stats, no rewritten COST), so it is replaced
-    by a level the server derives from things it actually knows:
-      high   — any BLOCK finding, or a high-impact advice whose fragment the
-               system confirmed result-preserving, or a full rewrite that
-               passed re-validation together with a high-impact advice;
-      medium — any NOTICE finding, or a passed full rewrite, or a medium-
-               impact advice with a confirmed fragment;
-      low    — any other advice (unconfirmed fragment, low impact, prose);
-      None   — nothing found (UI says 「目前寫法良好」).
-    Returns (level, basis lines) so the UI can show what it was derived from."""
+    """2026-09-17 user decision (tightened by the round-1 third-party review):
+    the level is derived ONLY from facts the server can observe for itself.
+    The model's own `impact` rating is a self-assessment — it has no Oracle
+    execution plan, no real index, no statistics and no cardinality — so it
+    is shown on the advice card for reference but can never raise (or lower)
+    this level. The old percentage was never measured, and the old "any
+    NOTICE => medium" rule wrongly promoted pure governance reminders.
+
+      high          — two or more server-verified improvement evidences (a
+                      full validated rewrite counts as one of them);
+      medium        — exactly one server-verified improvement evidence;
+      low           — a BLOCK finding, concrete SQL-writing findings
+                      (R004/R005/R006) or advisory prose, with no verified
+                      rewrite to back it. A BLOCK is deterministic
+                      non-compliance and is already shown by the 中心規範
+                      verdict and the 改善優先指數; on its own it is *not*
+                      proof that an improved SQL writing exists, so it must
+                      not promote the potential to high;
+      "notice_only" — only governance reminders (e.g. R007 重要資料表): worth
+                      a human look, but no concrete SQL-writing improvement
+                      point was confirmed. The UI must NOT render this as
+                      「目前寫法良好」;
+      None          — nothing was found at all (UI says 「目前寫法良好」).
+
+    A "server-verified improvement evidence" is one of:
+      * an advice fragment whose before→example change the system re-validated
+        as result-preserving (`verification` is verified/corrected);
+      * a full suggested rewrite that passed the same re-validation
+        (`suggested_sql.outcome == "provided"`).
+    Returns (level, basis lines) so the UI can show what it was derived from.
+    """
     if result.status != "ok":
         return None, []
+
     blocks = sum(1 for f in findings if f.status == "BLOCK")
-    notices = sum(1 for f in findings if f.status == "NOTICE")
+    notices = [f for f in findings if f.status == "NOTICE"]
+    write_style_notices = [f for f in notices if f.rule_id in _WRITE_STYLE_RULE_IDS]
+    governance_notices = [f for f in notices if f.rule_id not in _WRITE_STYLE_RULE_IDS]
     provided = bool(result.suggested_sql and result.suggested_sql.outcome == "provided")
-    confirmed_high = [a for a in result.advice if a.impact == "high" and a.verification in _VERIFIED]
-    confirmed_medium = [a for a in result.advice if a.impact == "medium" and a.verification in _VERIFIED]
-    any_high = any(a.impact == "high" for a in result.advice)
+    verified_advice = [a for a in result.advice if a.verification in _VERIFIED]
+    evidence_count = len(verified_advice) + (1 if provided else 0)
 
     basis: list[str] = []
     if blocks or notices:
@@ -81,20 +121,28 @@ def improvement_potential(result: AiResult, findings: list[Finding]) -> tuple[st
         if blocks:
             parts.append(f"{blocks} 項不符合")
         if notices:
-            parts.append(f"{notices} 項提醒")
+            parts.append(f"{len(notices)} 項提醒")
         basis.append("規則檢核：" + "、".join(parts))
     if provided:
         basis.append("已提供整段建議寫法，系統已確認查詢結果不變")
+    if verified_advice:
+        basis.append(f"系統已驗證 {len(verified_advice)} 項建議片段可保留原查詢結果")
     # 2026-09-17 user request: the per-advice impact/verification breakdown
     # is NOT listed here (the advice cards already carry it).
 
-    if blocks or confirmed_high or (provided and any_high):
+    # Order matters: the potential never exceeds what the *server* verified.
+    # A BLOCK (or any unverified advice) can only ever justify "low": it stays
+    # visible through the compliance verdict / 改善優先指數 instead.
+    if evidence_count >= 2:
         return "high", basis
-    if notices or provided or confirmed_medium:
+    if evidence_count == 1:
         return "medium", basis
-    if result.advice:
+    if blocks or write_style_notices or result.advice:
         return "low", basis
+    if governance_notices:
+        return "notice_only", basis
     return None, basis
+
 
 _PROMPT_PATH = PROMPTS_DIR / "sql_review_zh_tw.txt"
 SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
@@ -843,6 +891,35 @@ def _chat_request_body(settings: Settings, payload: dict[str, Any]) -> dict[str,
     }
 
 
+def _record_call_stats(body: dict[str, Any], data: dict[str, Any]) -> None:
+    """Publish this call's observable diagnostics for the golden runner.
+
+    Whitelisted scalars only — never the prompt, the SQL or the model's text,
+    so this can never become a second copy of the request/response payload.
+    Best-effort by construction: any unexpected shape leaves the previous
+    stats in place rather than raising into the analysis path.
+    """
+    try:
+        options = body.get("options") or {}
+        stats: dict[str, Any] = {
+            "model": body.get("model"),
+            "num_ctx": options.get("num_ctx"),
+            "num_predict": options.get("num_predict"),
+            "think": body.get("think"),
+            "done_reason": data.get("done_reason"),
+            "total_duration_ms": (data.get("total_duration") or 0) // 1_000_000,
+        }
+        for key in _STATS_NUMERIC_KEYS:
+            if key == "total_duration_ms":
+                continue
+            value = data.get(key)
+            stats[key] = value if isinstance(value, int) else None
+        LAST_CALL_STATS.clear()
+        LAST_CALL_STATS.update(stats)
+    except Exception as exc:  # noqa: BLE001 - diagnostics must never break analysis
+        logger.debug("ai_service: could not record call stats: %s", type(exc).__name__)
+
+
 class _TruncatedResponseError(Exception):
     """Raised when Ollama reports `done_reason == "length"` — the model hit
     `num_predict` before finishing its JSON output. Distinguished from a
@@ -917,6 +994,7 @@ async def _one_attempt(client: httpx.AsyncClient, settings: Settings, payload: d
         (data.get("total_duration") or 0) // 1_000_000,
         len(data["message"].get("thinking") or ""),
     )
+    _record_call_stats(body, data)
     return parsed
 
 
@@ -1040,6 +1118,8 @@ async def get_ai_result(
     """Never raises — any failure anywhere in this path (Ollama down,
     invalid response, or an unexpected bug in this module itself) degrades
     to the PRD-mandated "unavailable" result rather than propagating."""
+    LAST_CALL_STATS.clear()
+
     deadline = time.monotonic() + settings.ollama.timeout_seconds
     try:
         representative = _pick_representative(statements, findings)

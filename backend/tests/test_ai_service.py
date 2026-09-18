@@ -1232,3 +1232,37 @@ async def test_payload_omits_where_evidence_for_normal_where(settings, chat_url)
     user_message = next(m["content"] for m in sent_body["messages"] if m["role"] == "user")
     payload = json.loads(user_message.removeprefix("<SQL_DATA>\n").removesuffix("\n</SQL_DATA>"))
     assert "where_evidence" not in payload
+
+
+@respx.mock
+async def test_last_call_stats_records_diagnostics_only(settings, chat_url):
+    # 2026-09-17: the production-host golden runner reads LAST_CALL_STATS to
+    # record latency/token evidence. It must carry whitelisted diagnostics
+    # only - never the prompt, the SQL or the model's own text.
+    envelope = _ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False))
+    envelope.update(
+        {
+            "done_reason": "stop",
+            "eval_count": 321,
+            "prompt_eval_count": 4567,
+            "total_duration": 12_345_000_000,
+        }
+    )
+    respx.post(chat_url).mock(return_value=httpx.Response(200, json=envelope))
+
+    result = await _call(settings, _clean_select_statement())
+    assert result.status == "ok"
+
+    stats = ai_service.LAST_CALL_STATS
+    assert stats["model"] == settings.ollama.model
+    assert stats["num_ctx"] >= settings.ollama.num_ctx
+    assert stats["num_predict"] == settings.ollama.num_predict
+    assert stats["think"] is False
+    assert stats["done_reason"] == "stop"
+    assert stats["eval_count"] == 321
+    assert stats["prompt_eval_count"] == 4567
+    assert stats["total_duration_ms"] == 12345
+
+    blob = json.dumps(stats, ensure_ascii=False, default=str)
+    for forbidden in ("SELECT", "A.Y", "TRUNC", "這段 SQL"):
+        assert forbidden not in blob

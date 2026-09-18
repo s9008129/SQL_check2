@@ -17,9 +17,10 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
    通過 ai_service._revalidate_suggested_sql 的結構複核；不可為了讓 AI 更常給改寫而放寬
    複核或把「需要業務假設的改寫」放進 sql 欄位。
 4. 不可把申請單號、原始 SQL 常數、附件檔名寫進任何永久儲存或 log。
-5. 開發機（10.97.15.54）沒有 Docker 也沒有 Ollama；但正式主機的 Ollama
-   http://10.97.15.58:11434 可直接連線，驗證 prompt 改動請用「本機程式碼直連正式主機
-   Ollama」的方式（見本檔第 6 節），不要只用 fake_ollama。
+5. 開發機（10.97.15.54）沒有 Docker 也沒有 Ollama。正式主機的 Ollama 11434 依 PRD §46
+   與 2026-09-17 的防火牆 fail-closed 政策**刻意不讓區網（含開發機）直連**；要驗證 prompt
+   改動請用「本機程式碼＋通道（tunnel／SSH port-forward）指向正式主機 Ollama」的方式
+   （見本檔第 6 節），不要只用 fake_ollama，也不要把 11434 開放給區網。
 6. 遇到「AI 沒給建議寫法」類的回報，先用 Handoff 第 4 節的判讀順序查 outcome 與 log，
    不要直接改 prompt。
 7. 完成一個可驗證的段落就 commit，不要累積大量未提交變更。
@@ -139,8 +140,27 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 - 加新規則的方法：在 `rewrite_rules._RULES` 加一個函式，回傳 `Rewrite(rule, canonical, accepted, assumption)`，並在 `tests/test_rewrite_rules.py` 寫正反例。
 
 ### 2026-09-17 深夜（四）：預估改善效果改為「改善潛力」等級
-- 使用者決定：百分比從未經量測（AI 不看執行計畫／統計／改後 COST），改為伺服器依事實推算的高／中／低（`ai_service.improvement_potential`），附推算依據句與警語「未經任何實際量測；系統人員採用前請於測試機覆核與測試」。推算表：BLOCK 或已確認的高影響片段或（整段改寫通過＋高影響）→高；NOTICE 或整段改寫通過或已確認的中影響片段→中；其餘任何建議→低；無→None（畫面「目前寫法良好」）。
+- 使用者決定：百分比從未經量測（AI 不看執行計畫／統計／改後 COST），改為伺服器依事實推算的高／中／低（`ai_service.improvement_potential`）。
+  **2026-09-17 PR #1 更新後的推算表（AI impact 不再參與；2026-09-17 第三方 Review 後再收緊）**：≥2 項 server 已驗證改善證據 → 高；恰 1 項已驗證證據 → 中；BLOCK 單獨存在（確定性不符合，但沒有已驗證改善證據）、只有 R004／R005／R006 寫法類提醒或未通過驗證的建議 → 低；只有治理型提醒（R007 重要資料表等）→ `notice_only`（畫面「有提醒，但未確認具體改善點」，**不得**顯示「目前寫法良好」）；完全無發現 → None（畫面「目前寫法良好」）。「已驗證證據」= `verification` 為 verified／corrected 的片段，或通過 `_revalidate_suggested_sql` 的整段改寫。
 - `estimated_improvement_pct` 仍在 API 與蒐集檔（分析用），畫面不顯示；`estimate_reason` 已移除。
+
+### 2026-09-17（PR #1 Batch 1）：Ollama 11434 防火牆 fail-closed 與部署硬化
+- 政策：**只有 SQLCheck 容器可以連到主機 Ollama 11434**，一般區網電腦必須連不上；正常流量
+  只有 `Browser → SQLCheck (443) → 容器 → 主機 Ollama`。不建立固定開發機 IP 例外，也不加
+  「無條件 LocalSubnet Block」——那會連 Docker Desktop（WSL）→ 主機的流量一起擋掉。
+- `deploy.ps1` Step 3 改為 audit → validate → create → verify：列舉**所有**會開啟 TCP 11434
+  的 Inbound 規則；同名規則逐項驗證 Enabled／Direction／Action／LocalPort／InterfaceAlias／
+  RemoteAddress／Profile（不再只因名稱存在就略過）；建立後重新讀回驗證。
+- fail-closed：稽核／建立／驗證失敗或偵測到 Enabled＋Allow＋未限縮來源的 11434 規則時，
+  列印問題規則與修正指令並**中止部署**；緊急時可用新的 `-BreakGlassFirewall` 略過（會印出
+  明顯警告，屬例外而非正常流程）。
+- 新增 `deploy/tests/firewall-helpers.Tests.ps1`（96 項判斷邏輯測試，任何 OS 的 PowerShell 7
+  可跑，不碰防火牆；`deploy.ps1` 本體不會被執行）。
+- 復原：`Remove-NetFirewallRule -DisplayName 'SQLCheck - Ollama API (container only)'`。
+- **未在主機驗證（必須在正式主機驗收）**：`Get-NetFirewallRule`／`New-NetFirewallRule` 的實際
+  行為、`vEthernet (WSL*)` 介面是否存在、容器能否連到 `host.docker.internal:11434`、
+  `/api/health` 的 `ai_available`、以及「第二台區網電腦連 11434 失敗」這三項主機端驗證，
+  都只能在 Windows 11 + Docker Desktop + RTX 4090 正式主機上執行；macOS 開發機無法驗證。
 
 ## 4. 「AI 沒給建議寫法」的判讀順序（接手後最常被問）
 
@@ -155,7 +175,7 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 
 ## 5. 目前狀態與驗證數據
 
-- 最新狀態：後端 342 項測試、前端 73 項測試、ruff、build 全過（2026-09-17 深夜，改善潛力等級 commit）。docx 三層巢狀真實案例已用本機程式碼直連正式主機 Gemma4 驗證（num_ctx 16384、43 秒、中文 advice_only）。
+- 最新狀態：後端 359 項測試 = 2 failed／357 passed（2 項 `tests/test_main.py` 為 macOS `/private/var` 路徑語意的既有失敗，與本 PR 無關）、前端 74 項測試、ruff、build 全過（2026-09-17 PR #1）。docx 三層巢狀真實案例已用本機程式碼直連正式主機 Gemma4 驗證（num_ctx 16384、43 秒、中文 advice_only）。
 - 正式主機最後一次由使用者部署的版本在 `6a7294c` 之前；**`80f78e8`（放大字級）、`815c056`（全頁視覺）與本次畫面調整尚未部署**，需 `git pull` + `deploy\deploy.ps1`。
 - 使用者人工驗證（test_01～03.pdf）：多重缺陷 SQL、笛卡兒積 SQL、乾淨 SQL 三案皆符合預期。
 - 報告：`E2E_TEST_report_20260917.md`、`E2E_TEST_report_20260917_round2.md`、`SQLCheck2_E2E_test_report_20260916.md`。
@@ -167,26 +187,38 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 cd D:\dev\SQL_check2\backend; uv run pytest -q; uv run ruff check .
 cd D:\dev\SQL_check2\frontend; npm test -- --run; npm run build
 
-# 用本機程式碼直連正式主機真實 Gemma4（驗 prompt／守門改動最可靠的方法）
-# 寫一支 python：dataclasses.replace(get_settings(), ollama=replace(..., base_url="http://10.97.15.58:11434"))
+# 用本機程式碼連正式主機真實 Gemma4（驗 prompt／守門改動最可靠的方法）
+# 前提：正式主機的 Ollama 11434 不對區網開放（2026-09-17 起的 fail-closed 政策），
+# 必須先建立通道，再把 base_url 指向通道的本機埠，例如：
+#   ssh -N -L 11434:127.0.0.1:11434 <正式主機帳號>@10.97.15.58
+# 然後寫一支 python：dataclasses.replace(get_settings(), ollama=replace(..., base_url="http://127.0.0.1:11434"))
 # 再呼叫 ai_service.get_ai_result(...)，範例見 tasks/lessons.md 2026-09-17 段落與 scratchpad 的 validate_new.py 作法
+# 不要為了圖方便把 11434 重新開放給區網；也不要建立固定的開發機 IP 例外。
 
 # 本機看畫面：先 npm run build，把 frontend/dist/* 複製到 backend/static/，
-# 設 OLLAMA_BASE_URL=http://10.97.15.58:11434 SQLCHECK_ARCHIVE_ENABLED=false 啟動
+# 設 OLLAMA_BASE_URL=http://127.0.0.1:11434（走上面的通道）SQLCHECK_ARCHIVE_ENABLED=false 啟動
 # uv run uvicorn app.main:app --port 28000，瀏覽 http://127.0.0.1:28000。用完把 backend/static 清回只剩 .gitkeep。
 
 # 對正式主機 E2E
 curl -sk https://10.97.15.58/api/health
 # POST /api/extract-sql（multipart file）與 /api/analyze {application_no,cost,sql,include_ai:true}
+
+# 11434 安全驗收（在「第二台」區網電腦上執行，不是在正式主機上）
+# Test-NetConnection 10.97.15.58 -Port 11434   -> 必須是 TcpTestSucceeded : False
+# 絕不要「從其他電腦連 11434 成功」當成正常流程或驗收通過條件。
 ```
 
 注意：Git Bash 工具在含中文的 heredoc 偶爾會 crash（`add_item failed`），寫檔用 Write 工具、執行用 PowerShell 較穩。
 
 ## 7. 尚未完成／建議的下一步方向（依優先序）
 
-1. **安全缺口（高）**：正式主機 Ollama 11434 可從區網直接連線，違反 PRD §46。`deploy.ps1` 的規則只放行 WSL 介面，表示另有放行規則（疑 Ollama 安裝程式自建）。在正式主機執行
-   `Get-NetFirewallRule | ? {$_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound'} | Get-NetFirewallPortFilter | ? LocalPort -eq 11434`
-   找出來源，加 Block 規則限制 LocalSubnet 來源，並在 deploy.ps1 加自動驗證（容器內能連 host.docker.internal:11434 才保留）與回滾。開發機無法測試防火牆，需在正式主機小心操作。
+1. **安全缺口（高）— 程式已修，待主機驗收**：正式主機 Ollama 11434 曾被區網直連成功（違反
+   PRD §46），來源疑為 Ollama 安裝程式自建的放行規則。PR #1 Batch 1 已把 `deploy.ps1` Step 3
+   改成 fail-closed 稽核（見第 3 節 2026-09-17 段落），但**尚未在正式主機驗證**。請在正式主機
+   執行 `deploy.ps1`（或 `Get-NetFirewallRule -Direction Inbound | Get-NetFirewallPortFilter |`
+   `Where-Object LocalPort -eq 11434`）確認稽核結果，並完成三項驗收：容器能連
+   `host.docker.internal:11434`、`/api/health` 的 `ai_available: true`、第二台區網電腦
+   `Test-NetConnection <主機IP> -Port 11434` 必須失敗。
 2. **部署最新兩個 commit 並讓同仁實測**：重點看逐段對照的黃底標示、1366×768 筆電可讀性、列印 PDF。
 3. **before 片段校正**：模型偶爾跳行複製 before；可在後端用與前端 `locateOriginalFragment` 相同的 token 重疊邏輯校正到原始行。
 4. **蒐集檔分析**：`data/sql_archive/*.jsonl` 累積後統計 `rewrite_outcome` 分布；若 `rejected` 比例高，檢視複核是否過嚴（例如 GROUP BY 拆分在定寬欄位其實等價）。

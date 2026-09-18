@@ -3,6 +3,11 @@
 formula). This module only does arithmetic on data supplied by
 rule_engine.py's findings and sql_parser.py's per-statement facts — it never
 invents a rule or a weight itself (PRD §16.1 "不讓 AI 自由打分").
+
+2026-09-17 使用者決策：這個指數必須 **完全由確定性事實** 決定。AI 的
+per-advice `impact` 不再有任何加分（模型沒有 execution plan / index /
+statistics，它的影響程度只是自我評估，不是證據）；因此同樣的
+SQL + COST + rules.yaml 一定得到同一個分數，AI 可用與否、建議幾條都不影響。
 """
 
 from __future__ import annotations
@@ -10,7 +15,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from app.schemas import AdviceItem, Finding, ImprovementBreakdownItem, ImprovementResult
+from app.schemas import Finding, ImprovementBreakdownItem, ImprovementResult
 from app.services.rule_engine import GLOBAL_STATEMENT_INDEX, WEIGHT_KEYS
 from app.services.sql_parser import ParsedStatement
 
@@ -56,14 +61,6 @@ def _cost_ratio_score(cost: int, threshold: int, cost_ratio_cfg: dict[str, Any])
     return float(cost_ratio_cfg.get("max", 15)), ratio
 
 
-def _ai_adjustment_score(advice: list[AdviceItem] | None, ai_cfg: dict[str, Any]) -> float:
-    if not advice:
-        return 0.0
-    impact_scores = ai_cfg.get("impact_scores", {})
-    total = sum(float(impact_scores.get(a.impact, 0)) for a in advice if a.impact)
-    return min(total, float(ai_cfg.get("max", 10)))
-
-
 def _level_for_score(score: int, levels_cfg: dict[str, Any]) -> tuple[str, str, str]:
     for key, level_key in (("priority", "PRIORITY"), ("improve", "IMPROVE"), ("good", "GOOD")):
         cfg = levels_cfg.get(key, {})
@@ -80,13 +77,11 @@ def compute(
     findings: list[Finding],
     cost: int,
     rules_config: dict[str, Any],
-    ai_advice: list[AdviceItem] | None = None,
 ) -> ImprovementResult:
     sc = rules_config.get("improvement_score", {})
     rf_cfg = sc.get("rule_findings", {})
     st_cfg = sc.get("structure", {})
     cr_cfg = sc.get("cost_ratio", {})
-    ai_cfg = sc.get("ai_adjustment", {})
     levels_cfg = sc.get("levels", {})
     max_score = int(sc.get("max_score", 100))
     block_floor = int(sc.get("block_floor", 80))
@@ -119,9 +114,8 @@ def compute(
     base = winning_f + winning_s
 
     cost_score, ratio = _cost_ratio_score(cost, r001_threshold, cr_cfg)
-    ai_score = _ai_adjustment_score(ai_advice, ai_cfg)
 
-    raw = base + cost_score + ai_score
+    raw = base + cost_score
     score = max(0, min(max_score, round(raw)))
 
     has_block = any(f.status == "BLOCK" for f in findings)
@@ -138,7 +132,6 @@ def compute(
     # actual value for this case and the maximum points it can contribute.
     st_max = int(st_cfg.get("max", 15))
     cr_max = int(cr_cfg.get("max", 15))
-    ai_max = int(ai_cfg.get("max", 10))
     ratio_pct = round(ratio * 100)
     breakdown = [
         ImprovementBreakdownItem(
@@ -161,12 +154,6 @@ def compute(
                 f"目前 COST {cost:,} 約為規範門檻 {r001_threshold:,} 的 {ratio_pct}%，"
                 f"越接近或超過門檻加分越多，最多 {cr_max} 分。"
             ),
-        ),
-        ImprovementBreakdownItem(
-            component="ai_adjustment",
-            label="AI 建議的影響程度",
-            score=round(ai_score, 1),
-            detail=f"依 AI 每一項改善建議標示的影響高低加分，最多 {ai_max} 分。",
         ),
     ]
     if floor_applied:

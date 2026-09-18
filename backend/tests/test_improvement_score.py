@@ -1,6 +1,8 @@
+import inspect
+
 import pytest
 
-from app.schemas import AdviceItem, Finding
+from app.schemas import Finding
 from app.services import improvement_score, rule_engine
 from app.services.sql_parser import parse_sql_text
 from app.settings import get_settings
@@ -41,18 +43,25 @@ def test_score_never_exceeds_max(rules_cfg, tables_cfg):
     )
     parsed = parse_sql_text(sql)
     _, _, findings = rule_engine.evaluate(parsed, 999999999, rules_cfg, tables_cfg)
-    advice = [AdviceItem(title="t", explanation="e", impact="high") for _ in range(5)]
-    result = improvement_score.compute(parsed.statements, findings, 999999999, rules_cfg, ai_advice=advice)
+    result = improvement_score.compute(parsed.statements, findings, 999999999, rules_cfg)
     assert result.score <= 100
 
 
-def test_ai_adjustment_capped_at_component_max(rules_cfg, tables_cfg):
-    parsed = parse_sql_text("SELECT A.X FROM T A WHERE A.Y = 1")
-    _, _, findings = rule_engine.evaluate(parsed, 1000, rules_cfg, tables_cfg)
-    advice = [AdviceItem(title="t", explanation="e", impact="high") for _ in range(10)]
-    result = improvement_score.compute(parsed.statements, findings, 1000, rules_cfg, ai_advice=advice)
-    ai_component = next(b for b in result.breakdown if b.component == "ai_adjustment")
-    assert ai_component.score == 10.0  # capped, not 50
+def test_index_is_fully_deterministic_and_has_no_ai_component(rules_cfg, tables_cfg):
+    # 2026-09-17 user decision: the 0-100 index is computed from deterministic
+    # facts only. There is no AI parameter on compute(), no `ai_adjustment`
+    # config left in rules.yaml, and no AI row in the breakdown - so the same
+    # SQL + COST + rules config always yields exactly the same score, no
+    # matter what the AI says (or whether it is available at all).
+    assert "ai_adjustment" not in rules_cfg["improvement_score"]
+    assert "ai_advice" not in inspect.signature(improvement_score.compute).parameters
+
+    parsed = parse_sql_text("SELECT A.X FROM T A WHERE TRUNC(A.Y) = :D")
+    _, _, findings = rule_engine.evaluate(parsed, 68420, rules_cfg, tables_cfg)
+    first = improvement_score.compute(parsed.statements, findings, 68420, rules_cfg)
+    second = improvement_score.compute(parsed.statements, findings, 68420, rules_cfg)
+    assert first.score == second.score
+    assert {b.component for b in first.breakdown} == {"rule_findings", "structure", "cost_ratio"}
 
 
 def test_unknown_weight_key_does_not_crash():
@@ -77,16 +86,14 @@ def test_level_boundaries(rules_cfg):
 
 def test_prototype_worked_example_lands_in_improve_band(rules_cfg, tables_cfg):
     # Mirrors PRD prototype: TRUNC(TXN_DATE) condition + HOUT120 + COST 68,420
-    # -> plan's worked example expects F=50 (function 30 + important-table
-    # 20), C=10 (68.4% of threshold), A up to 10 from AI impact -> "建議改善".
+    # -> plan's worked example expects F=50 (function 30 + important-table 20)
+    # and C=10 (68.4% of threshold) -> 60, i.e. "建議改善". Since 2026-09-17
+    # there is no AI component any more: 60 comes from deterministic facts
+    # alone and must not depend on what the model happens to suggest.
     sql = "SELECT A.X FROM HOUT120 A WHERE TRUNC(A.TXN_DATE) = :D AND A.STATUS = :S"
     parsed = parse_sql_text(sql)
     _, _, findings = rule_engine.evaluate(parsed, 68420, rules_cfg, tables_cfg)
-    advice = [
-        AdviceItem(title="日期條件可再簡化", explanation="e", impact="high"),
-        AdviceItem(title="查詢 HOUT120 時可再確認範圍", explanation="e", impact="medium"),
-    ]
-    result = improvement_score.compute(parsed.statements, findings, 68420, rules_cfg, ai_advice=advice)
+    result = improvement_score.compute(parsed.statements, findings, 68420, rules_cfg)
     assert result.level == "IMPROVE"
     assert result.label == "建議改善"
     assert 60 <= result.score <= 79
@@ -109,7 +116,7 @@ def test_breakdown_explains_each_component_in_plain_language(rules_cfg, tables_c
     _, _, findings = rule_engine.evaluate(parsed, 68888, rules_cfg, tables_cfg)
     result = improvement_score.compute(parsed.statements, findings, 68888, rules_cfg)
     by_component = {b.component: b for b in result.breakdown}
-    assert set(by_component) == {"rule_findings", "structure", "cost_ratio", "ai_adjustment"}
+    assert set(by_component) == {"rule_findings", "structure", "cost_ratio"}
     for item in result.breakdown:
         assert item.detail and "分" in item.detail
         assert "佔規範門檻" not in item.label

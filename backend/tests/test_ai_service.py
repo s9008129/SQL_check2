@@ -1404,7 +1404,9 @@ def test_invented_where_identifier_is_hidden_instead_of_shown():
     assert len(result) == 1
     assert result[0].example is None
     assert result[0].before is None
-    assert "不顯示可直接套用的寫法" in result[0].explanation
+    assert result[0].title == "請先確認查詢條件或資料表關聯"
+    assert "系統不會自行猜測" in result[0].explanation
+    assert "COLL_YR" not in result[0].explanation
 
 
 def test_invented_join_key_is_hidden_instead_of_shown():

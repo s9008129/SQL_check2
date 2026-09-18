@@ -34,6 +34,11 @@ def test_context_uses_exact_matches_only_and_excludes_out_of_scope():
     assert "TRUNC_EQ_TO_RANGE" not in context_adapter.context_ids(context)
 
 
+def test_context_requires_a_representative_statement():
+    selection = PatternSelection(exact=(_m("SUBSTR_EQ_TO_LIKE", "VERIFIED_REWRITE", 0),))
+    assert context_adapter.build_knowledge_context(selection, {}, statement_index=None) == []
+
+
 def test_context_is_limited_to_representative_statement():
     selection = PatternSelection(
         exact=(
@@ -133,7 +138,7 @@ def test_match_signals_never_enter_model_context():
     assert secret not in repr(context)
 
 
-def test_catalog_classification_drift_fails_closed_for_context(monkeypatch):
+def test_catalog_classification_drift_fails_closed_for_context():
     selection = PatternSelection(exact=(_m("SUBSTR_EQ_TO_LIKE", "ADVICE_ONLY", 0),))
     # Selector/catalog drift is a configuration error. ai_service catches this
     # and sends an empty context rather than injecting ambiguous knowledge.

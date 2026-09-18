@@ -17,12 +17,12 @@ here because every function below exists to defend one of these):
   bug in this module) degrades to `AiResult(status="unavailable", ...)`
   with the PRD-mandated frontend message — this module's public functions
   never raise.
-- `candidate_allowed` / `estimate_improvement_allowed` are computed here,
-  deterministically, from rule_engine/sql_parser facts and `app.yaml`'s
-  `ai_gate` config — never from anything the model says. Even if the model
-  ignores its instructions and returns `suggested_sql.available=true` while
-  `candidate_allowed` is false, the server-side override in `_finalize_*`
-  forces it back to false before it ever reaches the API response.
+- `candidate_allowed` is computed here, deterministically, from
+  rule_engine/sql_parser facts and `app.yaml`'s `ai_gate` config — never
+  from anything the model says. Even if the model ignores its instructions
+  and returns `suggested_sql.available=true` while `candidate_allowed` is
+  false, the server-side override in `_finalize_*` forces it back to false
+  before it ever reaches the API response.
 - Real literal values (string/date/large-numeric) never reach the model —
   `masking.mask_sql()` runs on the representative statement's SQL text
   before it is ever placed in the prompt, regardless of whether a candidate
@@ -224,17 +224,13 @@ class _AiRawResponse(BaseModel):
 # ---------------------------------------------------------------------------
 def _compute_gates(
     statements: list[ParsedStatement],
-    findings: list[Finding],
     ai_gate_cfg: dict[str, Any],
     *,
     sql_tokens: int = 0,
     num_predict: int = 0,
-) -> tuple[bool, bool, str | None]:
+) -> tuple[bool, str | None]:
     """candidate_allowed: exactly one statement, SELECT, parsed ok, and none
     of its complexity_flags intersect the configured forbidden set.
-    estimate_improvement_allowed: equals candidate_allowed unless
-    `ai_gate.estimate_requires_candidate` is false, in which case it is also
-    allowed whenever there is at least one finding (both branches per spec).
     decline_code: None when candidate_allowed is True; otherwise the specific
     reason candidate_allowed is False (`multi_statement` / `not_select` /
     `parse_failed` / `complexity:<flag>`) so the reviewer-facing decline
@@ -265,13 +261,7 @@ def _compute_gates(
             decline_code = "too_long_for_rewrite"
 
     candidate_allowed = decline_code is None
-
-    if ai_gate_cfg.get("estimate_requires_candidate", True):
-        estimate_allowed = candidate_allowed
-    else:
-        estimate_allowed = candidate_allowed or bool(findings)
-
-    return candidate_allowed, estimate_allowed, decline_code
+    return candidate_allowed, decline_code
 
 
 def _rewrite_would_not_fit(sql_tokens: int, num_predict: int, ai_gate_cfg: dict[str, Any]) -> bool:
@@ -368,7 +358,6 @@ def _build_payload(
     compliance_status: str,
     findings: list[Finding],
     candidate_allowed: bool,
-    estimate_improvement_allowed: bool,
     literal_hints: dict[str, dict[str, Any]] | None = None,
     where_evidence: dict[str, str] | None = None,
     structure_flags: list[str] | None = None,
@@ -393,7 +382,6 @@ def _build_payload(
         "findings": [{"rule_id": f.rule_id, "level": f.status, "fact": f.fact} for f in findings],
         "important_table_notices": important_table_notices,
         "candidate_allowed": candidate_allowed,
-        "estimate_improvement_allowed": estimate_improvement_allowed,
         "literal_hints": literal_hints or {},
         # Deterministic structural facts from sql_parser (2026-09-17): the
         # model kept declaring a NOT IN subquery "already good" because
@@ -650,20 +638,6 @@ def _filter_advice(
     return kept
 
 
-def _clamp_round_pct(value: int | None, estimate_allowed: bool) -> int | None:
-    """Clamp to [0, 100], round to the nearest 5, and force null whenever
-    there is nothing to estimate — never let the raw model value through
-    unmodified."""
-    if not estimate_allowed or value is None:
-        return None
-    try:
-        v = int(value)
-    except (TypeError, ValueError):
-        return None
-    v = max(0, min(100, v))
-    return round(v / 5) * 5
-
-
 # PRD §25.4's exact fixed copy for "declined to auto-rewrite" — used
 # whenever the server (not the model) is the one deciding no rewrite will be
 # shown.
@@ -907,7 +881,6 @@ def _finalize(
     raw: _AiRawResponse,
     reverse_map: dict[str, str],
     candidate_allowed: bool,
-    estimate_allowed: bool,
     decline_code: str | None,
     ai_guard_cfg: dict[str, Any],
     representative: ParsedStatement | None,
@@ -917,7 +890,6 @@ def _finalize(
     important_tables_config: dict[str, Any],
     *,
     original_sql: str = "",
-    estimate_with_fragments: bool = False,
 ) -> AiResult:
     forbidden = ai_guard_cfg.get("forbidden_phrases", [])
     vocab = ai_guard_cfg.get("vocabulary_replacements", {})
@@ -947,13 +919,10 @@ def _finalize(
         rules_config,
         important_tables_config,
     )
-    # Backward compatibility: older/mocked callers may still include the
-    # deprecated percentage field. Current Gemma is no longer asked for it
-    # (it is absent from RESPONSE_SCHEMA / system prompt), so production
-    # responses naturally remain null.
-    has_fragments = any(item.example for item in advice)
-    effective_estimate_allowed = estimate_allowed or (estimate_with_fragments and has_fragments)
-    pct = _clamp_round_pct(raw.estimated_improvement_pct, effective_estimate_allowed)
+    # Improvement percentages were never measured Oracle results. The API
+    # field remains for wire compatibility, but live and mocked model values
+    # are deliberately ignored.
+    pct = None
 
     # 2026-09-17: a `:STR_001` the model made up (not in the reverse map, not
     # in the user's SQL) must not reach the reviewer — see masking.py.
@@ -1308,8 +1277,8 @@ async def get_ai_result(
             mask_result = mask_sql(sql_text, settings.masking.keep_short_ascii_literal_max_len)
 
         sql_tokens = _estimate_tokens(mask_result.masked_sql)
-        candidate_allowed, estimate_allowed, decline_code = _compute_gates(
-            statements, findings, settings.ai_gate, sql_tokens=sql_tokens, num_predict=settings.ollama.num_predict
+        candidate_allowed, decline_code = _compute_gates(
+            statements, settings.ai_gate, sql_tokens=sql_tokens, num_predict=settings.ollama.num_predict
         )
 
         # Pattern Selector stays fail-open: a catalog/selector problem must
@@ -1350,20 +1319,14 @@ async def get_ai_result(
             }
 
         logger.info(
-            "ai_service: gate candidate=%s estimate=%s decline_code=%s stmt_type=%s flags=%s where_kind=%s sql_tokens=%d",
+            "ai_service: gate candidate=%s decline_code=%s stmt_type=%s flags=%s where_kind=%s sql_tokens=%d",
             candidate_allowed,
-            estimate_allowed,
             decline_code,
             statement_type,
             sorted(representative.complexity_flags) if representative else [],
             representative.restriction_kind if representative else None,
             sql_tokens,
         )
-
-        # The model must be asked for a number whenever fragments could later
-        # justify one; _finalize drops it again if they do not materialise.
-        estimate_with_fragments = bool(settings.ai_gate.get("estimate_allowed_with_advice_fragments", True))
-        estimate_requested = estimate_allowed or estimate_with_fragments
 
         def build(candidate: bool) -> dict[str, Any]:
             return _build_payload(
@@ -1373,7 +1336,6 @@ async def get_ai_result(
                 compliance_status=compliance_status,
                 findings=findings,
                 candidate_allowed=candidate,
-                estimate_improvement_allowed=estimate_requested,
                 literal_hints=mask_result.literal_hints,
                 where_evidence=where_evidence,
                 structure_flags=sorted(representative.complexity_flags) if representative else [],
@@ -1403,7 +1365,6 @@ async def get_ai_result(
             raw,
             mask_result.reverse_map,
             candidate_allowed,
-            estimate_allowed,
             decline_code,
             settings.ai_guard,
             representative,
@@ -1412,7 +1373,6 @@ async def get_ai_result(
             settings.rules_config,
             settings.important_tables_config,
             original_sql=sql_text,
-            estimate_with_fragments=estimate_with_fragments,
         )
         level, basis = improvement_potential(result, findings)
         return result.model_copy(update={"improvement_potential": level, "improvement_potential_basis": basis})

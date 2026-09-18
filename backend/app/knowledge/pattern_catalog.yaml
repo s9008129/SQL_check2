@@ -1033,9 +1033,8 @@ patterns:
       source: none
     rationale_zh_tw: >
       SQLCheck 從未實際執行 SQL，不能宣稱「已測試」「已驗證」「實測」某項
-      改寫確實加快多少；`estimated_improvement_pct` 是模型主觀的粗略經驗
-      法則參考值，僅供人工參考，不回灌「改善指數」或「改善潛力」，也不得在
-      文字中包裝成量測結果。
+      改寫確實加快多少，也不要求模型猜測改善百分比。實際 COST、執行時間或
+      資源使用差異只能以測試環境的真實紀錄作為證據，不得由模型自行量化。
     allowed_behavior:
       explain: false
       advice: false

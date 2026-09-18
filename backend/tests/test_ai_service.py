@@ -101,7 +101,7 @@ async def test_successful_response_populates_ok_result(settings, chat_url):
     assert result.status == "ok"
     assert result.summary is not None
     assert len(result.advice) == 1
-    assert result.advice[0].title == "調整日期條件寫法"
+    assert result.advice[0].title == "合併同欄位 OR 條件"
     assert result.suggested_sql is not None
     assert result.suggested_sql.available is True
     assert result.estimated_improvement_pct == 45  # 47 rounds to nearest 5
@@ -442,7 +442,7 @@ def test_system_prompt_explains_rewrite_outcome_and_examples():
     assert "rewrite_outcome" in ai_service.SYSTEM_PROMPT
     assert "not_needed" in ai_service.SYSTEM_PROMPT
     assert "advice_only" in ai_service.SYSTEM_PROMPT
-    assert "example 就必須填寫" in ai_service.SYSTEM_PROMPT
+    assert "example 必須填空字串" in ai_service.SYSTEM_PROMPT
 
 
 def test_system_prompt_defines_knowledge_context_authority_and_class_semantics():

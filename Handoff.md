@@ -162,6 +162,27 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
   `/api/health` 的 `ai_available`、以及「第二台區網電腦連 11434 失敗」這三項主機端驗證，
   都只能在 Windows 11 + Docker Desktop + RTX 4090 正式主機上執行；macOS 開發機無法驗證。
 
+### 2026-09-18 Knowledge v1 correction（PR #2）
+- `backend/app/knowledge/pattern_catalog.yaml` 是 SQL optimization knowledge 的機器可讀
+  source of truth；`skills/sqlcheck-oracle-review/` 說明怎麼使用。Runtime 目前不讀取它。
+- **本節更正上方「2026-09-17 深夜（三）」把四條規則都寫成等價白名單的說法。**
+  `rewrite_rules.py` 的行為沒有改變，但治理上的認定如下（「runtime_gap」＝ runtime 仍會把
+  片段標成 verified／corrected，但治理不認可）：
+  - `SUBSTR(col,p,n)='v'` → `col LIKE '<p-1 個 _>v%'`：VERIFIED_REWRITE。p=1 時 runtime
+    另外接受的上下界寫法依賴 collation，列為 runtime_gap。
+  - `TRUNC(col)=X` → 範圍：ADVICE_ONLY＋runtime_gap。「X 不含時分秒」只寫成 assumption，
+    沒有檢查；X 帶時間時兩種寫法回傳的資料不同。
+  - `NVL(col,'a')='b'` → 條件式：ADVICE_ONLY＋runtime_gap。NVL 對文字資料回傳 VARCHAR2
+    （nonpadded 比較），CHAR 欄位與文字常數則是 blank-padded 比較；SQLCheck 看不到欄位型別。
+  - 同欄位 OR → IN：VERIFIED_REWRITE，但只授權 1～1000 個值（Oracle 19c 單一 IN 清單上限）。
+    超過 1000 個值列為 runtime_gap：規則沒有檢查數量，目前是因為約 997 個值以上會在規則內
+    觸發 RecursionError 而剛好被擋下，這是副作用，不是邊界。
+- 以上 runtime_gap 必須在 Phase 2（Pattern Selector）之前，以獨立的 correctness PR 修正
+  `rewrite_rules.py`；在那之前，不可把 runtime 對這些寫法的 verified／corrected 標示當成
+  治理已證明。
+- 之後新增 rewrite rule 時，除了 `rewrite_rules.py` 與 `tests/test_rewrite_rules.py`，也要在
+  `pattern_catalog.yaml` 加恰好一個條目（`tests/test_pattern_catalog.py` 會檢查）。
+
 ## 4. 「AI 沒給建議寫法」的判讀順序（接手後最常被問）
 
 1. 看 API 回應或畫面的 outcome：

@@ -101,11 +101,24 @@ def normalize_text(text: str) -> str | None:
 
 
 def _conjuncts(expr: exp.Expression) -> list[exp.Expression]:
-    if isinstance(expr, exp.And):
-        return _conjuncts(expr.this) + _conjuncts(expr.expression)
-    if isinstance(expr, exp.Paren):
-        return _conjuncts(expr.this)
-    return [expr]
+    """Conjuncts in source order, without depending on Python recursion depth.
+
+    sqlglot represents long AND chains as nested binary nodes. Production
+    reports can exceed Python's default recursion limit, so this traversal is
+    deliberately iterative (same design as ``_flatten_or``).
+    """
+    conjuncts: list[exp.Expression] = []
+    stack = [expr]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, exp.And):
+            stack.append(node.expression)  # right side visited after left
+            stack.append(node.this)
+        elif isinstance(node, exp.Paren):
+            stack.append(node.this)
+        else:
+            conjuncts.append(node)
+    return conjuncts
 
 
 def _is_string_literal(node: exp.Expression | None) -> bool:
@@ -295,22 +308,25 @@ def _matches(example_norm: str, accepted_sets: list[tuple[str, ...]]) -> bool:
 # Public API 2: full rewrite — every changed condition must be rule-derived
 # ---------------------------------------------------------------------------
 def _atoms(tree: exp.Expression) -> list[exp.Expression]:
-    """Condition atoms of a statement: Or-chains are one atom (so OR→IN can
-    be recognised), every other Predicate is one atom. Subquery contents are
-    included; identical ones cancel out in the set comparison."""
-    atoms: list[exp.Expression] = []
+    """Condition atoms of a statement, using an iterative AST walk.
 
-    def walk(node: exp.Expression) -> None:
+    OR chains remain one atom so OR→IN can be recognised; every other
+    Predicate is one atom. Subquery contents are included. The iterative walk
+    prevents large AND-heavy statements from failing merely because their AST
+    depth exceeds Python's recursion limit.
+    """
+    atoms: list[exp.Expression] = []
+    stack = [tree]
+    while stack:
+        node = stack.pop()
         if isinstance(node, exp.Or):
             atoms.append(node)
-            return
+            continue
         if isinstance(node, exp.Predicate):
             atoms.append(node)
-            return
-        for child in node.iter_expressions():
-            walk(child)
-
-    walk(tree)
+            continue
+        children = list(node.iter_expressions())
+        stack.extend(reversed(children))
     return atoms
 
 

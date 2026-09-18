@@ -66,24 +66,39 @@ These are Class D (OUT_OF_SCOPE) in the catalog and belong to central DBA /
 infrastructure responsibility, or require a real test-environment measurement
 SQLCheck cannot perform.
 
-## What this Phase explicitly did NOT change
+## Phase 2 shadow-mode boundary
 
-Phase 1 (SQLCheck Oracle Knowledge v1) is a knowledge-layer-only PR. None of
-the following changed, and none of the following is authorized by adding to
-this skill or the catalog without a separate, explicitly-scoped PR:
+Phase 2 introduces one narrowly-scoped runtime consumer:
+`backend/app/services/pattern_selector.py` reads the catalog and maps
+**already-existing deterministic facts** to catalog ids.
 
-- `ai_service.py` runtime prompt assembly or gating (`_compute_gates`,
-  `candidate_forbidden_complexity_flags`, `_revalidate_suggested_sql`)
-- `backend/app/prompts/sql_review_zh_tw.txt`
-- Ollama parameters: `num_ctx`, `num_predict`, `think` default, `Semaphore(1)`,
-  timeout
-- `improvement_score.py` / `rules.yaml: improvement_score` (指數) or
-  `ai_service.improvement_potential` (改善潛力)
-- Frontend
+Its outputs are intentionally split:
+
+- **exact** — the catalog's specific detector matched (rule id, rewrite rule,
+  parser complexity flag, or the existing many-tables threshold).
+- **family_signal** — only a broader family signal matched. This is ambiguous
+  by definition and is never a confirmed pattern.
+
+`ai_service.py` may call the selector in **shadow mode** and log only pattern
+ids/counts. Selector failure is fail-open: it must never make the existing AI
+analysis unavailable. Pattern ids are not added to the request payload and no
+SQL/literal/table/model text is logged by the selector.
+
+The following remain explicitly out of scope unless a later, separately
+reviewed PR authorizes them:
+
+- injecting selected catalog content into the Gemma system/user prompt
+- changing `_compute_gates`, compliance, rewrite verification, improvement
+  score, or improvement-potential semantics based on selector output
+- changing `backend/app/prompts/sql_review_zh_tw.txt` merely to accommodate
+  selector output
+- Ollama parameters: `num_ctx`, `num_predict`, `think` default,
+  `Semaphore(1)`, timeout
+- Frontend / API response schema for pattern selection
 - Firewall / deploy behavior
 - Any new Oracle connection, application DB, vector DB, embeddings, RAG,
   LangChain/LangGraph, or fine-tuning
 
-A future "Pattern Selector" phase is what would let the Runtime read this
-catalog at request time. Nothing in this skill authorizes writing that
-selector.
+The next context-adapter phase may consume **exact** ids only. A
+`family_signal` must first gain a specific deterministic detector (and the
+catalog entry must be updated) before it can be treated as matched knowledge.

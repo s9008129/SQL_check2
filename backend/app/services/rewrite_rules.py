@@ -15,6 +15,15 @@ unverified. Anything outside this whitelist is never presented as an
 equivalent rewrite.
 
 Every rule documents its equivalence argument and any assumption it needs.
+
+2026-09-18 (SQLCheck Runtime Correctness v1): only rewrites whose
+equivalence can be proven from the SQL text alone belong here. TRUNC(col)=X
+→ range and NVL(col,'a')='b' → plain comparison were removed: the first
+needs X to carry no time component (and col to be a DATE, not a NUMBER or a
+time-zoned TIMESTAMP), the second needs col not to be CHAR/NCHAR
+(blank-padded vs. nonpadded comparison) — none of which SQLCheck can see.
+Fragments of those shapes are now "unverified", and a full rewrite that
+changes them is rejected. See backend/app/knowledge/pattern_catalog.yaml.
 """
 
 from __future__ import annotations
@@ -165,67 +174,6 @@ def _next_prefix(value: str) -> str | None:
     return value[:-1] + chr(ord(last) + 1)
 
 
-def _rule_trunc_eq(pred: exp.Expression) -> Rewrite | None:
-    """TRUNC(col) = X  →  col >= X AND col < X + 1
-
-    Equivalence holds when X is a date at midnight (a bind or TO_DATE without
-    time), which is how these predicates are written in practice; stated as
-    an assumption for the reviewer. Format-argument TRUNC (e.g. 'MM') is not
-    handled."""
-    if not isinstance(pred, exp.EQ):
-        return None
-    func, rhs = pred.this, pred.expression
-    if not _is_plain_trunc(func):
-        func, rhs = rhs, func
-        if not _is_plain_trunc(func):
-            return None
-    col = func.expressions[0]
-    if not isinstance(col, exp.Column):
-        return None
-    x = rhs.sql(dialect=DIALECT)
-    canonical = f"{_column_sql(col)} >= {x} AND {_column_sql(col)} < {x} + 1"
-    return Rewrite(
-        rule="trunc_eq_to_range",
-        canonical=canonical,
-        accepted=(normalize_text(canonical) or canonical,),
-        assumption=f"假設 {x} 為不含時分秒的日期值",
-    )
-
-
-def _is_plain_trunc(node: exp.Expression | None) -> bool:
-    """Oracle `TRUNC(col)` parses as exp.Anonymous(this="TRUNC", expressions=
-    [col]); `TRUNC(col, 'MM')` parses as exp.DateTrunc and is NOT handled
-    (its equivalent range depends on the unit)."""
-    return (
-        isinstance(node, exp.Anonymous)
-        and str(node.this).upper() == "TRUNC"
-        and len(node.expressions) == 1
-    )
-
-
-def _rule_nvl_eq(pred: exp.Expression) -> Rewrite | None:
-    """NVL(col, 'a') = 'b'  →  (col = 'b' OR col IS NULL) when a == b,
-    else col = 'b'. Exact: NVL substitutes 'a' only for NULL."""
-    if not isinstance(pred, exp.EQ):
-        return None
-    func, lit = pred.this, pred.expression
-    if _is_string_literal(func):
-        func, lit = lit, func
-    if not isinstance(func, exp.Coalesce) or not _is_string_literal(lit):
-        return None
-    exprs = [func.this, *func.expressions]
-    if len(exprs) != 2 or not isinstance(exprs[0], exp.Column) or not _is_string_literal(exprs[1]):
-        return None
-    col, default = exprs[0], str(exprs[1].this)
-    value = str(lit.this)
-    quoted = "'" + value.replace("'", "''") + "'"
-    if default == value:
-        canonical = f"({_column_sql(col)} = {quoted} OR {_column_sql(col)} IS NULL)"
-    else:
-        canonical = f"{_column_sql(col)} = {quoted}"
-    return Rewrite(rule="nvl_eq", canonical=canonical, accepted=(normalize_text(canonical) or canonical,))
-
-
 def _rule_or_eq_to_in(atom: exp.Expression) -> Rewrite | None:
     """col = a OR col = b [OR ...]  →  col IN (a, b, ...). Exact."""
     if not isinstance(atom, exp.Or):
@@ -261,7 +209,7 @@ def _rule_or_eq_to_in(atom: exp.Expression) -> Rewrite | None:
     return Rewrite(rule="or_eq_to_in", canonical=canonical, accepted=(normalize_text(canonical) or canonical,))
 
 
-_RULES = (_rule_substr_eq, _rule_trunc_eq, _rule_nvl_eq, _rule_or_eq_to_in)
+_RULES = (_rule_substr_eq, _rule_or_eq_to_in)
 
 
 def derive(atom: exp.Expression) -> Rewrite | None:

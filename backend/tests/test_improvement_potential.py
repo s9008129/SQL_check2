@@ -187,6 +187,41 @@ def test_unavailable_is_none():
     assert improvement_potential(AiResult(status="unavailable", message="m"), [_finding("BLOCK")]) == (None, [])
 
 
+# --- evidence source (2026-09-18 Runtime Correctness v1) --------------------
+# The derivation table above is unchanged; what changed is which advice can
+# become "verified"/"corrected" in the first place. TRUNC→range and NVL
+# rewrites are not provable from SQL text, so after the real advice
+# post-processing (ai_service._filter_advice → rewrite_rules.verify_fragment)
+# they must stay "unverified" and never count as server-verified evidence.
+def _through_runtime(before: str, example: str) -> AdviceItem:
+    from app.services.ai_service import _filter_advice
+
+    raw = AdviceItem(title="t", explanation="e", impact="high", before=before, example=example)
+    (item,) = _filter_advice([raw], forbidden=[], vocab={})
+    return item
+
+
+def test_trunc_and_nvl_rewrites_never_become_server_verified_evidence():
+    advice = [
+        _through_runtime("TRUNC(A.TXN_DATE) = :D", "A.TXN_DATE >= :D AND A.TXN_DATE < :D + 1"),
+        _through_runtime("NVL(A.S, 'N') = 'N'", "(A.S = 'N' OR A.S IS NULL)"),
+        _through_runtime("NVL(A.S, 'N') = 'Y'", "A.S = 'Y'"),
+    ]
+    assert [a.verification for a in advice] == ["unverified", "unverified", "unverified"]
+    # the system no longer substitutes its own "equivalent" text
+    assert advice[0].example == "A.TXN_DATE >= :D AND A.TXN_DATE < :D + 1"
+    level, basis = improvement_potential(_ok(advice, outcome="advice_only"), [_finding("NOTICE")])
+    assert level == "low"
+    assert not any("系統已驗證" in line for line in basis)
+
+
+def test_proven_substr_rewrite_still_counts_as_evidence():
+    item = _through_runtime("SUBSTR(A.C, 6, 3) = '551'", "A.C LIKE '__%551%'")
+    assert item.verification == "corrected"
+    assert item.example == "A.C LIKE '_____551%'"
+    assert improvement_potential(_ok([item], outcome="advice_only"), [])[0] == "medium"
+
+
 def test_basis_lists_rules_rewrite_and_verified_evidence_in_order():
     level, basis = improvement_potential(
         _ok([_advice("high", "verified"), _advice("low")], outcome="provided"),

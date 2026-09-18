@@ -52,10 +52,11 @@ def _good_inner(**overrides) -> dict:
         "suggested_sql": {
             "available": True,
             "reason": "此查詢結構單純，可提供建議寫法。",
-            # 2026-09-17: must be a rule-derivable rewrite of
-            # _clean_select_statement() (TRUNC → range), or re-validation
-            # rejects it as an unproven change to the conditions.
-            "sql": "SELECT A.X FROM T A WHERE A.Y >= :STR_001 AND A.Y < :STR_001 + 1",
+            # Must be a rule-derivable rewrite of _clean_select_statement()
+            # (same-column OR → IN), or re-validation rejects it as an
+            # unproven change to the conditions. (2026-09-18: was TRUNC →
+            # range, which is no longer server-provable.)
+            "sql": "SELECT A.X FROM T A WHERE A.Y IN (:STR_001, :STR_002)",
         },
         "estimated_improvement_pct": 47,
     }
@@ -64,9 +65,9 @@ def _good_inner(**overrides) -> dict:
 
 
 def _clean_select_statement():
-    # TRUNC on the condition column so a genuinely equivalent rewrite exists
-    # (see _good_inner); the literal is masked to :STR_001 on the way out.
-    return parse_sql_text("SELECT A.X FROM T A WHERE TRUNC(A.Y) = 'A123456789'").statements
+    # A same-column OR so a genuinely equivalent rewrite exists (see
+    # _good_inner); the literals are masked to :STR_001 / :STR_002.
+    return parse_sql_text("SELECT A.X FROM T A WHERE A.Y = 'A123456789' OR A.Y = 'B987654321'").statements
 
 
 def _multi_statement():
@@ -107,14 +108,14 @@ async def test_successful_response_populates_ok_result(settings, chat_url):
 
 @respx.mock
 async def test_suggested_sql_reverse_substitutes_masked_literal(settings, chat_url):
-    # The representative statement's literal 'A123456789' gets masked to
-    # :STR_001 before it reaches the payload; the model is told it may reuse
-    # that placeholder in its rewrite, and the server must restore it.
+    # The representative statement's literals get masked to :STR_001 /
+    # :STR_002 before they reach the payload; the model is told it may reuse
+    # those placeholders in its rewrite, and the server must restore them.
     respx.post(chat_url).mock(
         return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
     )
     result = await _call(settings, _clean_select_statement())
-    assert result.suggested_sql.sql == "SELECT A.X FROM T A WHERE A.Y >= 'A123456789' AND A.Y < 'A123456789' + 1"
+    assert result.suggested_sql.sql == "SELECT A.X FROM T A WHERE A.Y IN ('A123456789', 'B987654321')"
 
 
 # ---------------------------------------------------------------------------
@@ -278,8 +279,8 @@ async def test_outcome_provided_when_rewrite_passes_revalidation(settings, chat_
     inner = _good_inner(
         suggested_sql={
             "available": True,
-            "reason": "改用範圍比較。",
-            "sql": "SELECT A.X FROM T A WHERE A.Y >= :STR_001 AND A.Y < :STR_001 + 1",
+            "reason": "改用 IN 清單。",
+            "sql": "SELECT A.X FROM T A WHERE A.Y IN (:STR_001, :STR_002)",
             "rewrite_outcome": "provided",
         }
     )
@@ -466,15 +467,36 @@ async def test_suggested_sql_passing_revalidation_is_kept(settings, chat_url):
     inner = _good_inner(
         suggested_sql={
             "available": True,
-            "reason": "改用範圍比較。",
-            "sql": "SELECT A.X FROM T A WHERE A.Y >= :STR_001 AND A.Y < :STR_001 + 1",
+            "reason": "改用 IN 清單。",
+            "sql": "SELECT A.X FROM T A WHERE A.Y IN (:STR_001, :STR_002)",
         }
     )
     respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
     result = await _call(settings, _clean_select_statement())
 
     assert result.suggested_sql.available is True
-    assert result.suggested_sql.sql == "SELECT A.X FROM T A WHERE A.Y >= 'A123456789' AND A.Y < 'A123456789' + 1"
+    assert result.suggested_sql.sql == "SELECT A.X FROM T A WHERE A.Y IN ('A123456789', 'B987654321')"
+
+
+@respx.mock
+async def test_trunc_to_range_full_rewrite_is_rejected(settings, chat_url):
+    # 2026-09-18 Runtime Correctness v1: TRUNC(col)=X → range is not provable
+    # from SQL text (X may carry time; col may not be a DATE), so a full
+    # rewrite that makes this change is rejected instead of shown as validated.
+    inner = _good_inner(
+        suggested_sql={
+            "available": True,
+            "reason": "改用範圍比較。",
+            "sql": "SELECT A.X FROM T A WHERE A.Y >= :STR_001 AND A.Y < :STR_001 + 1",
+        }
+    )
+    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
+    trunc_stmt = parse_sql_text("SELECT A.X FROM T A WHERE TRUNC(A.Y) = 'A123456789'").statements
+    result = await _call(settings, trunc_stmt)
+
+    assert result.suggested_sql.available is False
+    assert result.suggested_sql.outcome == "rejected"
+    assert result.suggested_sql.sql is None
 
 
 @respx.mock

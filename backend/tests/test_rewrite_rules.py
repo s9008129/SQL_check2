@@ -51,29 +51,64 @@ def test_next_prefix_edge_cases():
     assert rr._next_prefix("AZ") is None
 
 
-# --- TRUNC -----------------------------------------------------------------
-def test_trunc_eq_range_verified_with_assumption():
+# --- TRUNC: never server-proven (2026-09-18 Runtime Correctness v1) --------
+# TRUNC(col)=X ⇔ col>=X AND col<X+1 needs X to carry no time component AND
+# col to be a DATE (for a NUMBER col TRUNC truncates toward zero, so
+# TRUNC(n)=0 is -1<n<1, not 0<=n<1). Neither is visible in SQL text, so no
+# RHS shape — bind, expression or literal — may be verified or corrected.
+def test_trunc_eq_range_with_unknown_bind_is_not_verified():
     v = _v("TRUNC(A.TXN_DATE) = :D", "A.TXN_DATE >= :D AND A.TXN_DATE < :D + 1")
-    assert v.status == "verified"
-    assert v.assumption and ":D" in v.assumption
+    assert v.status == "unverified"
+    assert v.example == "A.TXN_DATE >= :D AND A.TXN_DATE < :D + 1"
+    assert v.assumption is None
 
 
-def test_trunc_eq_wrong_range_corrected():
+def test_trunc_eq_is_never_corrected_by_the_system():
+    # Previously the system replaced this with its own range as "corrected".
     v = _v("TRUNC(A.TXN_DATE) = :D", "A.TXN_DATE BETWEEN :D AND :D + 1")
-    assert v.status == "corrected"
-    assert "< :D + 1" in v.example
+    assert v.status == "unverified"
+    assert v.example == "A.TXN_DATE BETWEEN :D AND :D + 1"
 
 
-# --- NVL -------------------------------------------------------------------
-def test_nvl_same_default_becomes_or_is_null():
+def test_trunc_eq_with_generic_expression_rhs_is_not_verified():
+    assert _v("TRUNC(A.D) = SYSDATE - 1", "A.D >= SYSDATE - 1 AND A.D < SYSDATE").status == "unverified"
+    assert _v("TRUNC(A.D) = B.D", "A.D >= B.D AND A.D < B.D + 1").status == "unverified"
+
+
+def test_trunc_eq_with_literal_that_may_carry_time_is_not_verified():
+    before = "TRUNC(A.D) = TO_DATE('2026-09-18 10:00', 'YYYY-MM-DD HH24:MI')"
+    example = (
+        "A.D >= TO_DATE('2026-09-18 10:00', 'YYYY-MM-DD HH24:MI') "
+        "AND A.D < TO_DATE('2026-09-18 10:00', 'YYYY-MM-DD HH24:MI') + 1"
+    )
+    assert _v(before, example).status == "unverified"
+
+
+def test_trunc_eq_with_time_free_date_literal_is_still_not_verified():
+    # Boundary: the RHS provably has no time, but the column type is unknown.
+    v = _v("TRUNC(A.D) = DATE '2026-09-18'", "A.D >= DATE '2026-09-18' AND A.D < DATE '2026-09-18' + 1")
+    assert v.status == "unverified"
+
+
+def test_trunc_eq_with_numeric_rhs_is_not_verified():
+    assert _v("TRUNC(A.N) = 0", "A.N >= 0 AND A.N < 0 + 1").status == "unverified"
+
+
+# --- NVL: never server-proven (CHAR blank-padded vs VARCHAR2 nonpadded) ----
+def test_nvl_same_default_is_not_verified():
     v = _v("NVL(A.S, 'N') = 'N'", "(A.S = 'N' OR A.S IS NULL)")
-    assert v.status == "verified"
+    assert v.status == "unverified"
 
 
-def test_nvl_other_value_becomes_plain_eq():
+def test_nvl_other_value_is_never_corrected_by_the_system():
+    # Previously the system replaced the model's text with "A.S = 'Y'".
     v = _v("NVL(A.S, 'N') = 'Y'", "A.S = 'Y' OR A.S IS NULL")
-    assert v.status == "corrected"
-    assert v.example == "A.S = 'Y'"
+    assert v.status == "unverified"
+    assert v.example == "A.S = 'Y' OR A.S IS NULL"
+
+
+def test_nvl_plain_comparison_is_not_verified():
+    assert _v("NVL(A.S, 'x') = 'b'", "A.S = 'b'").status == "unverified"
 
 
 # --- OR → IN ---------------------------------------------------------------
@@ -95,11 +130,20 @@ def test_prose_before_is_unverified():
 
 
 def test_multi_conjunct_before_each_part_checked():
-    before = "TRUNC(A.D) = :X AND A.S = '1'"
-    ok = "A.D >= :X AND A.D < :X + 1 AND A.S = '1'"
+    before = "SUBSTR(A.C, 1, 3) = '107' AND A.S = '1'"
+    ok = "A.C LIKE '107%' AND A.S = '1'"
     assert _v(before, ok).status == "verified"
     # dropping the untouched conjunct is not equivalent
-    assert _v(before, "A.D >= :X AND A.D < :X + 1").status == "corrected"
+    assert _v(before, "A.C LIKE '107%'").status == "corrected"
+
+
+def test_multi_conjunct_unproven_part_must_stay_unchanged():
+    # SUBSTR is proven, TRUNC is not: the system's own correction keeps the
+    # TRUNC conjunct exactly as written instead of rewriting it.
+    before = "SUBSTR(A.C, 1, 3) = '107' AND TRUNC(A.D) = :X"
+    v = _v(before, "A.C LIKE '107%' AND A.D >= :X AND A.D < :X + 1")
+    assert v.status == "corrected"
+    assert v.example == "A.C LIKE '107%' AND TRUNC(A.D) = :X"
 
 
 # --- full rewrite predicate check ------------------------------------------
@@ -109,10 +153,28 @@ def _trees(orig: str, sugg: str):
 
 def test_full_rewrite_with_rule_derived_change_ok():
     o, s = _trees(
+        "SELECT A.X FROM T A WHERE SUBSTR(A.C, 1, 3) = '107' AND A.S = '1'",
+        "SELECT A.X FROM T A WHERE A.C LIKE '107%' AND A.S = '1'",
+    )
+    assert rr.verify_predicate_changes(o, s) == (True, None)
+
+
+def test_full_rewrite_changing_trunc_to_range_is_rejected():
+    o, s = _trees(
         "SELECT A.X FROM T A WHERE TRUNC(A.D) = :X AND A.S = '1'",
         "SELECT A.X FROM T A WHERE A.D >= :X AND A.D < :X + 1 AND A.S = '1'",
     )
-    assert rr.verify_predicate_changes(o, s) == (True, None)
+    ok, why = rr.verify_predicate_changes(o, s)
+    assert ok is False and why == rr.REASON_UNVERIFIABLE_CHANGE
+
+
+def test_full_rewrite_changing_nvl_is_rejected():
+    o, s = _trees(
+        "SELECT A.X FROM T A WHERE NVL(A.S, 'N') = 'N'",
+        "SELECT A.X FROM T A WHERE (A.S = 'N' OR A.S IS NULL)",
+    )
+    ok, why = rr.verify_predicate_changes(o, s)
+    assert ok is False and why == rr.REASON_UNVERIFIABLE_CHANGE
 
 
 def test_full_rewrite_with_unprovable_change_rejected():

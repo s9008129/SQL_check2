@@ -222,20 +222,21 @@ patterns:
     classification: ADVICE_ONLY
     oracle_applicable: true
     detection:
-      source: rewrite_rules
-      rewrite_rule_ids: [trunc_eq_to_range]
+      source: prompt_heuristic_only
       family_signals:
         rule_ids: [R005]
         qualifier_zh_tw: >
           R005 對任何「條件欄位套函數」都會命中，無法分辨是否為 TRUNC 等於
-          比對；本 pattern 的具體偵測是 rewrite_rules._rule_trunc_eq。
+          比對。rewrite_rules.py 自 2026-09-18 起已沒有 TRUNC 專屬規則，只剩
+          系統提示要求模型把這類改寫當成需要前提的 advice_only。
     rationale_zh_tw: >
-      TRUNC(col) = X 與 col >= X AND col < X + 1 只有在 X 不含時分秒時才等價。
-      若 X（綁定變數或運算式）實際帶有時間，例如當天 10:00，原條件因 TRUNC
-      結果一定是午夜而不會命中任何資料，範圍寫法卻會回傳當天 10:00 到隔天
-      10:00 的資料，兩者結果不同。SQLCheck 看不到綁定變數的實際值，無法證明
-      這個前提，因此只能提供方向並寫明前提。TRUNC(col, '格式') 帶格式參數的
-      用法不在此規則範圍內。
+      TRUNC(col) = X 與 col >= X AND col < X + 1 只有在 X 不含時分秒、且 col 是
+      DATE 時才等價。若 X（綁定變數或運算式）實際帶有時間，例如當天 10:00，
+      原條件因 TRUNC 結果一定是午夜而不會命中任何資料，範圍寫法卻會回傳當天
+      10:00 到隔天 10:00 的資料。即使 X 是不含時間的日期常數，col 若是數值
+      欄位，TRUNC 是去掉小數部分，TRUNC(n) = 0 對應 -1 < n < 1，範圍寫法卻是
+      0 <= n < 1。SQLCheck 看不到綁定變數的實際值，也看不到欄位型別，只憑
+      SQL 文字找不到可以證明等價的子集，因此只能提供方向並寫明前提。
     allowed_behavior:
       explain: true
       advice: true
@@ -247,21 +248,11 @@ patterns:
     verification:
       required_for_rewrite: true
       mechanism: none
-    runtime_gap:
-      kind: unverified_precondition
-      runtime_rule: trunc_eq_to_range
-      description_zh_tw: >
-        既有 rewrite_rules._rule_trunc_eq 只把「假設 X 為不含時分秒的日期值」
-        寫成給審核者看的 assumption 文字，沒有驗證 X 真的不含時間；
-        verify_fragment 仍會把符合推導的片段標成 verified 或 corrected。
-      required_action_zh_tw: >
-        本 PR 不修改 Runtime。Phase 2（Pattern Selector）之前需另開 correctness
-        PR，加入可驗證前提的 deterministic gate（例如只在 X 是明確不含時間的
-        日期字面值時才推導），或把 runtime 的標示降為未驗證；完成前不得升為
-        VERIFIED_REWRITE，未來 selector 也不得自動信任這條 runtime rule。
     sources:
       - type: internal
-        ref: backend/app/services/rewrite_rules.py::_rule_trunc_eq
+        ref: backend/app/services/rewrite_rules.py 模組說明（2026-09-18 移除 TRUNC 推導規則）
+      - type: internal
+        ref: backend/tests/test_rewrite_rules.py TRUNC 段落（綁定變數、運算式、可能帶時間的常數、數值欄位皆為 unverified）
       - type: internal
         ref: "PR #2 third-party review item 1 (2026-09-18)"
 
@@ -271,13 +262,13 @@ patterns:
     classification: ADVICE_ONLY
     oracle_applicable: true
     detection:
-      source: rewrite_rules
-      rewrite_rule_ids: [nvl_eq]
+      source: prompt_heuristic_only
       family_signals:
         rule_ids: [R005]
         qualifier_zh_tw: >
           R005 對任何「條件欄位套函數」都會命中，無法分辨是否為 NVL 等於
-          比對；本 pattern 的具體偵測是 rewrite_rules._rule_nvl_eq。
+          比對。rewrite_rules.py 自 2026-09-18 起已沒有 NVL 專屬規則；系統提示
+          的檢查項 (1) 仍要求模型檢查條件欄位上的 NVL。
     rationale_zh_tw: >
       只看 NULL 代換的邏輯時，NVL(col, 'a') = 'b' 在 a == b 時對應
       (col = 'b' OR col IS NULL)，a != b 時對應 col = 'b'；但 Oracle 的比較
@@ -297,20 +288,9 @@ patterns:
     verification:
       required_for_rewrite: true
       mechanism: none
-    runtime_gap:
-      kind: unverified_precondition
-      runtime_rule: nvl_eq
-      description_zh_tw: >
-        既有 rewrite_rules._rule_nvl_eq 沒有欄位型別資訊，也沒有附任何
-        assumption，就把推導結果當成等價；verify_fragment 會把符合推導的片段
-        標成 verified 或 corrected，CHAR／NCHAR 欄位時這個標示可能是錯的。
-      required_action_zh_tw: >
-        本 PR 不修改 Runtime。Phase 2（Pattern Selector）之前需另開 correctness
-        PR，加入能證明欄位不是 CHAR／NCHAR（或其他型別前提）的 deterministic
-        gate，或把 runtime 的標示降為未驗證；完成前不得升為 VERIFIED_REWRITE。
     sources:
       - type: internal
-        ref: backend/app/services/rewrite_rules.py::_rule_nvl_eq
+        ref: backend/app/services/rewrite_rules.py 模組說明（2026-09-18 移除 NVL 推導規則）
       - type: oracle_documentation
         ref: https://docs.oracle.com/en/database/oracle/oracle-database/26/sqlrf/NVL.html
       - type: oracle_documentation
@@ -398,18 +378,18 @@ patterns:
       family_signals:
         rule_ids: [R005]
         qualifier_zh_tw: >
-          R005 對任何條件欄位函數都會命中（含 SUBSTR／TRUNC／NVL 這些已有
-          runtime rule 的形式），無法確認函數落在 rewrite_rules.py 的處理範圍
-          之外；要確認屬於本 pattern 還需要額外的 AST 判定，目前不存在。
+          R005 對任何條件欄位函數都會命中（含已有 runtime rule 的 SUBSTR
+          形式），無法確認函數落在 rewrite_rules.py 的處理範圍之外；要確認
+          屬於本 pattern 還需要額外的 AST 判定，目前不存在。
           系統提示的檢查項 (1) 要求模型逐項檢查條件欄位函數。
     rationale_zh_tw: >
       條件欄位套用函數（TRIM／TO_CHAR／自訂函數等未被 rewrite_rules.py 涵蓋
       的形式）通常有機會改寫成欄位本身的直接比較，但每種函數的等價改法都需
       要個別驗證語意（型別、NULL 行為、格式假設）。治理上目前只認可
       SUBSTR 等於比對改為 canonical LIKE 這一種形式為已證明（見
-      SUBSTR_EQ_TO_LIKE）；TRUNC／NVL 雖有 runtime rule，但仍有未驗證前提
-      （見 TRUNC_EQ_TO_RANGE、NVL_EQ_TO_OR_IS_NULL 的 runtime_gap）。其餘
-      一律只能提供方向。
+      SUBSTR_EQ_TO_LIKE）；TRUNC／NVL 的改寫需要 SQL 文字看不到的前提，
+      runtime 自 2026-09-18 起不再推導（見 TRUNC_EQ_TO_RANGE、
+      NVL_EQ_TO_OR_IS_NULL）。其餘一律只能提供方向。
     allowed_behavior:
       explain: true
       advice: true

@@ -43,7 +43,7 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from app.schemas import AdviceItem, AiResult, Finding, SuggestedSql
-from app.services import pattern_selector, rewrite_rules, rule_engine
+from app.services import context_adapter, pattern_selector, rewrite_rules, rule_engine
 from app.services.masking import mask_sql, scrub_invented_placeholders, unmask_sql
 from app.services.rule_engine import GLOBAL_STATEMENT_INDEX
 from app.services.sql_parser import ParsedStatement, parse_sql_text, structural_signature
@@ -372,6 +372,7 @@ def _build_payload(
     literal_hints: dict[str, dict[str, Any]] | None = None,
     where_evidence: dict[str, str] | None = None,
     structure_flags: list[str] | None = None,
+    knowledge_context: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """PRD §20's field set plus two additive, non-sensitive fields (2026-09-
     16): `literal_hints` (placeholder -> shape/length/wildcard, never the
@@ -398,6 +399,11 @@ def _build_payload(
         # nothing told it the pattern was there; findings only carry rule
         # hits, and complexity flags were never in the payload.
         "structure_flags": sorted(structure_flags or []),
+        # Phase 3 compact context: exact Pattern Selector matches only. The
+        # adapter already removes family signals / OUT_OF_SCOPE and enforces
+        # top-N + character budgets. Values are static catalog guidance, never
+        # user SQL or literals.
+        "knowledge_context": knowledge_context or [],
     }
     if where_evidence is not None:
         payload["where_evidence"] = where_evidence
@@ -1135,20 +1141,35 @@ async def get_ai_result(
             statements, findings, settings.ai_gate, sql_tokens=sql_tokens, num_predict=settings.ollama.num_predict
         )
 
-        # Phase 2 shadow mode: deterministically select catalog patterns but do
-        # not add them to the Gemma payload yet. This is diagnostics-only and
-        # fail-open by design: selector/catalog problems must never make the
-        # existing AI path unavailable. Log ids only — never SQL/literals.
+        # Pattern Selector stays fail-open: a catalog/selector problem must
+        # never make the existing AI path unavailable. Phase 3 additionally
+        # compiles a *bounded exact-only* context for the representative
+        # statement. Family signals and OUT_OF_SCOPE entries never reach Gemma.
+        selection = pattern_selector.PatternSelection()
         try:
             selection = pattern_selector.select_patterns(statements, findings, settings.rules_config)
             shadow = selection.log_fields()
             logger.info(
-                "ai_service: pattern_selector shadow exact=%s family=%s",
+                "ai_service: pattern_selector exact=%s family=%s",
                 shadow["exact_ids"],
                 shadow["family_signal_ids"],
             )
-        except Exception as exc:  # noqa: BLE001 - shadow diagnostics cannot break analysis
-            logger.warning("ai_service: pattern_selector shadow failed: %s", type(exc).__name__)
+        except Exception as exc:  # noqa: BLE001 - knowledge diagnostics cannot break analysis
+            logger.warning("ai_service: pattern_selector failed: %s", type(exc).__name__)
+
+        knowledge_context: list[dict[str, str]] = []
+        try:
+            knowledge_context = context_adapter.build_knowledge_context(
+                selection,
+                settings.knowledge_context,
+                statement_index=representative.index if representative is not None else None,
+            )
+            logger.info(
+                "ai_service: knowledge_context ids=%s",
+                context_adapter.context_ids(knowledge_context),
+            )
+        except Exception as exc:  # noqa: BLE001 - context is advisory and fail-open
+            logger.warning("ai_service: knowledge_context failed: %s", type(exc).__name__)
 
         where_evidence = None
         if representative is not None and representative.restriction_kind is not None:
@@ -1185,6 +1206,7 @@ async def get_ai_result(
                 literal_hints=mask_result.literal_hints,
                 where_evidence=where_evidence,
                 structure_flags=sorted(representative.complexity_flags) if representative else [],
+                knowledge_context=knowledge_context,
             )
 
         payload = build(candidate_allowed)

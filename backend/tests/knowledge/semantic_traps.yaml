@@ -1,0 +1,200 @@
+# Golden Semantic Trap dataset (Phase 1 — SQLCheck Oracle Knowledge v1).
+#
+# Purpose: NOT to test whether the AI proposes more suggestions. It is to
+# give `tests/test_semantic_traps.py` a fixed, synthetic, de-identified set
+# of cases proving that SQLCheck's EXISTING deterministic verifiers
+# (backend/app/services/rewrite_rules.py, backend/app/services/sql_parser.py)
+# already refuse to bless the exact rewrites section 10 of the Phase-1 task
+# calls out as semantic traps — independent of whatever any future Gemma
+# integration proposes. No Ollama, no live model, no real tax SQL, no
+# application numbers. Table/column names below are synthetic placeholders.
+#
+# `mechanism` tells tests/test_semantic_traps.py which pure deterministic
+# function to call:
+#   verify_fragment          -> app.services.rewrite_rules.verify_fragment(before, candidate_example)
+#   structural_signature_diff -> app.services.sql_parser.structural_signature()
+#                                 compared before vs candidate (via parse_sql_text)
+#   complexity_flag_presence -> app.services.sql_parser.parse_sql_text(sql)
+#                                 .statements[0].complexity_flags
+#
+# `kind` follows the Phase-1 spec: positive / negative / boundary /
+# semantic_trap / clean_control. Not every pattern needs every kind — only
+# the ones that are meaningful for that pattern's specific failure mode.
+
+schema_version: 1
+
+cases:
+  # ---------------------------------------------------------------------
+  # Trap 1: UPPER/LOWER removal — WHERE UPPER(col)='X' -> WHERE col='x'
+  # ---------------------------------------------------------------------
+  - id: upper_removal_semantic_trap
+    pattern_id: UPPER_CASE_FOLD_REMOVAL
+    kind: semantic_trap
+    mechanism: verify_fragment
+    before: "UPPER(A.EMAIL) = 'ABC'"
+    candidate_example: "A.EMAIL = 'abc'"
+    expected_status: unverified
+    forbidden_automatic_rewrite: true
+    notes_zh_tw: >
+      系統沒有任何 UPPER／LOWER 移除的證明規則，永遠回傳 unverified，
+      不會被誤標為 verified 或 corrected。
+
+  - id: upper_removal_clean_control
+    pattern_id: UPPER_CASE_FOLD_REMOVAL
+    kind: clean_control
+    mechanism: verify_fragment
+    before: "A.EMAIL = 'abc'"
+    candidate_example: "A.EMAIL = 'abc'"
+    expected_status: unverified
+    forbidden_automatic_rewrite: true
+    notes_zh_tw: >
+      條件欄位本來就沒有套用函數，沒有 pattern 可比對；驗證器同樣回傳
+      unverified（而不是誤判為 verified），顯示驗證器對「無需改寫」也不會
+      過度自信地蓋章。
+
+  # ---------------------------------------------------------------------
+  # Trap 2: NOT IN -> NOT EXISTS (NULL semantics)
+  # ---------------------------------------------------------------------
+  - id: not_in_to_not_exists_semantic_trap
+    pattern_id: NOT_IN_SUBQUERY_TO_NOT_EXISTS
+    kind: semantic_trap
+    mechanism: verify_fragment
+    before: "A.C NOT IN (SELECT B.C FROM B)"
+    candidate_example: "NOT EXISTS (SELECT 1 FROM B WHERE B.C = A.C)"
+    expected_status: unverified
+    forbidden_automatic_rewrite: true
+    notes_zh_tw: >
+      NOT IN 在子查詢可能含 NULL 時與 NOT EXISTS 不等價；系統沒有這個
+      pattern 的證明規則，一律 unverified，不會被誤標為等價。
+
+  - id: not_in_to_not_exists_boundary_unchanged_text
+    pattern_id: NOT_IN_SUBQUERY_TO_NOT_EXISTS
+    kind: boundary
+    mechanism: verify_fragment
+    before: "A.C NOT IN (SELECT B.C FROM B)"
+    candidate_example: "A.C NOT IN (SELECT B.C FROM B)"
+    expected_status: unverified
+    forbidden_automatic_rewrite: true
+    notes_zh_tw: >
+      即使建議文字與原文逐字相同，系統仍不會因為「沒有改變」就自行升級為
+      verified——NOT IN 不在任何規則的處理範圍內，維持 unverified。
+
+  # ---------------------------------------------------------------------
+  # Trap 3: LEFT JOIN -> INNER JOIN (drops unmatched main-table rows)
+  # ---------------------------------------------------------------------
+  - id: left_join_to_inner_join_semantic_trap
+    pattern_id: LEFT_JOIN_TO_INNER_JOIN
+    kind: semantic_trap
+    mechanism: structural_signature_diff
+    before_sql: "SELECT A.ID FROM T A LEFT JOIN S B ON A.ID = B.ID"
+    candidate_sql: "SELECT A.ID FROM T A INNER JOIN S B ON A.ID = B.ID"
+    expect_equal: false
+    diff_fields: [join_sides]
+    forbidden_automatic_rewrite: true
+    notes_zh_tw: >
+      structural_signature 的 join_sides 會記到 LEFT 與（空字串／INNER）的
+      差異，兩份簽章不相等——這正是 ai_service._revalidate_suggested_sql
+      用來擋下這類整段改寫的依據，本測試只驗證這個底層事實成立。
+
+  - id: left_join_clean_control_unchanged
+    pattern_id: LEFT_JOIN_TO_INNER_JOIN
+    kind: clean_control
+    mechanism: structural_signature_diff
+    before_sql: "SELECT A.ID FROM T A LEFT JOIN S B ON A.ID = B.ID"
+    candidate_sql: "SELECT A.ID FROM T A LEFT JOIN S B ON A.ID = B.ID"
+    expect_equal: true
+    diff_fields: []
+    forbidden_automatic_rewrite: true
+    notes_zh_tw: >
+      JOIN 種類完全沒變時，兩份簽章相等；即便如此，這個 pattern 仍是
+      ADVICE_ONLY，不會因為簽章相等就變成可以自動改寫的 Class A。
+
+  # ---------------------------------------------------------------------
+  # Trap 4: DISTINCT removal without a uniqueness proof
+  # ---------------------------------------------------------------------
+  - id: distinct_removal_semantic_trap
+    pattern_id: DISTINCT_REMOVAL
+    kind: semantic_trap
+    mechanism: structural_signature_diff
+    before_sql: "SELECT DISTINCT A.ID FROM T A JOIN S B ON A.ID = B.ID"
+    candidate_sql: "SELECT A.ID FROM T A JOIN S B ON A.ID = B.ID"
+    expect_equal: false
+    diff_fields: [distinct]
+    forbidden_automatic_rewrite: true
+    notes_zh_tw: >
+      移除 DISTINCT 使 distinct 欄位從 true 變 false，兩份簽章不相等，
+      證明系統看得到這個改變，不會被靜默放行。
+
+  - id: distinct_removal_clean_control
+    pattern_id: DISTINCT_REMOVAL
+    kind: clean_control
+    mechanism: structural_signature_diff
+    before_sql: "SELECT DISTINCT A.ID FROM T A JOIN S B ON A.ID = B.ID"
+    candidate_sql: "SELECT DISTINCT A.ID FROM T A JOIN S B ON A.ID = B.ID"
+    expect_equal: true
+    diff_fields: []
+    forbidden_automatic_rewrite: true
+    notes_zh_tw: >
+      DISTINCT 保留不動時兩份簽章相等；此 pattern 仍是 ADVICE_ONLY，
+      簽章相等不代表可以自動移除 DISTINCT。
+
+  # ---------------------------------------------------------------------
+  # Trap 5: cross-column OR -> UNION ALL (row duplication if overlapping)
+  # ---------------------------------------------------------------------
+  - id: or_cross_column_to_union_all_semantic_trap
+    pattern_id: OR_CROSS_COLUMN_TO_UNION_ALL
+    kind: semantic_trap
+    mechanism: structural_signature_diff
+    before_sql: "SELECT A.ID FROM T A WHERE A.C = 1 OR A.D = 2"
+    candidate_sql: "SELECT A.ID FROM T A WHERE A.C = 1 UNION ALL SELECT A.ID FROM T A WHERE A.D = 2"
+    expect_equal: false
+    diff_fields: [select_count]
+    forbidden_automatic_rewrite: true
+    notes_zh_tw: >
+      UNION ALL 改寫多出一個 SELECT 分支，structural_signature 的
+      select_count（跨分支加總的選取欄位數）從 1 變成 2，兩份簽章不相等，
+      證明系統能偵測到這個結構改變——具體的重複列風險仍需人工依資料判斷，
+      系統只負責偵測「結構變了」，不負責判斷「所以會不會真的重複」。
+      同欄位 OR 改 IN（不同 pattern，見 OR_SAME_COLUMN_TO_IN／Class A）不受
+      本案例影響。
+
+  - id: or_cross_column_clean_control
+    pattern_id: OR_CROSS_COLUMN_TO_UNION_ALL
+    kind: clean_control
+    mechanism: structural_signature_diff
+    before_sql: "SELECT A.ID FROM T A WHERE A.C = 1 OR A.D = 2"
+    candidate_sql: "SELECT A.ID FROM T A WHERE A.C = 1 OR A.D = 2"
+    expect_equal: true
+    diff_fields: []
+    forbidden_automatic_rewrite: true
+    notes_zh_tw: >
+      未改寫時兩份簽章自然相等，作為對照組確認比對機制本身沒有誤報。
+
+  # ---------------------------------------------------------------------
+  # Trap 6: correlated subquery -> window function (NULL/partition risk)
+  # ---------------------------------------------------------------------
+  - id: correlated_subquery_detected_as_forbidden_candidate_flag
+    pattern_id: CORRELATED_SUBQUERY_TO_JOIN_OR_WINDOW
+    kind: semantic_trap
+    mechanism: complexity_flag_presence
+    sql: "SELECT A.ID FROM T A WHERE A.AMT = (SELECT MAX(B.AMT) FROM S B WHERE B.ID = A.ID)"
+    expected_flag_present: correlated_subquery
+    forbidden_automatic_rewrite: true
+    notes_zh_tw: >
+      這段 SQL 的相關子查詢（子查詢引用外層別名 A.ID）會被 sql_parser 標記
+      complexity_flags 含 correlated_subquery；這個旗標同時列在
+      app.yaml ai_gate.candidate_forbidden_complexity_flags，代表 Runtime
+      連候選改寫都不會產生，是比一般 ADVICE_ONLY 更嚴格的既有防線。
+      本測試只驗證「值測得到」這個事實，不觸發、不呼叫 ai_service／Ollama。
+
+  - id: correlated_subquery_negative_uncorrelated_subquery
+    pattern_id: CORRELATED_SUBQUERY_TO_JOIN_OR_WINDOW
+    kind: negative
+    mechanism: complexity_flag_presence
+    sql: "SELECT A.ID FROM T A WHERE A.AMT = (SELECT MAX(B.AMT) FROM S B)"
+    expected_flag_absent: correlated_subquery
+    forbidden_automatic_rewrite: true
+    notes_zh_tw: >
+      子查詢沒有引用外層任何別名（非相關子查詢），不應被標記
+      correlated_subquery——用來確認偵測器不會對一般子查詢過度標記
+      （偽陽性），這種情況才可能是本 pattern 的候選案例來源之一。

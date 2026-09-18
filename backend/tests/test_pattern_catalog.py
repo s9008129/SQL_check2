@@ -382,43 +382,85 @@ def test_in_list_verified_rewrite_never_authorizes_more_than_oracle_limit(patter
 
 
 def _derive_same_column_or_chain(n: int):
-    """Derive a synthetic `A.C = 1 OR ... OR A.C = n` chain with the recursion
-    limit temporarily raised, so this probes the rule's logic rather than the
-    accidental RecursionError cutoff (~997 values at the default limit)."""
-    import sys
-
+    """Derive a synthetic `A.C = 1 OR ... OR A.C = n` chain at the default
+    recursion limit (the runtime flattens OR chains iteratively)."""
     from app.services import rewrite_rules as rr
 
     atom = rr.parse_predicate(" OR ".join(f"A.C = {i}" for i in range(1, n + 1)))
     assert atom is not None, f"synthetic {n}-value OR chain failed to parse"
-    old_limit = sys.getrecursionlimit()
-    sys.setrecursionlimit(max(old_limit, 10 * n))
-    try:
-        return rr.derive(atom)
-    finally:
-        sys.setrecursionlimit(old_limit)
+    return rr.derive(atom)
 
 
-def test_runtime_or_to_in_over_oracle_limit_is_recorded_as_runtime_gap(patterns: list[dict[str, Any]]) -> None:
-    """If the runtime rule's logic still turns a 1001-value OR chain into one
-    IN list, the catalog must say so explicitly. Once a correctness PR adds an
-    explicit ≤1000 check to rewrite_rules.py, the 1001 probe derives nothing
-    and the runtime_gap may be removed."""
-    inside = _derive_same_column_or_chain(_ORACLE_IN_LIST_MAX_EXPRESSIONS)
-    assert inside is not None and inside.rule == "or_eq_to_in", "probe sanity: 1000 values must still derive IN"
+def test_runtime_or_to_in_matches_catalog_boundary_and_gap(patterns: list[dict[str, Any]]) -> None:
+    """The runtime must never authorize more than the catalog boundary, and
+    the catalog's runtime_gap must exist exactly when the runtime still
+    derives an IN list past that boundary."""
+    from app.services import rewrite_rules as rr
 
-    over = _derive_same_column_or_chain(_ORACLE_IN_LIST_MAX_EXPRESSIONS + 1)
-    if over is None:
-        return
-    assert over.canonical.count(",") + 1 == _ORACLE_IN_LIST_MAX_EXPRESSIONS + 1
     p = _owner_of_runtime_rule(patterns, "or_eq_to_in")
-    gap = p.get("runtime_gap") or {}
-    if p.get("classification") == "VERIFIED_REWRITE":
-        assert gap.get("kind") == "unauthorized_accepted_form" and gap.get("runtime_rule") == "or_eq_to_in", (
-            f"{p.get('id')}: runtime derives IN lists over Oracle's limit; record it as an unauthorized_accepted_form runtime_gap"
+    limit = (p.get("authorized_boundary") or {}).get("max_in_list_expressions")
+    assert isinstance(limit, int)
+    assert limit >= rr.ORACLE_IN_LIST_MAX_EXPRESSIONS, "runtime IN-list limit exceeds the catalog's authorized boundary"
+
+    inside = _derive_same_column_or_chain(rr.ORACLE_IN_LIST_MAX_EXPRESSIONS)
+    assert inside is not None and inside.rule == "or_eq_to_in", "probe sanity: the runtime limit itself must still derive IN"
+    runtime_accepts_over_limit = _derive_same_column_or_chain(limit + 1) is not None
+    assert runtime_accepts_over_limit == bool(p.get("runtime_gap")), (
+        f"{p.get('id')}: runtime {'still derives' if runtime_accepts_over_limit else 'no longer derives'} "
+        f"a {limit + 1}-value IN list, so runtime_gap must {'be declared' if runtime_accepts_over_limit else 'be removed'}"
+    )
+
+
+# Synthetic probes of forms the catalog does NOT certify, keyed by the pattern
+# that governs them: (before, example, statuses meaning "the runtime certifies
+# this form"). For SUBSTR only "verified" counts — "corrected" means the
+# runtime replaced the range with its own canonical LIKE, which is certified.
+_UNCERTIFIED_FORM_PROBES: dict[str, list[tuple[str, str, frozenset[str]]]] = {
+    "SUBSTR_EQ_TO_LIKE": [
+        ("SUBSTR(A.C, 1, 3) = '107'", "A.C >= '107' AND A.C < '108'", frozenset({"verified"})),
+    ],
+    "TRUNC_EQ_TO_RANGE": [
+        ("TRUNC(A.D) = :X", "A.D >= :X AND A.D < :X + 1", frozenset({"verified", "corrected"})),
+        ("TRUNC(A.D) = :X", "A.D BETWEEN :X AND :X + 1", frozenset({"verified", "corrected"})),
+    ],
+    "NVL_EQ_TO_OR_IS_NULL": [
+        ("NVL(A.S, 'N') = 'N'", "(A.S = 'N' OR A.S IS NULL)", frozenset({"verified", "corrected"})),
+        ("NVL(A.S, 'N') = 'Y'", "A.S = 'Y'", frozenset({"verified", "corrected"})),
+    ],
+    "OR_SAME_COLUMN_TO_IN": [
+        (
+            " OR ".join(f"A.C = {i}" for i in range(1, 1002)),
+            f"A.C IN ({', '.join(str(i) for i in range(1, 1002))})",
+            frozenset({"verified", "corrected"}),
+        ),
+    ],
+}
+
+
+def test_runtime_gap_matches_what_the_runtime_actually_certifies(patterns: list[dict[str, Any]]) -> None:
+    """Runtime Correctness v1: the catalog's runtime_gap must describe the
+    runtime exactly — declared while the runtime still certifies a form the
+    catalog does not, removed once it no longer does."""
+    from app.services import rewrite_rules as rr
+
+    by_id = {p.get("id"): p for p in patterns}
+    for pid, probes in _UNCERTIFIED_FORM_PROBES.items():
+        assert pid in by_id, f"probe refers to unknown pattern {pid!r}"
+        certified = [
+            (before[:40], example[:40], status)
+            for before, example, certifying in probes
+            if (status := rr.verify_fragment(before, example).status) in certifying
+        ]
+        has_gap = bool(by_id[pid].get("runtime_gap"))
+        assert bool(certified) == has_gap, (
+            f"{pid}: runtime certifies {certified} but runtime_gap is {'declared' if has_gap else 'absent'}"
         )
-    else:
-        assert gap, f"{p.get('id')}: runtime derives IN lists over Oracle's limit; runtime_gap is required"
+
+
+def test_every_declared_runtime_gap_has_a_probe(patterns: list[dict[str, Any]]) -> None:
+    for p in patterns:
+        if p.get("runtime_gap"):
+            assert p.get("id") in _UNCERTIFIED_FORM_PROBES, f"{p.get('id')}: add a probe for its runtime_gap"
 
 
 def test_no_duplicate_source_of_truth_pattern_names(patterns: list[dict[str, Any]]) -> None:

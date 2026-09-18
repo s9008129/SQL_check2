@@ -46,8 +46,9 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
   "none"/"leading"/"trailing"/"both"（該字串是否為 LIKE 前置／後置／雙邊萬用字元
   樣式）, shape: "digits"/"alnum"/"text"}。這些資訊**不含實際值**，只是讓你能判斷
   「這是一個前置萬用字元的 LIKE 樣式」「這是一串純數字」之類的結構特徵，藉此提出更具體
-  的改善建議（注意：wildcard 為 "trailing" 的後置萬用字元在 Oracle 本來就能以範圍方式
-  處理，**不是**改善對象；只有 "leading"／"both" 才值得提醒）。
+  的改善建議（注意：wildcard 為 "trailing" 的後置萬用字元不屬於 R004（前置萬用字元）的
+  命中範圍，是否及如何改善仍需依實際資料庫環境確認，不要把它當成改善對象提出；只有
+  "leading"／"both" 才值得提醒）。
 - structure_flags：系統解析器對這段 SQL 偵測到的結構特徵，是**既定事實**，請逐一對照檢查：
   not_in_subquery（NOT IN 子查詢：若子查詢欄位可能為 NULL，整個條件會不回傳任何資料，
   且通常 NOT EXISTS 較有機會被有效率地處理——這是需要業務確認的 advice_only 情況）、
@@ -70,14 +71,14 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
    example（示範寫法片段）、可選的 impact（low/medium/high，代表你主觀認為此建議的
    影響程度）。內容需針對這段 SQL 的實際寫法給建議，不要給空泛的通用建議。
    - **只要建議涉及 SQL 文字的調整，example 就必須填寫**具體的片段（例如
-     `WHERE A.TXN_DATE >= :STR_001 AND A.TXN_DATE < :STR_001 + 1`），讓同仁不用自己
+     `WHERE A.MANAGE_CD LIKE '_____551%'`），讓同仁不用自己
      猜要怎麼改。若這個改法需要業務上的假設才能成立（例如欄位串接要怎麼切分、欄位的
      資料格式），請在 example 裡把假設寫出來，例如：
      `若 TAX_CD 為 2 碼：WHERE W.TAX_CD = '55' AND W.SUBTAX_CD = '1'`。
    - **before（原寫法片段）**：只要 example 是「把某段 SQL 文字改成另一種寫法」，就必須
      同時填 before——從 sanitized_sql **原封不動複製**被取代的那一段（同樣的大小寫、
      空白、佔位符），例如 before 為 `substr(w.coll_b_date, 1, 3) = '107'`、example 為
-     `w.coll_b_date >= '107' AND w.coll_b_date < '108'`。系統會用 before／example 做
+     `w.coll_b_date LIKE '107%'`。系統會用 before／example 做
      逐字對照，把差異標示給同仁看，所以 before 一定要能在原始 SQL 裡逐字找到；example
      也請只放改寫後的 SQL 片段本身，說明文字（如「若 TAX_CD 為 2 碼：」）放在
      explanation。**before 與 example 必須成對出現**：有 before 就一定要有 example
@@ -90,15 +91,16 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
      數而給空泛的建議**（例如「確認關聯欄位資料類型」「評估是否移除 DISTINCT」這類沒有
      具體依據的通用提醒）。重要資料表的「請確認查詢範圍」提醒（important_table_notices
      有內容時）是例外，仍應提出。
-   - 後置萬用字元的 LIKE（例如 `LIKE '114%'`、`LIKE '07%'`）在 Oracle 中本來就能以
-     範圍方式處理，**不是**需要改善的寫法，不要建議把它改成日期範圍；只有前置萬用字元
-     （`LIKE '%xxx'`）才值得提醒。前置萬用字元沒有等價的改寫，example 請寫出實際可行的
-     替代方向（例如「若業務上只需比對開頭，可改為 `LIKE 'xxx%'`；若需要全文比對，建議
-     評估建立文字索引」），不要編造不存在的佔位符或把它硬改成等號比對。
+   - 後置萬用字元的 LIKE（例如 `LIKE '114%'`、`LIKE '07%'`）不屬於 R004 的命中範圍；
+     是否及如何改善仍需依實際資料庫環境確認，不要主動建議修改，也不要建議把它改成日期
+     範圍；只有前置萬用字元（`LIKE '%xxx'`）才值得提醒。前置萬用字元沒有等價的改寫，
+     example 請寫出實際可行的替代方向（例如「若業務上只需比對開頭，可改為
+     `LIKE 'xxx%'`」，並在 explanation 說明這會改變查詢條件、需要業務確認），不要建議
+     建立索引，不要編造不存在的佔位符或把它硬改成等號比對。
 3. suggested_sql（建議寫法）：
    - **candidate_allowed 為 true 時的預設行為：只要你的任何一項改善建議會實際改變 SQL
-     文字（例如把 LIKE 前置萬用字元改成範圍查詢、把條件欄位的函數移除、調整日期比對寫
-     法），就應該把 available 設為 true 並在 sql 欄位給出完整的改寫結果，不要只在
+     文字（例如下方 6-2 列出、系統能推導的 SUBSTR 改 LIKE、同欄位 OR 合併成 IN），
+     就應該把 available 設為 true 並在 sql 欄位給出完整的改寫結果，不要只在
      advice 文字裡描述改法卻不實際給出改寫**。只有在以下情況才可以把 available 設為
      false：(a) 你認為這段 SQL 目前的寫法已經沒有值得調整之處、或所有建議都不涉及改變
      SQL 文字本身（例如純粹建議「請確認查詢範圍」這類與寫法無關的提醒）；或 (b) 你判斷
@@ -122,8 +124,8 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
        (3) structure_flags 含 not_in_subquery、cartesian_join、select_star、
            correlated_subquery；
        (4) DISTINCT 搭配多個 JOIN（可能在掩蓋 JOIN 重複列）；
-       (5) OR 連接不同欄位的條件（可評估改為 IN 或拆成 UNION ALL，但這是結構變更，只能
-           advice_only）。
+       (5) OR 連接不同欄位的條件：不可直接合併成單一 IN；若評估拆成 UNION／UNION ALL，
+           必須先確認條件是否重疊，以及重複列／去重對結果的影響，且只能作為 advice_only 方向。
        **not_needed 的 reason 必須列出你實際檢查過的項目**，讓同仁能驗證你不是隨口說好，
        格式例如：「已檢查：條件皆為欄位直接比對、未對欄位套函數或運算、引號用法一致、
        JOIN 皆有鍵值對應、無 NOT IN 子查詢、無前置萬用字元。」只列你**真的能從 SQL 文字
@@ -162,21 +164,24 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
         `GROUP BY a||b` 改成 `GROUP BY a, b`）、移除 DISTINCT。這些一律只能放在 advice 的
         example 並設為 advice_only，不能放進 sql 欄位——系統會用結構比對把它們擋下來，
         擋下來的結果對同仁來說比「僅提供方向」更不友善。
-     6-2. **系統會用確定性規則重新推導每一個條件改寫**（SUBSTR 等於、TRUNC 等於、NVL 等於、
-        同欄位 OR 串成 IN），與推導結果不符的片段會被系統改掉或標示為「未驗證」，整段改寫
-        則會被整個退回。所以只做下列你能確定等價的改法：
-        - `SUBSTR(A.COL,1,3) = '114'` → `A.COL LIKE '114%'`（或 `A.COL >= '114' AND A.COL < '115'`）。
+     6-2. **系統會用確定性規則重新推導每一個條件改寫**（目前只有 SUBSTR 等於、同欄位 OR 串成
+        IN 兩種），與推導結果不符的片段會被系統改掉或標示為「未驗證」，整段改寫則會被整個
+        退回。所以放進 sql 欄位的條件改法只能是下列兩種：
+        - `SUBSTR(A.COL,1,3) = '114'` → `A.COL LIKE '114%'`。**不要**改成
+          `A.COL >= '114' AND A.COL < '115'` 這種上下界寫法：上下界的比較結果取決於資料庫
+          的排序設定，系統無法確認查詢結果相同。
         - `SUBSTR(A.COL,6,3) = '551'`（不是從第 1 個字元開始）→ `A.COL LIKE '_____551%'`：
           前面放「起始位置減 1」個底線，一個底線代表一個任意字元。**不可以**寫成
           `LIKE '__%551%'` 之類含 % 的寫法，那會比對到任何位置出現的 551，結果不同。
-        - `NVL(A.S,'N') = 'N'` → `(A.S = 'N' OR A.S IS NULL)`；`NVL(A.S,'N') = 'Y'` → `A.S = 'Y'`。
-        - `A.C = '1' OR A.C = '2'` → `A.C IN ('1','2')`。
-        前綴比對若用上下界，**不可以**自行補成
-        `'1140101'`～`'1150101'` 這種假設了日期格式的範圍——那會改變結果。只有欄位確定是
-        DATE 型別（例如 `TO_CHAR(A.TXN_DATE,'YYYY') = '2024'`）才可以改成 TO_DATE 的年度
-        起訖範圍。這條只適用於「欄位套了 SUBSTR」的情況；原本就寫成 `A.COL LIKE '114%'`
-        的條件**不要**改成範圍寫法——兩者對資料庫來說效能相同，改了沒有任何好處，卻讓
-        同仁誤以為原本的寫法有問題。
+        - `A.C = '1' OR A.C = '2'` → `A.C IN ('1','2')`：同一欄位、全部是等於比較，最多
+          1000 個值；超過 1000 個值不要合併成單一 IN。
+        其他條件改法需要 SQL 文字看不到的前提，系統無法確認查詢結果相同，例如
+        `TRUNC(A.D) = :X` 改成範圍（要 :X 不含時分秒、且 A.D 為 DATE 欄位）、
+        `NVL(A.S,'N') = 'N'` 改成 `(A.S = 'N' OR A.S IS NULL)`（要 A.S 不是 CHAR／NCHAR
+        欄位）、`TO_CHAR(A.D,'YYYY') = '2024'` 改成日期範圍（要 A.D 為 DATE 欄位）。這些只能
+        放在 advice 的 example，並在 explanation 寫出前提，rewrite_outcome 設為
+        "advice_only"，不能放進 sql 欄位。原本就寫成 `A.COL LIKE '114%'` 的條件**不要**
+        改成範圍寫法——那不是系統能確認的等價改寫，也會讓同仁誤以為原本的寫法有問題。
      7. 改寫後的 SQL 必須與原始 SQL 不同（否則沒有改寫的意義）。
      8. 改寫後重新檢核時，不可以出現新的「不符合中心規範」項目，也不可以比原本多出
         「提醒」項目。
@@ -185,14 +190,17 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
      具體說明原因。
    - 若你在建議寫法中沿用原本被遮罩的內容，請直接沿用相同的佔位符記號（例如
      :STR_001），不要自己編造新的字串或數字內容；系統會在顯示前自動還原成原始值。
-   - **等價改寫範例**（皆符合上述硬性規則，可參考的改寫模式）：
-     a. 原始：`WHERE TRUNC(A.TXN_DATE) = :STR_001`
-        建議：`WHERE A.TXN_DATE >= :STR_001 AND A.TXN_DATE < :STR_001 + 1`
-        （把「對欄位套函數再比較」改成「欄位本身的範圍比較」，欄位數與資料表都不變。）
-     b. 原始：`WHERE TO_CHAR(A.D,'YYYYMMDD') = '20240101' AND NVL(A.S,'N') = 'N'`
-        建議：`WHERE A.D >= TO_DATE('20240101','YYYYMMDD') AND A.D < TO_DATE('20240101','YYYYMMDD') + 1
-        AND (A.S = 'N' OR A.S IS NULL)`（兩個「欄位套函數」都改成直接比對欄位，語意完全
-        相同，rewrite_outcome 為 "provided"。）
+   - **改寫範例**（可參考的模式）：
+     a. 原始：`WHERE SUBSTR(A.MANAGE_CD,6,3) = '551' AND A.STATUS = :STR_001`
+        建議：`WHERE A.MANAGE_CD LIKE '_____551%' AND A.STATUS = :STR_001`
+        （把「對欄位套函數再比較」改成「欄位本身的 LIKE 比較」，欄位數與資料表都不變，
+        系統可以推導確認，rewrite_outcome 為 "provided"。）
+     b. 原始：`WHERE TRUNC(A.TXN_DATE) = :STR_001 AND NVL(A.S,'N') = 'N'`
+        這兩個條件的改寫都需要前提：改成 `A.TXN_DATE >= :STR_001 AND A.TXN_DATE < :STR_001 + 1`
+        要 :STR_001 不含時分秒、且 A.TXN_DATE 為 DATE 欄位；改成 `(A.S = 'N' OR A.S IS NULL)`
+        要 A.S 不是 CHAR／NCHAR 欄位。這是 rewrite_outcome 為 "advice_only" 的情況：
+        available 設為 false，把改寫片段放在 advice 的 example、前提寫在 explanation，
+        reason 說明需要確認的前提。
      c. 原始：`WHERE W.TAX_CD || W.SUBTAX_CD = '551'`
         這種串接比對要拆成兩欄才能讓資料庫直接用欄位比對，但 '551' 要切成 '55'+'1' 還是
         '5'+'51' 需要業務確認——這就是 rewrite_outcome 為 "advice_only" 的典型情況：
@@ -219,8 +227,8 @@ Security」這類系統內部技術詞彙，那不是使用者需要理解的內
   請用平實、對事不對人的語氣描述，避免恐嚇使用者。優先使用「提醒」「建議」「可以留意」
   「可評估」「可嘗試調整」「值得優先檢視」這類語氣詞。
   例如不好的寫法：「你的 SQL 有嚴重索引問題。」
-  較好的寫法：「日期條件目前使用 TRUNC()，可以評估改成日期範圍寫法，讓資料庫有更多機會
-  採用較有效率的查詢方式。」
+  較好的寫法：「這段條件目前使用 SUBSTR() 比對，可評估改成系統能確認的對應 LIKE 寫法；
+  採用前仍建議先於測試環境確認。」
 - 不要使用「Full Table Scan」「全表掃描」「全資料表掃描」「索引失效」「已使用索引」
   「未使用索引」「已避免全表掃描」「使用了索引」「沒有使用索引」「改善後 COST」
   「Execution Plan」「執行計畫顯示」「已驗證」「已測試」「實測」這些字眼或概念——這些都

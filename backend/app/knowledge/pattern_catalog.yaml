@@ -16,13 +16,14 @@
 #     AND the rewritten SQL stays executable on the target Oracle version
 #     (e.g. within Oracle's 1000-expression IN-list limit). Logical
 #     equivalence alone is not enough.
-#     A rewrite_rules.py rule existing is NOT by itself proof: two of the
-#     four runtime rules are only ADVICE_ONLY here because their equivalence
-#     depends on a precondition the runtime states but never checks, and the
-#     two Class A entries authorize less than the runtime accepts (see
-#     `authorized_boundary` / `runtime_gap`). This is the only class a future
-#     Pattern Selector may treat as proven — and only for the forms and
-#     boundaries the entry authorizes.
+#     A rewrite_rules.py rule existing is NOT by itself proof; runtime rules
+#     must meet this same bar. Since 2026-09-18 (Runtime Correctness v1) the
+#     runtime certifies exactly the Class A forms and boundaries below: the
+#     TRUNC and NVL rules were removed, SUBSTR accepts only its canonical LIKE
+#     form, and OR→IN is limited to 1000 values. tests/test_pattern_catalog.py
+#     probes the runtime and fails if the two drift apart. This is the only
+#     class a future Pattern Selector may treat as proven — and only for the
+#     forms and boundaries the entry authorizes.
 #   ADVICE_ONLY — a reasonable direction, but SQLCheck cannot prove the
 #     rewritten SQL returns the same rows in every case. May be explained and
 #     suggested; must never become an automatic "已驗證" rewrite.
@@ -124,6 +125,10 @@
 #                          change runtime behavior; it records the gap so a
 #                          separate correctness PR can close it before any
 #                          Pattern Selector (Phase 2) relies on this entry.
+#                          No entry declares one as of 2026-09-18; the probes
+#                          in tests/test_pattern_catalog.py require one to be
+#                          added if the runtime starts certifying an
+#                          uncertified form again.
 #     runtime_gap.kind     unverified_precondition (equivalence needs a
 #                          precondition the runtime only states as an
 #                          `assumption` text, never checks) |
@@ -153,15 +158,16 @@ catalog_version: 1
 
 patterns:
   # ===========================================================================
-  # Patterns governing the runtime rules in backend/app/services/rewrite_rules.py
-  # (`_RULES`). Each runtime rule has exactly one entry here, but the entry's
-  # classification is a governance judgment, not a copy of what the runtime
-  # does: TRUNC_EQ_TO_RANGE and NVL_EQ_TO_OR_IS_NULL are ADVICE_ONLY with a
-  # recorded runtime_gap, SUBSTR_EQ_TO_LIKE authorizes only its canonical
-  # LIKE form, and OR_SAME_COLUMN_TO_IN authorizes only 1–1000 values.
+  # Predicate rewrites the runtime (backend/app/services/rewrite_rules.py) has
+  # handled. Each rule in `_RULES` has exactly one entry here.
+  # SUBSTR_EQ_TO_LIKE (canonical LIKE only) and OR_SAME_COLUMN_TO_IN (1–1000
+  # values) are the two runtime rules, and the runtime enforces both limits.
+  # TRUNC_EQ_TO_RANGE and NVL_EQ_TO_OR_IS_NULL had runtime rules until
+  # 2026-09-18; they were removed because equivalence cannot be proven from
+  # SQL text, and both stay ADVICE_ONLY.
   # ===========================================================================
   - id: SUBSTR_EQ_TO_LIKE
-    name_zh_tw: SUBSTR 定位比對改為 LIKE／範圍
+    name_zh_tw: SUBSTR 定位比對改為 LIKE
     category: predicate
     classification: VERIFIED_REWRITE
     oracle_applicable: true
@@ -179,8 +185,12 @@ patterns:
       取出的固定長度片段等於 v 若且唯若該位置的字元恰好是 v，這與 LIKE 樣式
       的語意相同，且對 NULL 值的行為一致。系統只接受這個推導結果，不接受模型
       自創的萬用字元位置（正式案例：模型曾把 SUBSTR(MANAGE_CD,6,3)='551' 誤改
-      為 LIKE '__%551%'，語意不同）。p=1 時 runtime 另外接受的上下界寫法
-      不在本 pattern 的認可範圍內，見 runtime_gap。
+      為 LIKE '__%551%'，語意不同）。v 含單引號時，canonical 文字會把單引號
+      重複成 ''，確保仍是可執行的 SQL。p=1 的上下界寫法
+      col >= 'v' AND col < '<next(v)>' 依賴 collation（NLS_COMP／NLS_SORT），
+      SQLCheck 看不到，因此不在認可範圍內；runtime 自 2026-09-18 起也不再
+      接受這種寫法（模型寫成上下界時，片段會被系統改成 canonical LIKE，整段
+      改寫則會被退回）。
     allowed_behavior:
       explain: true
       advice: true
@@ -192,29 +202,13 @@ patterns:
     verification:
       required_for_rewrite: true
       mechanism: deterministic_python
-    runtime_gap:
-      kind: unauthorized_accepted_form
-      runtime_rule: substr_eq_to_like
-      not_authorized_forms:
-        - "col >= 'v' AND col < '<next(v)>'   (p = 1 的上下界寫法)"
-      description_zh_tw: >
-        既有 rewrite_rules._rule_substr_eq 在 p=1 時，也把
-        col >= 'v' AND col < _next_prefix(v) 列為 accepted form，
-        verify_fragment 會把這種寫法標成 verified。範圍比較的結果取決於
-        collation（NLS_COMP／NLS_SORT 與資料的 collation 設定），而
-        _next_prefix() 的 docstring 自己也說明沒有 collation 資訊就無法得出
-        一般性的安全後繼值；SQLCheck 沒有 session 或欄位的 collation context。
-      required_action_zh_tw: >
-        本 PR 不修改 rewrite_rules.py。Phase 2（Pattern Selector）之前需另開
-        correctness PR，決定移除這個 accepted form 或加上可驗證的 collation
-        前提；在那之前，未來的 selector 只能自動選用 canonical LIKE 形式。
     sources:
       - type: internal
         ref: backend/app/services/rewrite_rules.py::_rule_substr_eq
       - type: internal
-        ref: backend/app/services/rewrite_rules.py::_next_prefix
-      - type: internal
         ref: Handoff.md 2026-09-17 深夜（三）
+      - type: internal
+        ref: backend/tests/test_rewrite_rules.py SUBSTR 段落（上下界寫法不被接受、單引號跳脫）
 
   - id: TRUNC_EQ_TO_RANGE
     name_zh_tw: TRUNC 日期等式改為範圍比對
@@ -222,20 +216,21 @@ patterns:
     classification: ADVICE_ONLY
     oracle_applicable: true
     detection:
-      source: rewrite_rules
-      rewrite_rule_ids: [trunc_eq_to_range]
+      source: prompt_heuristic_only
       family_signals:
         rule_ids: [R005]
         qualifier_zh_tw: >
           R005 對任何「條件欄位套函數」都會命中，無法分辨是否為 TRUNC 等於
-          比對；本 pattern 的具體偵測是 rewrite_rules._rule_trunc_eq。
+          比對。rewrite_rules.py 自 2026-09-18 起已沒有 TRUNC 專屬規則，只剩
+          系統提示要求模型把這類改寫當成需要前提的 advice_only。
     rationale_zh_tw: >
-      TRUNC(col) = X 與 col >= X AND col < X + 1 只有在 X 不含時分秒時才等價。
-      若 X（綁定變數或運算式）實際帶有時間，例如當天 10:00，原條件因 TRUNC
-      結果一定是午夜而不會命中任何資料，範圍寫法卻會回傳當天 10:00 到隔天
-      10:00 的資料，兩者結果不同。SQLCheck 看不到綁定變數的實際值，無法證明
-      這個前提，因此只能提供方向並寫明前提。TRUNC(col, '格式') 帶格式參數的
-      用法不在此規則範圍內。
+      TRUNC(col) = X 與 col >= X AND col < X + 1 只有在 X 不含時分秒、且 col 是
+      DATE 時才等價。若 X（綁定變數或運算式）實際帶有時間，例如當天 10:00，
+      原條件因 TRUNC 結果一定是午夜而不會命中任何資料，範圍寫法卻會回傳當天
+      10:00 到隔天 10:00 的資料。即使 X 是不含時間的日期常數，col 若是數值
+      欄位，TRUNC 是去掉小數部分，TRUNC(n) = 0 對應 -1 < n < 1，範圍寫法卻是
+      0 <= n < 1。SQLCheck 看不到綁定變數的實際值，也看不到欄位型別，只憑
+      SQL 文字找不到可以證明等價的子集，因此只能提供方向並寫明前提。
     allowed_behavior:
       explain: true
       advice: true
@@ -247,21 +242,11 @@ patterns:
     verification:
       required_for_rewrite: true
       mechanism: none
-    runtime_gap:
-      kind: unverified_precondition
-      runtime_rule: trunc_eq_to_range
-      description_zh_tw: >
-        既有 rewrite_rules._rule_trunc_eq 只把「假設 X 為不含時分秒的日期值」
-        寫成給審核者看的 assumption 文字，沒有驗證 X 真的不含時間；
-        verify_fragment 仍會把符合推導的片段標成 verified 或 corrected。
-      required_action_zh_tw: >
-        本 PR 不修改 Runtime。Phase 2（Pattern Selector）之前需另開 correctness
-        PR，加入可驗證前提的 deterministic gate（例如只在 X 是明確不含時間的
-        日期字面值時才推導），或把 runtime 的標示降為未驗證；完成前不得升為
-        VERIFIED_REWRITE，未來 selector 也不得自動信任這條 runtime rule。
     sources:
       - type: internal
-        ref: backend/app/services/rewrite_rules.py::_rule_trunc_eq
+        ref: backend/app/services/rewrite_rules.py 模組說明（2026-09-18 移除 TRUNC 推導規則）
+      - type: internal
+        ref: backend/tests/test_rewrite_rules.py TRUNC 段落（綁定變數、運算式、可能帶時間的常數、數值欄位皆為 unverified）
       - type: internal
         ref: "PR #2 third-party review item 1 (2026-09-18)"
 
@@ -271,13 +256,13 @@ patterns:
     classification: ADVICE_ONLY
     oracle_applicable: true
     detection:
-      source: rewrite_rules
-      rewrite_rule_ids: [nvl_eq]
+      source: prompt_heuristic_only
       family_signals:
         rule_ids: [R005]
         qualifier_zh_tw: >
           R005 對任何「條件欄位套函數」都會命中，無法分辨是否為 NVL 等於
-          比對；本 pattern 的具體偵測是 rewrite_rules._rule_nvl_eq。
+          比對。rewrite_rules.py 自 2026-09-18 起已沒有 NVL 專屬規則；系統提示
+          的檢查項 (1) 仍要求模型檢查條件欄位上的 NVL。
     rationale_zh_tw: >
       只看 NULL 代換的邏輯時，NVL(col, 'a') = 'b' 在 a == b 時對應
       (col = 'b' OR col IS NULL)，a != b 時對應 col = 'b'；但 Oracle 的比較
@@ -297,20 +282,9 @@ patterns:
     verification:
       required_for_rewrite: true
       mechanism: none
-    runtime_gap:
-      kind: unverified_precondition
-      runtime_rule: nvl_eq
-      description_zh_tw: >
-        既有 rewrite_rules._rule_nvl_eq 沒有欄位型別資訊，也沒有附任何
-        assumption，就把推導結果當成等價；verify_fragment 會把符合推導的片段
-        標成 verified 或 corrected，CHAR／NCHAR 欄位時這個標示可能是錯的。
-      required_action_zh_tw: >
-        本 PR 不修改 Runtime。Phase 2（Pattern Selector）之前需另開 correctness
-        PR，加入能證明欄位不是 CHAR／NCHAR（或其他型別前提）的 deterministic
-        gate，或把 runtime 的標示降為未驗證；完成前不得升為 VERIFIED_REWRITE。
     sources:
       - type: internal
-        ref: backend/app/services/rewrite_rules.py::_rule_nvl_eq
+        ref: backend/app/services/rewrite_rules.py 模組說明（2026-09-18 移除 NVL 推導規則）
       - type: oracle_documentation
         ref: https://docs.oracle.com/en/database/oracle/oracle-database/26/sqlrf/NVL.html
       - type: oracle_documentation
@@ -337,7 +311,10 @@ patterns:
       但改寫後的 SQL 還必須能在 Oracle 執行：Oracle 19c 單一運算式的 IN 清單
       最多 1000 個 expression，原本的 OR 串沒有這個限制，所以本 pattern 只
       授權 1～1000 個值（見 authorized_boundary）；超過 1000 個值的 OR 串不能
-      改成單一 IN。不同欄位的 OR 串接不屬於本規則（見
+      改成單一 IN。runtime 自 2026-09-18 起以明確的數量檢查
+      （rewrite_rules.ORACLE_IN_LIST_MAX_EXPRESSIONS）只在 2～1000 個值時推導
+      （1 個值本來就沒有 OR），並以非遞迴方式展開 OR 串，不再依賴 Python
+      遞迴深度。不同欄位的 OR 串接不屬於本規則（見
       OR_CROSS_COLUMN_TO_UNION_ALL）。
     allowed_behavior:
       explain: true
@@ -357,29 +334,11 @@ patterns:
         只授權改寫後 IN 清單含 1～1000 個 expression 的情況；超過 1000 個時，
         改寫後的 SQL 會超出 Oracle 19c IN 清單上限而無法執行，即使邏輯等價
         也不在授權範圍。
-    runtime_gap:
-      kind: unauthorized_accepted_form
-      runtime_rule: or_eq_to_in
-      not_authorized_forms:
-        - "col IN (v1, …, vN)，N > 1000（超過 Oracle 19c 單一 IN 清單 1000 個 expression 的上限）"
-      description_zh_tw: >
-        既有 rewrite_rules._rule_or_eq_to_in 沒有檢查值的數量，規則邏輯本身會
-        把任意長度的同欄位 OR 串推導成單一 IN（2026-09-18 在開發機把 Python
-        recursion limit 暫時調高後量測，1001、1500、3000 個值都會推導出 IN）。
-        在預設 recursion limit（1000）下，直接呼叫時 997 個值以上會在規則內
-        遞迴展開 OR 時觸發 RecursionError，被 derive() 捕捉後回傳 None，片段
-        標為 unverified，所以目前超過 1000 的情況剛好會被擋下；但這是遞迴
-        深度的副作用，不是治理上的邊界：門檻會隨 recursion limit 與呼叫堆疊
-        深度改變（Web 請求路徑堆疊較深，門檻會更低），也會連帶把一部分 1000
-        以內的合法情況標成 unverified。
-      required_action_zh_tw: >
-        本 PR 不修改 Runtime。Phase 2（Pattern Selector）之前需另開 correctness
-        PR，在 _rule_or_eq_to_in 明確檢查值的數量 ≤ 1000（並改成不依賴遞迴深度
-        的展開方式）；完成前，未來的 selector 不得自動套用超過 1000 個值的
-        改寫。
     sources:
       - type: internal
         ref: backend/app/services/rewrite_rules.py::_rule_or_eq_to_in
+      - type: internal
+        ref: backend/tests/test_rewrite_rules.py OR → IN 段落（2／10／999／1000 推導；1001／1500／3000 由數量檢查拒絕）
       - type: oracle_documentation
         ref: https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/IN-Condition.html
       - type: internal
@@ -398,18 +357,18 @@ patterns:
       family_signals:
         rule_ids: [R005]
         qualifier_zh_tw: >
-          R005 對任何條件欄位函數都會命中（含 SUBSTR／TRUNC／NVL 這些已有
-          runtime rule 的形式），無法確認函數落在 rewrite_rules.py 的處理範圍
-          之外；要確認屬於本 pattern 還需要額外的 AST 判定，目前不存在。
+          R005 對任何條件欄位函數都會命中（含已有 runtime rule 的 SUBSTR
+          形式），無法確認函數落在 rewrite_rules.py 的處理範圍之外；要確認
+          屬於本 pattern 還需要額外的 AST 判定，目前不存在。
           系統提示的檢查項 (1) 要求模型逐項檢查條件欄位函數。
     rationale_zh_tw: >
       條件欄位套用函數（TRIM／TO_CHAR／自訂函數等未被 rewrite_rules.py 涵蓋
       的形式）通常有機會改寫成欄位本身的直接比較，但每種函數的等價改法都需
       要個別驗證語意（型別、NULL 行為、格式假設）。治理上目前只認可
       SUBSTR 等於比對改為 canonical LIKE 這一種形式為已證明（見
-      SUBSTR_EQ_TO_LIKE）；TRUNC／NVL 雖有 runtime rule，但仍有未驗證前提
-      （見 TRUNC_EQ_TO_RANGE、NVL_EQ_TO_OR_IS_NULL 的 runtime_gap）。其餘
-      一律只能提供方向。
+      SUBSTR_EQ_TO_LIKE）；TRUNC／NVL 的改寫需要 SQL 文字看不到的前提，
+      runtime 自 2026-09-18 起不再推導（見 TRUNC_EQ_TO_RANGE、
+      NVL_EQ_TO_OR_IS_NULL）。其餘一律只能提供方向。
     allowed_behavior:
       explain: true
       advice: true

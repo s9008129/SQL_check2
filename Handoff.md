@@ -183,6 +183,23 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 - 之後新增 rewrite rule 時，除了 `rewrite_rules.py` 與 `tests/test_rewrite_rules.py`，也要在
   `pattern_catalog.yaml` 加恰好一個條目（`tests/test_pattern_catalog.py` 會檢查）。
 
+### 2026-09-18 Runtime Correctness v1（branch `feature/sqlcheck-runtime-correctness-v1`）
+- 上一段列出的四個 runtime_gap 已在 `rewrite_rules.py` 修正，catalog 目前沒有任何 runtime_gap：
+  - TRUNC → 範圍、NVL → 條件式：移除推導規則。這類片段一律 unverified（畫面顯示「AI 示意
+    寫法」），整段改寫若改動這些條件會被退回（rejected），也不再計入改善潛力的已驗證證據。
+    TRUNC 沒有只靠 SQL 文字就能證明的子集：欄位是 NUMBER 時 TRUNC 是去掉小數，
+    `TRUNC(n)=0` 對應 -1<n<1。
+  - SUBSTR：只接受 canonical LIKE；p=1 的上下界寫法會被改成 LIKE（corrected），整段改寫
+    則退回。另修正 v 含單引號時 canonical 產生不合法 SQL 的既有 bug。
+  - 同欄位 OR → IN：以 `ORACLE_IN_LIST_MAX_EXPRESSIONS = 1000` 明確限制 2～1000 個值；OR 串
+    改用非遞迴展開，不再依賴 Python recursion limit。
+- 系統提示同步：6-2 只列 SUBSTR→LIKE 與同欄位 OR→IN 為系統可推導；TRUNC／NVL／TO_CHAR
+  改寫改為需要前提的 advice_only；後置萬用字元改為「不屬於 R004 的命中範圍」，並移除建立
+  文字索引的建議。**尚未用正式主機 Gemma 驗證**，請依第 6 節用通道直連後跑 golden 與
+  TRUNC／NVL／SUBSTR 範例。
+- `tests/test_pattern_catalog.py` 以合成探測直接呼叫 runtime：runtime 若再認證 catalog 不認可的
+  寫法，而 catalog 沒有對應的 runtime_gap，測試會失敗。
+
 ## 4. 「AI 沒給建議寫法」的判讀順序（接手後最常被問）
 
 1. 看 API 回應或畫面的 outcome：

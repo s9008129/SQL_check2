@@ -54,10 +54,10 @@ and the compliance/optimization boundary. Then:
    adding an entry to the catalog alone, never because an external skill
    calls it safe, and never merely because a runtime rule already derives
    it. A proven rewrite must also produce SQL Oracle can execute (e.g. at
-   most 1000 expressions in one IN list). Where the runtime already does more
-   than governance certifies (TRUNC, NVL, SUBSTR's prefix-range form, OR→IN
-   beyond 1000 values), the catalog records a `runtime_gap`; read it before
-   relying on that runtime rule.
+   most 1000 expressions in one IN list). If the runtime ever certifies more
+   than governance does, the catalog records a `runtime_gap` (none is open
+   since the 2026-09-18 Runtime Correctness fix; tests probe the runtime to
+   keep it that way).
 
 ## Phase boundary (read before touching Runtime code)
 

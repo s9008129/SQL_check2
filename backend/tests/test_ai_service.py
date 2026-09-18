@@ -52,10 +52,11 @@ def _good_inner(**overrides) -> dict:
         "suggested_sql": {
             "available": True,
             "reason": "此查詢結構單純，可提供建議寫法。",
-            # 2026-09-17: must be a rule-derivable rewrite of
-            # _clean_select_statement() (TRUNC → range), or re-validation
-            # rejects it as an unproven change to the conditions.
-            "sql": "SELECT A.X FROM T A WHERE A.Y >= :STR_001 AND A.Y < :STR_001 + 1",
+            # Must be a rule-derivable rewrite of _clean_select_statement()
+            # (same-column OR → IN), or re-validation rejects it as an
+            # unproven change to the conditions. (2026-09-18: was TRUNC →
+            # range, which is no longer server-provable.)
+            "sql": "SELECT A.X FROM T A WHERE A.Y IN (:STR_001, :STR_002)",
         },
         "estimated_improvement_pct": 47,
     }
@@ -64,9 +65,9 @@ def _good_inner(**overrides) -> dict:
 
 
 def _clean_select_statement():
-    # TRUNC on the condition column so a genuinely equivalent rewrite exists
-    # (see _good_inner); the literal is masked to :STR_001 on the way out.
-    return parse_sql_text("SELECT A.X FROM T A WHERE TRUNC(A.Y) = 'A123456789'").statements
+    # A same-column OR so a genuinely equivalent rewrite exists (see
+    # _good_inner); the literals are masked to :STR_001 / :STR_002.
+    return parse_sql_text("SELECT A.X FROM T A WHERE A.Y = 'A123456789' OR A.Y = 'B987654321'").statements
 
 
 def _multi_statement():
@@ -107,14 +108,14 @@ async def test_successful_response_populates_ok_result(settings, chat_url):
 
 @respx.mock
 async def test_suggested_sql_reverse_substitutes_masked_literal(settings, chat_url):
-    # The representative statement's literal 'A123456789' gets masked to
-    # :STR_001 before it reaches the payload; the model is told it may reuse
-    # that placeholder in its rewrite, and the server must restore it.
+    # The representative statement's literals get masked to :STR_001 /
+    # :STR_002 before they reach the payload; the model is told it may reuse
+    # those placeholders in its rewrite, and the server must restore them.
     respx.post(chat_url).mock(
         return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
     )
     result = await _call(settings, _clean_select_statement())
-    assert result.suggested_sql.sql == "SELECT A.X FROM T A WHERE A.Y >= 'A123456789' AND A.Y < 'A123456789' + 1"
+    assert result.suggested_sql.sql == "SELECT A.X FROM T A WHERE A.Y IN ('A123456789', 'B987654321')"
 
 
 # ---------------------------------------------------------------------------
@@ -278,8 +279,8 @@ async def test_outcome_provided_when_rewrite_passes_revalidation(settings, chat_
     inner = _good_inner(
         suggested_sql={
             "available": True,
-            "reason": "改用範圍比較。",
-            "sql": "SELECT A.X FROM T A WHERE A.Y >= :STR_001 AND A.Y < :STR_001 + 1",
+            "reason": "改用 IN 清單。",
+            "sql": "SELECT A.X FROM T A WHERE A.Y IN (:STR_001, :STR_002)",
             "rewrite_outcome": "provided",
         }
     )
@@ -377,6 +378,64 @@ def test_system_prompt_requires_checklist_before_not_needed():
     assert "重新推導每一個條件改寫" in ai_service.SYSTEM_PROMPT
 
 
+@pytest.mark.parametrize(
+    "overclaim",
+    [
+        "本來就能以範圍方式",  # trailing wildcard stated as an Oracle execution fact
+        "範圍方式處理",
+        "建立文字索引",  # index recommendation (INDEX_ADVISORY is out of scope)
+        "效能相同",
+        "語意完全相同",
+        "TRUNC 等於、NVL 等於",  # old list of "system-derived" rewrites
+        "A.COL >= '114' AND A.COL < '115'`）",  # prefix-range offered as an accepted form
+        "日期條件目前使用 TRUNC()，可以評估改成日期範圍寫法",  # old tone example contradicted advice-only contract
+        "OR 連接不同欄位的條件（可評估改為 IN",  # cross-column OR cannot be collapsed into one IN
+    ],
+)
+def test_system_prompt_has_no_overclaiming_or_unprovable_rewrite_wording(overclaim):
+    # 2026-09-18 Runtime Correctness v1: SQLCheck has no execution plan, index
+    # metadata or statistics, and the runtime only derives SUBSTR→LIKE and
+    # same-column OR→IN. The prompt must not claim more than that.
+    assert overclaim not in ai_service.SYSTEM_PROMPT
+
+
+def test_system_prompt_keeps_r004_scope_and_derived_rewrite_list():
+    prompt = ai_service.SYSTEM_PROMPT
+    assert "不屬於 R004 的命中範圍" in prompt
+    assert "是否及如何改善仍需依實際資料庫環境確認" in prompt
+    assert "只有前置萬用字元" in prompt
+    assert "目前只有 SUBSTR 等於、同欄位 OR 串成" in prompt
+    assert "超過 1000 個值不要合併成單一 IN" in prompt
+    assert "不可直接合併成單一 IN" in prompt
+    assert "UNION／UNION ALL" in prompt
+    assert "條件是否重疊" in prompt
+    assert "重複列／去重對結果的影響" in prompt
+    assert "SUBSTR() 比對" in prompt
+    assert "系統能確認的對應 LIKE 寫法" in prompt
+
+
+def test_system_prompt_provided_example_is_derivable_and_advice_only_example_is_not():
+    # The prompt's "provided" example must pass the runtime's own predicate
+    # check, and its "advice_only" TRUNC/NVL example must not — otherwise the
+    # prompt steers the model into rewrites the server rejects.
+    from sqlglot import parse_one
+
+    from app.services import rewrite_rules
+
+    provided_orig = "WHERE SUBSTR(A.MANAGE_CD,6,3) = '551' AND A.STATUS = :STR_001"
+    provided_sugg = "WHERE A.MANAGE_CD LIKE '_____551%' AND A.STATUS = :STR_001"
+    advice_orig = "WHERE TRUNC(A.TXN_DATE) = :STR_001 AND NVL(A.S,'N') = 'N'"
+    for fragment in (provided_orig, provided_sugg, advice_orig):
+        assert fragment in ai_service.SYSTEM_PROMPT
+
+    def tree(where: str):
+        return parse_one(f"SELECT A.X FROM T A {where}", read="oracle")
+
+    assert rewrite_rules.verify_predicate_changes(tree(provided_orig), tree(provided_sugg)) == (True, None)
+    advice_sugg = "WHERE A.TXN_DATE >= :STR_001 AND A.TXN_DATE < :STR_001 + 1 AND (A.S = 'N' OR A.S IS NULL)"
+    assert rewrite_rules.verify_predicate_changes(tree(advice_orig), tree(advice_sugg))[0] is False
+
+
 def test_system_prompt_tells_model_how_to_word_advice_only_reason():
     # 2026-09-17 user feedback: plain language, state the fact to confirm,
     # no 「故不自動產生建議寫法」 closing clause (the UI already says that).
@@ -466,15 +525,36 @@ async def test_suggested_sql_passing_revalidation_is_kept(settings, chat_url):
     inner = _good_inner(
         suggested_sql={
             "available": True,
-            "reason": "改用範圍比較。",
-            "sql": "SELECT A.X FROM T A WHERE A.Y >= :STR_001 AND A.Y < :STR_001 + 1",
+            "reason": "改用 IN 清單。",
+            "sql": "SELECT A.X FROM T A WHERE A.Y IN (:STR_001, :STR_002)",
         }
     )
     respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
     result = await _call(settings, _clean_select_statement())
 
     assert result.suggested_sql.available is True
-    assert result.suggested_sql.sql == "SELECT A.X FROM T A WHERE A.Y >= 'A123456789' AND A.Y < 'A123456789' + 1"
+    assert result.suggested_sql.sql == "SELECT A.X FROM T A WHERE A.Y IN ('A123456789', 'B987654321')"
+
+
+@respx.mock
+async def test_trunc_to_range_full_rewrite_is_rejected(settings, chat_url):
+    # 2026-09-18 Runtime Correctness v1: TRUNC(col)=X → range is not provable
+    # from SQL text (X may carry time; col may not be a DATE), so a full
+    # rewrite that makes this change is rejected instead of shown as validated.
+    inner = _good_inner(
+        suggested_sql={
+            "available": True,
+            "reason": "改用範圍比較。",
+            "sql": "SELECT A.X FROM T A WHERE A.Y >= :STR_001 AND A.Y < :STR_001 + 1",
+        }
+    )
+    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
+    trunc_stmt = parse_sql_text("SELECT A.X FROM T A WHERE TRUNC(A.Y) = 'A123456789'").statements
+    result = await _call(settings, trunc_stmt)
+
+    assert result.suggested_sql.available is False
+    assert result.suggested_sql.outcome == "rejected"
+    assert result.suggested_sql.sql is None
 
 
 @respx.mock

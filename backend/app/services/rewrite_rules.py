@@ -15,6 +15,15 @@ unverified. Anything outside this whitelist is never presented as an
 equivalent rewrite.
 
 Every rule documents its equivalence argument and any assumption it needs.
+
+2026-09-18 (SQLCheck Runtime Correctness v1): only rewrites whose
+equivalence can be proven from the SQL text alone belong here. TRUNC(col)=X
+→ range and NVL(col,'a')='b' → plain comparison were removed: the first
+needs X to carry no time component (and col to be a DATE, not a NUMBER or a
+time-zoned TIMESTAMP), the second needs col not to be CHAR/NCHAR
+(blank-padded vs. nonpadded comparison) — none of which SQLCheck can see.
+Fragments of those shapes are now "unverified", and a full rewrite that
+changes them is rejected. See backend/app/knowledge/pattern_catalog.yaml.
 """
 
 from __future__ import annotations
@@ -28,6 +37,11 @@ from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
 DIALECT = "oracle"
 
 _WILDCARD_RE = re.compile(r"[%_]")
+
+# Oracle 19c SQL Reference, IN Condition: "You can specify up to 1000
+# expressions in expression_list." An OR chain has no such limit, so a longer
+# chain cannot be rewritten into one IN list (the result would not execute).
+ORACLE_IN_LIST_MAX_EXPRESSIONS = 1000
 
 # Reviewer-facing rejection reasons (plain language, no "等價" jargon —
 # 2026-09-17 user request): say that the query result might change.
@@ -124,8 +138,11 @@ def _rule_substr_eq(pred: exp.Expression) -> Rewrite | None:
     trailing `%` = anything after). NULL col → NULL on both sides. Requires
     len(v) == n (otherwise SUBSTR can never equal v → not rewritable here)
     and v free of LIKE metacharacters. For p == 1 the pattern is 'v%'.
-    Also accepted for p == 1: the prefix-bounds form
-    `col >= 'v' AND col < 'next(v)'` the prompt has long taught the model."""
+
+    Only this LIKE form is accepted. The p == 1 prefix-bounds form
+    `col >= 'v' AND col < 'next(v)'` was removed on 2026-09-18: range
+    comparison depends on collation (NLS_COMP / NLS_SORT), which SQLCheck
+    cannot see."""
     if not isinstance(pred, exp.EQ):
         return None
     func, lit = pred.this, pred.expression
@@ -143,106 +160,39 @@ def _rule_substr_eq(pred: exp.Expression) -> Rewrite | None:
         return None
     if len(value) != length or _WILDCARD_RE.search(value):
         return None
-    pattern = "_" * (start - 1) + value + "%"
+    # Quotes inside v must be doubled, or the canonical text is not valid SQL.
+    pattern = ("_" * (start - 1) + value + "%").replace("'", "''")
     canonical = f"{_column_sql(col)} LIKE '{pattern}'"
-    accepted = [normalize_text(canonical) or canonical]
-    if start == 1:
-        nxt = _next_prefix(value)
-        if nxt is not None:
-            bounds = f"{_column_sql(col)} >= '{value}' AND {_column_sql(col)} < '{nxt}'"
-            n = normalize_text(bounds)
-            if n:
-                accepted.append(n)
-    return Rewrite(rule="substr_eq_to_like", canonical=canonical, accepted=tuple(accepted))
+    return Rewrite(rule="substr_eq_to_like", canonical=canonical, accepted=(normalize_text(canonical) or canonical,))
 
 
-def _next_prefix(value: str) -> str | None:
-    """'107' → '108', '10Z' → None (no safe successor without collation
-    knowledge). Only digits and letters other than 9/z/Z are incremented."""
-    last = value[-1]
-    if last in "9zZ" or not last.isalnum():
-        return None
-    return value[:-1] + chr(ord(last) + 1)
-
-
-def _rule_trunc_eq(pred: exp.Expression) -> Rewrite | None:
-    """TRUNC(col) = X  →  col >= X AND col < X + 1
-
-    Equivalence holds when X is a date at midnight (a bind or TO_DATE without
-    time), which is how these predicates are written in practice; stated as
-    an assumption for the reviewer. Format-argument TRUNC (e.g. 'MM') is not
-    handled."""
-    if not isinstance(pred, exp.EQ):
-        return None
-    func, rhs = pred.this, pred.expression
-    if not _is_plain_trunc(func):
-        func, rhs = rhs, func
-        if not _is_plain_trunc(func):
-            return None
-    col = func.expressions[0]
-    if not isinstance(col, exp.Column):
-        return None
-    x = rhs.sql(dialect=DIALECT)
-    canonical = f"{_column_sql(col)} >= {x} AND {_column_sql(col)} < {x} + 1"
-    return Rewrite(
-        rule="trunc_eq_to_range",
-        canonical=canonical,
-        accepted=(normalize_text(canonical) or canonical,),
-        assumption=f"假設 {x} 為不含時分秒的日期值",
-    )
-
-
-def _is_plain_trunc(node: exp.Expression | None) -> bool:
-    """Oracle `TRUNC(col)` parses as exp.Anonymous(this="TRUNC", expressions=
-    [col]); `TRUNC(col, 'MM')` parses as exp.DateTrunc and is NOT handled
-    (its equivalent range depends on the unit)."""
-    return (
-        isinstance(node, exp.Anonymous)
-        and str(node.this).upper() == "TRUNC"
-        and len(node.expressions) == 1
-    )
-
-
-def _rule_nvl_eq(pred: exp.Expression) -> Rewrite | None:
-    """NVL(col, 'a') = 'b'  →  (col = 'b' OR col IS NULL) when a == b,
-    else col = 'b'. Exact: NVL substitutes 'a' only for NULL."""
-    if not isinstance(pred, exp.EQ):
-        return None
-    func, lit = pred.this, pred.expression
-    if _is_string_literal(func):
-        func, lit = lit, func
-    if not isinstance(func, exp.Coalesce) or not _is_string_literal(lit):
-        return None
-    exprs = [func.this, *func.expressions]
-    if len(exprs) != 2 or not isinstance(exprs[0], exp.Column) or not _is_string_literal(exprs[1]):
-        return None
-    col, default = exprs[0], str(exprs[1].this)
-    value = str(lit.this)
-    quoted = "'" + value.replace("'", "''") + "'"
-    if default == value:
-        canonical = f"({_column_sql(col)} = {quoted} OR {_column_sql(col)} IS NULL)"
-    else:
-        canonical = f"{_column_sql(col)} = {quoted}"
-    return Rewrite(rule="nvl_eq", canonical=canonical, accepted=(normalize_text(canonical) or canonical,))
+def _flatten_or(atom: exp.Expression) -> list[exp.Expression]:
+    """Disjuncts of an OR chain in source order, looking through parentheses.
+    Iterative on purpose: sqlglot builds `a OR b OR c ...` as a left-deep
+    tree, so recursion depth grows with chain length (~1000 terms hit
+    Python's default recursion limit before 2026-09-18)."""
+    disjuncts: list[exp.Expression] = []
+    stack = [atom]
+    while stack:
+        e = stack.pop()
+        if isinstance(e, exp.Or):
+            stack.append(e.expression)  # right side popped after the left
+            stack.append(e.this)
+        elif isinstance(e, exp.Paren):
+            stack.append(e.this)
+        else:
+            disjuncts.append(e)
+    return disjuncts
 
 
 def _rule_or_eq_to_in(atom: exp.Expression) -> Rewrite | None:
-    """col = a OR col = b [OR ...]  →  col IN (a, b, ...). Exact."""
+    """col = a OR col = b [OR ...]  →  col IN (a, b, ...). Exact, for 2 to
+    ORACLE_IN_LIST_MAX_EXPRESSIONS values; a longer chain is not rewritten
+    because the single IN list would exceed Oracle's limit."""
     if not isinstance(atom, exp.Or):
         return None
-    disjuncts: list[exp.Expression] = []
-
-    def flatten(e: exp.Expression) -> None:
-        if isinstance(e, exp.Or):
-            flatten(e.this)
-            flatten(e.expression)
-        elif isinstance(e, exp.Paren):
-            flatten(e.this)
-        else:
-            disjuncts.append(e)
-
-    flatten(atom)
-    if len(disjuncts) < 2:
+    disjuncts = _flatten_or(atom)
+    if len(disjuncts) < 2 or len(disjuncts) > ORACLE_IN_LIST_MAX_EXPRESSIONS:
         return None
     col_sql: str | None = None
     values: list[str] = []
@@ -261,7 +211,7 @@ def _rule_or_eq_to_in(atom: exp.Expression) -> Rewrite | None:
     return Rewrite(rule="or_eq_to_in", canonical=canonical, accepted=(normalize_text(canonical) or canonical,))
 
 
-_RULES = (_rule_substr_eq, _rule_trunc_eq, _rule_nvl_eq, _rule_or_eq_to_in)
+_RULES = (_rule_substr_eq, _rule_or_eq_to_in)
 
 
 def derive(atom: exp.Expression) -> Rewrite | None:

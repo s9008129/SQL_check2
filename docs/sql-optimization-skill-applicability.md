@@ -30,7 +30,7 @@ column is a proposed disposition, not a governance decision.
 |---|---|---|---|---|---|---|
 | Subquery → JOIN conversion | Partially modeled (IN/EXISTS and NOT IN subquery forms only; general subquery → JOIN has no catalog entry) | Yes | B (`IN_SUBQUERY_TO_EXISTS`, `NOT_IN_SUBQUERY_TO_NOT_EXISTS`) | Duplicate rows if joined table isn't 1:1; NULL semantics differ for NOT IN | Advice only | `complexity_flags: not_in_subquery` |
 | Correlated subquery → window functions | Advice only, and blocked at candidate stage | Yes | B (`CORRELATED_SUBQUERY_TO_JOIN_OR_WINDOW`) | PARTITION BY/ORDER BY NULL-grouping and tie-break may not match original correlation | Advice only; already in `ai_gate.candidate_forbidden_complexity_flags` (`correlated_subquery`) so no full-rewrite candidate is even generated | `complexity_flags: correlated_subquery`; `app.yaml ai_gate.candidate_forbidden_complexity_flags` |
-| OR condition → UNION / UNION ALL | Advice only (cross-column); verified rewrite exists for the same-column special case | Yes | B (`OR_CROSS_COLUMN_TO_UNION_ALL`) for cross-column; **A** (`OR_SAME_COLUMN_TO_IN`) for same-column OR→IN, which is a *different* transform | Row duplication (UNION ALL) or dedup cost/semantics change (UNION) if branches overlap | Advice only for the general case; same-column OR→IN is already a proven, tested rewrite for up to 1000 values (Oracle IN-list limit; longer chains are a `runtime_gap`) | `rules.yaml` R006 (family signal only: fires on any OR, cannot tell cross-column from same-column); cross-column case detected only by prompt check (5); same-column case by `rewrite_rules.py::_rule_or_eq_to_in` |
+| OR condition → UNION / UNION ALL | Advice only (cross-column); verified rewrite exists for the same-column special case | Yes | B (`OR_CROSS_COLUMN_TO_UNION_ALL`) for cross-column; **A** (`OR_SAME_COLUMN_TO_IN`) for same-column OR→IN, which is a *different* transform | Row duplication (UNION ALL) or dedup cost/semantics change (UNION) if branches overlap | Advice only for the general case; same-column OR→IN is already a proven, tested rewrite for up to 1000 values (Oracle IN-list limit, enforced by the runtime since 2026-09-18) | `rules.yaml` R006 (family signal only: fires on any OR, cannot tell cross-column from same-column); cross-column case detected only by prompt check (5); same-column case by `rewrite_rules.py::_rule_or_eq_to_in` |
 
 ## Index strategy techniques
 
@@ -67,7 +67,7 @@ column is a proposed disposition, not a governance decision.
 
 | External pattern | SQLCheck support | Oracle applicable | Classification | Semantic risk | Recommendation | Related rule/flag |
 |---|---|---|---|---|---|---|
-| Function call avoidance in WHERE clauses | Already supported (advice) | Yes | B (`PREDICATE_FUNCTION_GENERIC`, `TRUNC_EQ_TO_RANGE`, `NVL_EQ_TO_OR_IS_NULL`); the only proven form is **A** `SUBSTR_EQ_TO_LIKE` (canonical LIKE form only) | Blanket function removal is a classic semantic trap (`UPPER_CASE_FOLD_REMOVAL`); TRUNC→range needs a time-free right-hand side and NVL→plain comparison differs for CHAR columns — both have a runtime rule with an unchecked precondition (`runtime_gap`) | Advice only, except SUBSTR equality → canonical LIKE | `rules.yaml` R005 (family signal); `rewrite_rules.py` |
+| Function call avoidance in WHERE clauses | Already supported (advice) | Yes | B (`PREDICATE_FUNCTION_GENERIC`, `TRUNC_EQ_TO_RANGE`, `NVL_EQ_TO_OR_IS_NULL`); the only proven form is **A** `SUBSTR_EQ_TO_LIKE` (canonical LIKE form only) | Blanket function removal is a classic semantic trap (`UPPER_CASE_FOLD_REMOVAL`); TRUNC→range needs a time-free right-hand side and NVL→plain comparison differs for CHAR columns — the runtime stopped deriving both on 2026-09-18 | Advice only, except SUBSTR equality → canonical LIKE | `rules.yaml` R005 (family signal); `rewrite_rules.py` |
 | Early filtering in WHERE clauses | Not currently a catalog entry | Yes (concept) | Candidate — likely **C** (informational; too generic to verify per-case) | None specific | Candidate to add as informational only | none |
 | Temporary table for complex multi-step calculations | Not currently modeled / candidate only | Yes (concept) | Candidate only — likely **C** if added as `TEMP_TABLE_FOR_COMPLEX_CALC`; no catalog entry today | None specific; readability suggestion only | Candidate to add as informational only | none |
 
@@ -108,10 +108,10 @@ column is a proposed disposition, not a governance decision.
   either the external skill or SQLCheck's own history that meet the bar for
   automatic-rewrite-eligible status — and even they are not wired to
   automatic application in this Phase (see `project-boundaries.md`).
-- **Runtime rules the catalog does not certify** (`runtime_gap`, a separate
-  correctness PR is needed before Phase 2): TRUNC equality → range
-  (unchecked time-component precondition), NVL equality → conditional
-  (CHAR blank-padded vs VARCHAR2 nonpadded comparison), SUBSTR's p=1
-  prefix-range form (collation-dependent), and same-column OR → IN beyond
-  1000 values (no count check in the rule). See
+- **Runtime gaps closed on 2026-09-18** (Runtime Correctness v1): the
+  runtime no longer derives TRUNC equality → range or NVL equality →
+  conditional (both need facts SQL text cannot show), no longer accepts
+  SUBSTR's p=1 prefix-range form (collation-dependent), and refuses
+  same-column OR → IN beyond 1000 values with an explicit count guard. No
+  `runtime_gap` is open. See
   `skills/sqlcheck-oracle-review/references/safe-rewrites.md`.

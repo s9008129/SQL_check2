@@ -32,7 +32,7 @@ export interface FullSqlDiffProps {
 export function FullSqlDiff({ original, suggested }: FullSqlDiffProps) {
   const rows = useMemo(() => computeAlignedDiff(original, suggested), [original, suggested]);
   return (
-    <div className="diff-table" role="table" aria-label="原始 SQL 與 AI 建議寫法逐行對照">
+    <div className="diff-table" role="table" aria-label="原始 SQL 與系統已確認的建議寫法逐行對照">
       <div className="diff-col-head" role="row">
         <span>原始 SQL</span>
         <span>系統已確認的建議寫法</span>

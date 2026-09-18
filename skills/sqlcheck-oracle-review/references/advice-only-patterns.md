@@ -22,7 +22,7 @@ duplicate of the catalog.
 | `DISTINCT_REMOVAL` | Safe only when the pre-DISTINCT result is already proven unique (e.g. by a JOIN key); SQLCheck has no uniqueness proof capability |
 | `GROUP_BY_STRUCTURAL_REWRITE` | Splitting a concatenated `GROUP BY` key (`a\|\|b` → `a, b`) can change grouping when values overlap across the split point (`'1','23'` vs `'12','3'`) |
 | `STRING_CONCAT_PREDICATE_SPLIT` | Splitting a concatenated-column literal (e.g. `'551'` for `TAX_CD\|\|SUBTAX_CD`) requires knowing each column's width — a business assumption, not something derivable from the literal |
-| `LEADING_WILDCARD_LIKE` | `LIKE '%xxx'` has no equivalent rewrite at all; only alternative *strategies* (narrow to `'xxx%'` if business rules allow, or a text index) exist, neither of which is a provable equivalent transform |
+| `LEADING_WILDCARD_LIKE` | A pattern starting with `%` or `_` has no equivalent rewrite. Narrowing to `'xxx%'` when business rules allow changes the condition, so it needs business confirmation; index suggestions are out of scope (`INDEX_ADVISORY`). Trailing wildcards are outside R004; whether they need improving depends on the actual database environment |
 | `CARTESIAN_JOIN_MISSING_CONDITION` | The missing join key must come from business knowledge; SQLCheck can flag the missing condition but cannot guess which columns to join on |
 
 If you ever find yourself about to mark one of these as `verified` in the UI

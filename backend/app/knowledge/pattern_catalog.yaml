@@ -756,11 +756,12 @@ patterns:
       source: rule_engine
       rule_ids: [R004]
     rationale_zh_tw: >
-      LIKE '%xxx' 這類前置萬用字元沒有等價的改寫可以自動產生——只能視業務
-      需求評估「若只需比對開頭可改為 LIKE 'xxx%'」或另建文字索引兩個方向，
-      兩者都不是自動可證明等價的轉換。後置萬用字元（LIKE 'xxx%'）在 Oracle
-      本就可用範圍掃描處理，不屬於本 pattern（見 rules.yaml R004 註解與
-      prompt「後置萬用字元」段落）。
+      LIKE 樣式以 % 或 _ 開頭（前置萬用字元）時，沒有可以自動產生的等價改寫。
+      常見的方向是「若業務上其實只需比對開頭，改成 LIKE 'xxx%'」，但這會改變
+      查詢條件，需要業務確認，不是等價轉換；其他做法需依實際資料庫環境確認，
+      索引相關建議屬 INDEX_ADVISORY（OUT_OF_SCOPE），不在本 pattern 提供。
+      後置萬用字元不屬於 R004 的命中範圍；是否及如何改善仍需依實際資料庫環境
+      確認。
     allowed_behavior:
       explain: true
       advice: true
@@ -769,12 +770,17 @@ patterns:
       - index_usage
       - full_table_scan
       - execution_plan
+      - create_index_recommendation
     verification:
       required_for_rewrite: false
       mechanism: none
     sources:
       - type: internal
         ref: backend/app/config/rules.yaml R004
+      - type: internal
+        ref: backend/app/services/sql_parser.py::_leading_wildcard_literal
+      - type: internal
+        ref: "PR #2 third-party review round 2 item 3 (2026-09-18)"
 
   - id: CARTESIAN_JOIN_MISSING_CONDITION
     name_zh_tw: 缺少 JOIN 條件（實質笛卡兒積）

@@ -1,9 +1,8 @@
-"""Golden-dataset check against a REAL Ollama/Gemma instance (PRD §56).
+"""Golden-dataset check against the currently selected REAL LLM provider.
 
-Production-host-only: requires a reachable Ollama with the configured model
-already pulled (see README's verification table — this cannot run on the
-dev machine, which has no Ollama). Not a pytest test (no `test_` prefix, not
-auto-discovered) — run explicitly after deployment:
+Not a pytest test (no `test_` prefix, not auto-discovered). It can run
+against formal-host Ollama/Gemma or, on a Mac development machine, against
+Gemini by setting SQLCHECK_LLM_PROVIDER=gemini and GEMINI_API_KEY.
 
     cd backend
     uv run python tests/golden/run_golden.py [--base-url https://localhost] [-v] [--out evidence.json]
@@ -48,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import json
 import sys
 import time
@@ -85,12 +85,15 @@ _FORBIDDEN_DEFAULTS = (
 # into evidence — the recorder must be incapable of writing prompt/response
 # payloads even if that diagnostic hook ever grows new keys.
 _STATS_KEYS = (
+    "provider",
     "model",
     "num_ctx",
+    "num_predict",
     "think",
     "done_reason",
     "eval_count",
     "prompt_eval_count",
+    "total_tokens",
     "total_duration_ms",
 )
 
@@ -361,7 +364,7 @@ async def run_case(case: GoldenCase, settings) -> CaseResult:
             "improvement_potential": ai_result.improvement_potential,
             "quiet_kind": quiet_kind,
             # `LAST_CALL_STATS` is reset at the start of get_ai_result, so an
-            # empty dict here means no Ollama call diagnostics were available
+            # empty dict here means no provider-call diagnostics were available
             # (e.g. the request was gated before reaching the model).
             "stats": _safe_stats(getattr(ai_service, "LAST_CALL_STATS", None)),
             "problems": list(problems),
@@ -413,10 +416,21 @@ def _write_evidence(path: Path, results: list[CaseResult], passed: int) -> None:
     target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-async def main_async(base_url: str | None, verbose: bool, out_path: Path | None) -> int:
+async def main_async(
+    base_url: str | None,
+    model: str | None,
+    verbose: bool,
+    out_path: Path | None,
+) -> int:
     settings = get_settings()
+    llm = settings.llm
+    updates: dict[str, Any] = {}
     if base_url:
-        object.__setattr__(settings.ollama, "base_url", base_url)  # OllamaSettings is frozen
+        updates["base_url"] = base_url.rstrip("/")
+    if model:
+        updates["model"] = model
+    if updates:
+        settings = dataclasses.replace(settings, llm=dataclasses.replace(llm, **updates))
 
     results = [await run_case(c, settings) for c in CASES]
 
@@ -441,8 +455,9 @@ async def main_async(base_url: str | None, verbose: bool, out_path: Path | None)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run SQLCheck 2.0 golden dataset against a live Ollama")
-    parser.add_argument("--base-url", default=None, help="Override OLLAMA_BASE_URL for this run")
+    parser = argparse.ArgumentParser(description="Run SQLCheck golden cases against the active live LLM provider")
+    parser.add_argument("--base-url", default=None, help="Override the active provider base URL for this run")
+    parser.add_argument("--model", default=None, help="Override the active provider model for this run")
     parser.add_argument(
         "--out",
         default=None,
@@ -452,7 +467,7 @@ def main() -> int:
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
     out_path = Path(args.out) if args.out else None
-    return asyncio.run(main_async(args.base_url, args.verbose, out_path))
+    return asyncio.run(main_async(args.base_url, args.model, args.verbose, out_path))
 
 
 if __name__ == "__main__":

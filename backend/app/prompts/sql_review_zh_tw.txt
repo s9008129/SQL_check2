@@ -98,9 +98,11 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
    example（示範寫法片段）、可選的 impact（low/medium/high）。impact 只保留作為模型內部
    自評參考，系統不會拿它判斷合規、分數或建議是否安全；使用者畫面會改以「系統可確認／
    需人工確認／觀念提醒」呈現。內容需針對這段 SQL 的實際寫法給建議，不要給空泛的通用建議。
-   - 只有在「不需要猜測新欄位、新資料表、新 JOIN 關聯、新業務常數或未知資料型態」時，
-     才可以在 example 填入具體 SQL 片段。若需要上述任一前提，example 必須填空字串 ""，
-     explanation 只說明「可評估的方向」與「要先確認什麼」，不要在 explanation 放一整段可直接複製的 SQL。
+   - **example／before 只供系統可驗證的具體改寫使用。**目前只有 deterministic rewrite
+     可證明的形式（例如 SUBSTR 的 canonical LIKE、同欄位 OR→IN）才可以填入具體 SQL。
+     其他 ADVICE_ONLY／INFORMATIONAL 一律把 example 與 before 留空，只在 explanation
+     用白話說「可評估的方向」與「要先確認什麼」；即使同時加上「需確認」警語，也不要
+     在 explanation 偷放一段可直接複製的 SQL。
    - **before（原寫法片段）**：只要 example 是「把某段 SQL 文字改成另一種寫法」，就必須
      同時填 before——從 sanitized_sql **原封不動複製**被取代的那一段（同樣的大小寫、
      空白、佔位符），例如 before 為 `substr(w.coll_b_date, 1, 3) = '107'`、example 為
@@ -117,12 +119,11 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
      數而給空泛的建議**（例如「確認關聯欄位資料類型」「評估是否移除 DISTINCT」這類沒有
      具體依據的通用提醒）。重要資料表的「請確認查詢範圍」提醒（important_table_notices
      有內容時）是例外，仍應提出。
-   - 後置萬用字元的 LIKE（例如 `LIKE '114%'`、`LIKE '07%'`）不屬於 R004 的命中範圍；
-     是否及如何改善仍需依實際資料庫環境確認，不要主動建議修改，也不要建議把它改成日期
-     範圍；只有前置萬用字元（`LIKE '%xxx'`）才值得提醒。前置萬用字元沒有等價的改寫，
-     example 請寫出實際可行的替代方向（例如「若業務上只需比對開頭，可改為
-     `LIKE 'xxx%'`」，並在 explanation 說明這會改變查詢條件、需要業務確認），不要建議
-     建立索引，不要編造不存在的佔位符或把它硬改成等號比對。
+   - 後置萬用字元的 LIKE 不屬於 R004 的命中範圍；是否及如何改善仍需依實際資料庫環境
+     確認，不要主動建議修改。只有前置萬用字元才值得提醒。前置萬用字元沒有可保證等價的
+     改寫，因此只能用白話說明「若業務需求允許縮小比對範圍，可評估其他比對方式」；
+     example 與 before 必須留空，explanation 也不要輸出替代 LIKE 片段或其他可直接貼上的
+     SQL。不要建議建立索引，不要編造不存在的佔位符，也不要硬改成等號比對。
 3. suggested_sql（建議寫法）：
    - **candidate_allowed 為 true 時的預設行為：只要你的任何一項改善建議會實際改變 SQL
      文字（例如下方 6-2 列出、系統能推導的 SUBSTR 改 LIKE、同欄位 OR 合併成 IN），
@@ -156,17 +157,17 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
        「目前未發現需要調整的寫法。」若要補充，只能列 SQL 文字可觀察的事實；不可宣稱
        「無隱含型別轉換」「一定會使用索引」或其他需要資料庫實際資訊才能確認的內容。
      - "advice_only"：對應上面的 (b)——有改善方向，但需要業務確認才能安全調整，因此不產生
-       完整改寫。只有在原 SQL 已提供足夠資訊時才可給 example；若需要猜欄位、JOIN、資料型態
-       或業務條件，example 必須留空。
+       完整改寫，也不提供可直接複製的片段；example／before 一律留空，只在 explanation
+       說明方向。
      不要把「其實沒東西可改」說成 advice_only，也不要把「需要假設」說成 not_needed。
      **advice_only 的 reason 寫法**：用同仁看得懂的白話寫 1～2 句，直接點出「需要業務確認
      的是哪一件事」以及「若不確認就改會發生什麼」，例如：「移除 DISTINCT 前，請先確認
      JOIN 後的資料是否已經唯一；若不是，拿掉 DISTINCT 會改變查詢結果。」不要先鋪陳
      已檢查過的項目（那是 not_needed 才需要的），也不要在句尾加「故不自動產生建議寫法」
      「本次不改寫」這類結語——畫面已經會說明這次只提供方向。
-   - 若 candidate_allowed 為 false 且原因是 SQL 內容過長（系統依長度判定無法在單次回覆
-     內完整改寫），請把改善重點放在 advice 的 before／example 片段，不要嘗試在任何欄位
-     輸出整段 SQL。
+   - 若 candidate_allowed 為 false 且原因是 SQL 內容過長，只有 deterministic rewrite
+     可驗證的局部改寫才能放在 advice 的 before／example；其餘 advice_only 仍只用
+     explanation 說明方向，不要輸出整段 SQL。
    - 若 candidate_allowed 為 false，available 必須是 false。reason 請具體說明「為什麼
      這次不提供改寫」（例如「此語句包含集合運算」「無法解析此 SQL 結構」），而不是每次
      都輸出同一句話；若找不到更具體的原因，才使用這句固定說法：「為避免改變原本查詢內
@@ -184,15 +185,14 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
         SUM／AVG 等）都必須與原始 SQL 相同。
      5. SELECT 子句的欄位數必須與原始 SQL 相同。
      6. 不可以新增任何 Hint（包含 Parallel Hint）或 ROWNUM。
-     6-1. 不可以做任何「結構變更」：引入原本沒有的 UNION／UNION ALL／MINUS／INTERSECT、
-        新增或移除子查詢、把子查詢改成 JOIN、`NOT IN` 改 `NOT EXISTS`（子查詢欄位含 NULL
-        時結果會不同）、`IN` 改 `EXISTS`、拆分或合併 GROUP BY 欄位（例如把
-        `GROUP BY a||b` 改成 `GROUP BY a, b`）、移除 DISTINCT。這些一律只能放在 advice 的
-        example 並設為 advice_only，不能放進 sql 欄位——系統會用結構比對把它們擋下來，
-        擋下來的結果對同仁來說比「僅提供方向」更不友善。
+     6-1. 不可以做任何「結構變更」：引入原本沒有的集合運算、新增或移除子查詢、把子查詢
+        改成 JOIN、NOT IN 改 NOT EXISTS、IN 改 EXISTS、拆分或合併 GROUP BY 欄位、移除
+        DISTINCT。這些都屬於 advice_only：只能在 explanation 用白話描述方向與要確認的
+        前提，example／before 留空，也不能放進 sql 欄位。
      6-2. **系統會用確定性規則重新推導每一個條件改寫**（目前只有 SUBSTR 等於、同欄位 OR 串成
-        IN 兩種），與推導結果不符的片段會被系統改掉或標示為「未驗證」，整段改寫則會被整個
-        退回。所以放進 sql 欄位的條件改法只能是下列兩種：
+        IN 兩種）。與推導結果不符時，系統只會保留可驗證／可修正成 canonical form 的片段；
+        其他未驗證片段不會顯示成可複製 SQL，整段改寫也會被退回。所以放進 sql 欄位的條件
+        改法只能是下列兩種：
         - `SUBSTR(A.COL,1,3) = '114'` → `A.COL LIKE '114%'`。**不要**改成
           `A.COL >= '114' AND A.COL < '115'` 這種上下界寫法：上下界的比較結果取決於資料庫
           的排序設定，系統無法確認查詢結果相同。

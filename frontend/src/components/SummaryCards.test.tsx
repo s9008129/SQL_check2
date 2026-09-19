@@ -181,3 +181,25 @@ describe("SummaryCards — REVIEW wording", () => {
     expect(screen.queryByText("目前無提醒事項")).toBeNull();
   });
 });
+
+
+describe("SummaryCards — deterministic reminders and AI advice counts stay separate", () => {
+  it("does not force AI advice count to equal rule reminder count", () => {
+    render(
+      <SummaryCards
+        result={makeResult({
+          compliance: { status: "PASS", label: "符合中心規範", notice_count: 2, block_count: 0 },
+          rules: [
+            { rule_id: "R004", name: "LIKE 前置萬用字元", status: "NOTICE", evidence: "1 處", note: "提醒" },
+            { rule_id: "R006", name: "OR 條件", status: "NOTICE", evidence: "1 處", note: "提醒" },
+          ],
+          ai: makeAi({
+            advice: [{ title: "評估 LIKE 比對方式", explanation: "請確認需求。", example: null, impact: "low", verification: "unverified" }],
+          }),
+        })}
+      />,
+    );
+    expect(screen.getByText("2 項提醒")).toBeTruthy();
+    expect(screen.getByText("1 項")).toBeTruthy();
+  });
+});

@@ -393,22 +393,23 @@ async def test_outcome_rejected_when_revalidation_fails(settings, chat_url):
 
 
 @respx.mock
-async def test_advice_example_and_before_are_unmasked(settings, chat_url):
+async def test_verified_advice_example_and_before_are_unmasked(settings, chat_url):
     inner = _good_inner(
         advice=[
             {
-                "title": "改為範圍比對",
+                "title": "合併同欄位條件",
                 "explanation": "e",
-                "before": "A.Y = :STR_001",
-                "example": "A.Y >= :STR_001",
+                "before": "A.Y = :STR_001 OR A.Y = :STR_002",
+                "example": "A.Y IN (:STR_001, :STR_002)",
                 "impact": "high",
             }
         ]
     )
     respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
     result = await _call(settings, _clean_select_statement())
-    assert result.advice[0].before == "A.Y = 'A123456789'"
-    assert result.advice[0].example == "A.Y >= 'A123456789'"
+    assert result.advice[0].verification == "verified"
+    assert result.advice[0].before == "A.Y = 'A123456789' OR A.Y = 'B987654321'"
+    assert result.advice[0].example == "A.Y IN ('A123456789', 'B987654321')"
 
 
 def test_response_schema_has_advice_before_field():
@@ -480,8 +481,8 @@ def test_system_prompt_has_no_overclaiming_or_unprovable_rewrite_wording(overcla
 def test_system_prompt_keeps_r004_scope_and_derived_rewrite_list():
     prompt = ai_service.SYSTEM_PROMPT
     assert "不屬於 R004 的命中範圍" in prompt
-    assert "是否及如何改善仍需依實際資料庫環境確認" in prompt
-    assert "只有前置萬用字元" in prompt
+    assert "只有前置萬用字元才值得提醒" in prompt
+    assert "替代 LIKE 片段" in prompt
     assert "目前只有 SUBSTR 等於、同欄位 OR 串成" in prompt
     assert "超過 1000 個值不要合併成單一 IN" in prompt
     assert "不可直接合併成單一 IN" in prompt
@@ -1579,3 +1580,173 @@ def test_sanitize_user_prose_uses_typed_literal_hint_for_timestamp_placeholder()
         {":STR_001": {"kind": "string", "oracle_literal_type": "timestamp"}},
     )
     assert text == "請確認 原查詢中的日期時間值 的格式。"
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-19 third-party audit: ADVICE_ONLY must be prose-only at runtime
+# ---------------------------------------------------------------------------
+def test_unverified_leading_wildcard_rewrite_is_hidden_and_copy_is_server_owned():
+    from app.schemas import AdviceItem
+
+    source = "SELECT A.ID FROM T A WHERE A.OWNER_NAME LIKE '%明'"
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="評估 LIKE 比對方式",
+                explanation="若只要比對開頭，可改成 A.OWNER_NAME LIKE '明%'。",
+                before="A.OWNER_NAME LIKE '%明'",
+                example="A.OWNER_NAME LIKE '明%'",
+                impact="medium",
+            )
+        ],
+        [],
+        {},
+        {},
+        source_sql=source,
+    )
+
+    item = result[0]
+    assert item.verification == "unverified"
+    assert item.example is None
+    assert item.before is None
+    assert "前置萬用字元" in item.explanation
+    assert "LIKE '明%'" not in item.explanation
+    assert "%明" not in item.explanation
+
+
+def test_nvl_concrete_rewrite_hidden_even_when_model_puts_it_in_explanation():
+    from app.schemas import AdviceItem
+
+    source = "SELECT A.ID FROM T A WHERE NVL(A.CANCEL_FLAG, 'N') = 'N'"
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="評估空值處理寫法",
+                explanation="可改成 (A.CANCEL_FLAG = 'N' OR A.CANCEL_FLAG IS NULL)。",
+                example=None,
+                impact="medium",
+            )
+        ],
+        [],
+        {},
+        {},
+        source_sql=source,
+    )
+
+    item = result[0]
+    assert item.verification == "unverified"
+    assert item.example is None
+    assert "分開判斷欄位值與空值" in item.explanation
+    assert "IS NULL" not in item.explanation
+    assert " OR " not in item.explanation
+
+
+def test_to_char_invented_date_range_is_removed_from_explanation():
+    from app.schemas import AdviceItem
+
+    source = "SELECT A.ID FROM T A WHERE TO_CHAR(A.APPR_DATE, 'YYYY') = '2025'"
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="評估日期比對寫法",
+                explanation="建議改成大於等於 2026-01-01 且小於 2027-01-01。",
+                example=None,
+                impact="medium",
+            )
+        ],
+        [],
+        {},
+        {},
+        source_sql=source,
+    )
+
+    item = result[0]
+    assert item.verification == "unverified"
+    assert "TO_CHAR()" in item.explanation
+    assert "2026-01-01" not in item.explanation
+    assert "2027-01-01" not in item.explanation
+
+
+def test_unverified_trunc_fragment_is_hidden_even_when_literals_are_known():
+    from app.schemas import AdviceItem
+
+    source = "SELECT A.ID FROM T A WHERE TRUNC(A.D) = DATE '2026-09-18'"
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="評估日期條件",
+                explanation="可改成日期範圍。",
+                before="TRUNC(A.D) = DATE '2026-09-18'",
+                example="A.D >= DATE '2026-09-18' AND A.D < DATE '2026-09-18' + 1",
+                impact="medium",
+            )
+        ],
+        [],
+        {},
+        {},
+        source_sql=source,
+    )
+
+    item = result[0]
+    assert item.verification == "unverified"
+    assert item.example is None
+    assert item.before is None
+    assert "可評估改用日期範圍" in item.explanation
+
+
+def test_verified_or_to_in_fragment_still_reaches_api():
+    from app.schemas import AdviceItem
+
+    source = "SELECT A.ID FROM T A WHERE A.S = 'A' OR A.S = 'B'"
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="合併相同欄位條件",
+                explanation="可改成較精簡的 IN 寫法。",
+                before="A.S = 'A' OR A.S = 'B'",
+                example="A.S IN ('A', 'B')",
+                impact="medium",
+            )
+        ],
+        [],
+        {},
+        {},
+        source_sql=source,
+    )
+
+    item = result[0]
+    assert item.verification == "verified"
+    assert item.before is not None
+    assert item.example == "A.S IN ('A', 'B')"
+
+
+def test_sql_example_without_before_is_hidden_as_unverified():
+    from app.schemas import AdviceItem
+
+    source = "SELECT A.ID FROM T A WHERE A.S = 'A'"
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="參考寫法",
+                explanation="請先確認條件。",
+                example="A.S = 'A'",
+                impact="low",
+            )
+        ],
+        [],
+        {},
+        {},
+        source_sql=source,
+    )
+
+    item = result[0]
+    assert item.verification == "unverified"
+    assert item.example is None
+    assert item.before is None
+
+
+def test_prompt_requires_advice_only_to_be_prose_only():
+    prompt = ai_service.SYSTEM_PROMPT
+    assert "example／before 一律留空" in prompt
+    assert "替代 LIKE 片段" in prompt
+    assert "未驗證片段不會顯示成可複製 SQL" in prompt

@@ -482,6 +482,69 @@ def _sanitize_user_prose(
     return _sanitize_unobservable_db_claims(text)
 
 
+_ADVICE_ONLY_PROSE_GUARDS: tuple[tuple[str, re.Pattern[str], re.Pattern[str], str], ...] = (
+    (
+        "leading_wildcard_like",
+        re.compile(r"\bLIKE\s+N?'[%_]", re.IGNORECASE),
+        re.compile(r"\bLIKE\b|萬用字元|前置|比對(?:開頭|結尾)?", re.IGNORECASE),
+        "目前使用前置萬用字元。若業務需求允許縮小比對範圍，可評估其他比對方式；調整前請先確認實際比對需求。",
+    ),
+    (
+        "trunc_condition",
+        re.compile(r"\bTRUNC\s*\(", re.IGNORECASE),
+        re.compile(r"\bTRUNC\b|日期|時間|範圍|大於|小於|>=|<=", re.IGNORECASE),
+        "目前條件先用 TRUNC() 處理欄位再比對。若確認是日期欄位，可評估改用日期範圍；調整前請先確認欄位型態與比對值是否包含時間。",
+    ),
+    (
+        "to_char_condition",
+        re.compile(r"\bTO_CHAR\s*\(", re.IGNORECASE),
+        re.compile(r"\bTO_CHAR\b|日期|年度|年份|範圍|大於|小於|>=|<=", re.IGNORECASE),
+        "目前條件先用 TO_CHAR() 轉成文字再比對。可評估改用原欄位型態直接比對；調整前請先確認欄位型態與實際比對需求。",
+    ),
+    (
+        "nvl_condition",
+        re.compile(r"\bNVL\s*\(", re.IGNORECASE),
+        re.compile(r"\bNVL\b|空值|NULL|IS\s+NULL|\bOR\b", re.IGNORECASE),
+        "目前條件用 NVL() 處理空值。可評估改成分開判斷欄位值與空值；調整前請先確認欄位型態與原本的空值規則。",
+    ),
+    (
+        "distinct_removal",
+        re.compile(r"\bDISTINCT\b", re.IGNORECASE),
+        re.compile(r"\bDISTINCT\b|去重|重複", re.IGNORECASE),
+        "移除 DISTINCT 前，請先確認 JOIN 後是否仍可能出現重複資料；如果會，就不要移除。",
+    ),
+)
+
+_COPYABLE_SQL_IN_PROSE_RE = re.compile(
+    r"(?:\b[A-Z_][A-Z0-9_$#]*\.)?[A-Z_][A-Z0-9_$#]*\s*"
+    r"(?:=|<>|!=|>=|<=|>|<|\bLIKE\b|\bIN\s*\(|\bIS\s+(?:NOT\s+)?NULL\b)",
+    re.IGNORECASE,
+)
+_DATE_LITERAL_IN_PROSE_RE = re.compile(r"\b(?:19|20)\d{2}[-/]\d{1,2}[-/]\d{1,2}\b")
+
+
+def _guard_unverified_advice_prose(source_sql: str, title: str, explanation: str) -> tuple[str, str | None]:
+    """Keep ADVICE_ONLY content useful without leaking copy-paste SQL.
+
+    Prompt rules are guidance; this function is enforcement. Known semantic
+    traps get short server-owned wording. Any remaining unverified prose that
+    still contains a copyable predicate or an invented date literal is
+    replaced by a generic confirmation-first sentence.
+    """
+    if not explanation:
+        return explanation, None
+
+    combined = f"{title}\n{explanation}"
+    for guard_id, source_re, advice_re, safe_copy in _ADVICE_ONLY_PROSE_GUARDS:
+        if source_re.search(source_sql) and advice_re.search(combined):
+            return safe_copy, guard_id
+
+    if _COPYABLE_SQL_IN_PROSE_RE.search(explanation) or _DATE_LITERAL_IN_PROSE_RE.search(explanation):
+        return "這個改善方向可能改變查詢結果。請先確認業務條件後，再決定是否調整。", "generic_unverified_sql"
+
+    return explanation, None
+
+
 def _parse_sql_or_fragment(text: str) -> exp.Expression | None:
     if not text or not text.strip():
         return None
@@ -609,10 +672,11 @@ def _wildcard_core(value: str) -> str:
 def _introduces_unknown_literals(source_sql: str, example: str) -> bool:
     """Reject business constants invented by the model.
 
-    Exact source literals are allowed. String examples may add/move only LIKE
-    wildcard characters around the same non-empty literal core; this keeps
-    deterministic SUBSTR→LIKE and clearly-labelled LIKE direction examples
-    possible without authorizing new business values.
+    Exact source literals are allowed. String examples may add/move LIKE
+    wildcard characters around the same non-empty literal core so the
+    deterministic SUBSTR→LIKE rule can work without authorizing new business
+    values. Unverified LIKE-direction examples are removed later by
+    _filter_advice and never reach the API.
     """
     source = _literal_facts(source_sql)
     proposed = _literal_facts(example)
@@ -673,17 +737,24 @@ def _filter_advice(
             continue
         title = _sanitize_user_prose(raw_title, {}, literal_hints)
         explanation = _sanitize_user_prose(raw_explanation, {}, literal_hints)
+        # Keep the sanitized model wording for pattern classification even if
+        # a lower safety layer later replaces the user-facing text.
+        guard_title = title
+        guard_explanation = explanation
         # 2026-09-17: code fragments are shown to the reviewer who owns the
         # data, so restore masked literals there too (previously `:STR_002`
         # leaked through into the advice card — confirmed in a production
         # printout). Prose fields are never un-masked.
         example = unmask_sql(item.example, reverse_map or {}) if item.example else None
         before = unmask_sql(item.before, reverse_map or {}) if item.before else None
+        verification: str | None = None
+        assumption: str | None = None
         safety_issue = _advice_example_safety_issue(source_sql, before, example) if example else None
         if safety_issue is not None:
             logger.info("ai_service: advice SQL example hidden by deterministic safety guard: %s", safety_issue)
             example = None
             before = None
+            verification = "unverified"
             # Once the model has demonstrated that this advice depends on an
             # invented identifier/value or lost typed-literal context, do not
             # keep its accompanying prose: the same hallucinated detail may
@@ -707,21 +778,39 @@ def _filter_advice(
                     "這個改善方向涉及日期／時間常數的型態前提。"
                     "系統目前無法確認可直接套用的改寫，因此只保留方向提醒。"
                 )
+        elif example:
+            if before:
+                # Concrete SQL is a privilege, not a warning label. Only a
+                # deterministic verified/corrected rewrite may reach the API
+                # as copyable SQL.
+                v = rewrite_rules.verify_fragment(before, example)
+                verification, assumption = v.status, v.assumption
+                if v.status == "corrected":
+                    logger.info("ai_service: advice fragment corrected by rule %s", v.rule)
+                    example = v.example
+                elif v.status == "unverified":
+                    logger.info("ai_service: unverified advice SQL hidden; prose-only guidance kept")
+                    example = None
+                    before = None
+                    assumption = None
+            else:
+                logger.info("ai_service: advice SQL without original fragment hidden; cannot verify safely")
+                example = None
+                verification = "unverified"
+
         if before and not example:
-            # A "before" with nothing to compare against is useless to the
-            # diff view and misleading in the card — drop it.
             before = None
-        verification: str | None = None
-        assumption: str | None = None
-        if before and example:
-            # 2026-09-17: the model is not trusted for equivalence. The
-            # system derives the equivalent form itself (rewrite_rules);
-            # the model's text is confirmed, replaced, or flagged.
-            v = rewrite_rules.verify_fragment(before, example)
-            verification, assumption = v.status, v.assumption
-            if v.status == "corrected":
-                logger.info("ai_service: advice fragment corrected by rule %s", v.rule)
-                example = v.example
+
+        if verification not in _VERIFIED:
+            guarded_explanation, prose_guard = _guard_unverified_advice_prose(
+                source_sql,
+                guard_title,
+                guard_explanation,
+            )
+            if prose_guard is not None:
+                explanation = guarded_explanation
+                verification = "unverified"
+                logger.info("ai_service: advice-only prose normalized by guard: %s", prose_guard)
         kept.append(
             AdviceItem(
                 title=title,

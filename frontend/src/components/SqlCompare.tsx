@@ -33,6 +33,9 @@ export function splitAssumption(example: string): { sql: string; assumption: str
 function toSegments(originalSql: string, advice: AdviceItem[]): Segment[] {
   const segments: Segment[] = [];
   for (const item of advice) {
+    // Defense in depth: old/corrupt API responses must never surface
+    // unverified copyable SQL in the comparison panel.
+    if (item.verification !== "verified" && item.verification !== "corrected") continue;
     const raw = item.example?.trim();
     if (!raw) continue;
     const { sql: after, assumption } = splitAssumption(raw);
@@ -65,11 +68,8 @@ export default function SqlCompare({ originalSql, ai }: SqlCompareProps) {
     return null;
   }
 
-  const hasUnverified = segments.some(
-    (seg) => seg.verification !== "verified" && seg.verification !== "corrected",
-  );
-  const statusTone = suggestedSql !== null && !hasUnverified ? "green" : "yellow";
-  const statusText = statusTone === "green" ? "已確認" : "需確認";
+  const statusTone = "green";
+  const statusText = "已確認";
 
   return (
     <section className={`card card-compare card-compare-${statusTone}`}>

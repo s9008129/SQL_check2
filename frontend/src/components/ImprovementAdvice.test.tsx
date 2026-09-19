@@ -101,3 +101,25 @@ it("does not repeat the AI summary when detailed advice cards are visible", () =
   expect(screen.queryByText("這句摘要不應重複顯示。")).toBeNull();
   expect(screen.getByText("AI 建議僅供參考，採用前請先測試。")).toBeTruthy();
 });
+
+
+it("never renders copyable SQL for an unverified advice item", () => {
+  render(
+    <ImprovementAdvice
+      ai={makeAi({
+        advice: [
+          {
+            title: "評估 LIKE 比對方式",
+            explanation: "請先確認實際比對需求。",
+            before: "A.NAME LIKE '%明'",
+            example: "A.NAME LIKE '明%'",
+            impact: "low",
+            verification: "unverified",
+          },
+        ],
+      })}
+    />,
+  );
+  expect(screen.getByText("需確認")).toBeTruthy();
+  expect(screen.queryByText("A.NAME LIKE '明%'")).toBeNull();
+});

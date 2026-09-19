@@ -23,7 +23,7 @@ def _ollama_cloud_settings(base_llm):
         provider_type="ollama",
         remote=True,
         base_url="https://ollama.com",
-        model="gemma4:31b-cloud",
+        model="gemma4:31b",
         api_key_env="OLLAMA_API_KEY",
         api_key="ollama-test-key",
         timeout_seconds=30,
@@ -240,7 +240,7 @@ async def test_ollama_cloud_uses_bearer_auth_and_same_chat_shape(base_llm):
     request = route.calls[0].request
     assert request.headers["authorization"] == "Bearer ollama-test-key"
     body = json.loads(request.content)
-    assert body["model"] == "gemma4:31b-cloud"
+    assert body["model"] == "gemma4:31b"
     assert body["format"] == {"type": "object"}
     assert body["think"] is False
     assert body["options"]["temperature"] == 0.2
@@ -250,7 +250,7 @@ async def test_ollama_cloud_uses_bearer_auth_and_same_chat_shape(base_llm):
     assert body["options"]["num_predict"] == 3072
     assert "keep_alive" not in body
     assert reply.provider == "ollama_cloud"
-    assert reply.model == "gemma4:31b-cloud"
+    assert reply.model == "gemma4:31b"
 
 
 async def test_ollama_cloud_missing_api_key_fails_as_configuration(base_llm):
@@ -273,7 +273,7 @@ async def test_ollama_cloud_health_uses_bearer_auth(base_llm):
     route = respx.get("https://ollama.com/api/tags").mock(
         return_value=httpx.Response(
             200,
-            json={"models": [{"name": "gemma4:31b-cloud"}]},
+            json={"models": [{"name": "gemma4:31b"}]},
         )
     )
 

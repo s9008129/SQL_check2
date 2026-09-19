@@ -206,7 +206,7 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
 - [ ] Golden Benchmark 擴充為後期選配加分項。
 
 ## 2026-09-19：Mac 改走 Ollama Cloud
-- [x] 新增 `ollama_cloud` provider profile：`https://ollama.com/api/chat` + `gemma4:31b-cloud`。
+- [x] 新增 `ollama_cloud` provider profile：`https://ollama.com/api/chat` + `gemma4:31b`。
 - [x] 使用官方 `OLLAMA_API_KEY` Bearer auth；Key 只從環境變數讀取。
 - [x] Mac `.env.mac.example` / `scripts/dev-mac.sh` 預設改為 Ollama Cloud。
 - [x] Cloud profile 對齊地端 SQLCheck sampling / context / think / masking 設定。

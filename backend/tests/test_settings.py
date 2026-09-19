@@ -108,7 +108,7 @@ def test_ollama_cloud_provider_selected_from_environment(monkeypatch):
         assert settings.llm.provider_type == "ollama"
         assert settings.llm.remote is True
         assert settings.llm.base_url == "https://ollama.com"
-        assert settings.llm.model == "gemma4:31b-cloud"
+        assert settings.llm.model == "gemma4:31b"
         assert settings.llm.api_key_env == "OLLAMA_API_KEY"
         assert settings.llm.api_key == "secret-for-test"
         assert settings.llm.temperature == 0.2

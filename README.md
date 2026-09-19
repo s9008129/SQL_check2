@@ -12,8 +12,7 @@
 正式環境只有**一個** Docker Container（`sqlcheck-app`），內含 FastAPI + 規則引擎 +
 已建置的 React 靜態檔；正式機仍使用 Windows Host 上的 Ollama／Gemma 4，容器透過
 `host.docker.internal:11434` 呼叫。AI 連線已抽成 provider adapter：Mac 開發環境預設直接走 **Ollama Cloud API**
-的 `gemma4:31b-cloud`，與正式機的 Ollama `gemma4:31b` 使用同一套 Ollama API shape
-與 Gemma 4 31B 模型家族；
+的 `gemma4:31b`，與正式機的 Ollama `gemma4:31b` 使用相同 model id 與 Ollama API shape；
 規則引擎、遮罩、改寫複核與前端不需要跟著改。系統**不**連任何資料庫（含 Oracle）。
 
 ```
@@ -47,11 +46,11 @@ bash scripts/dev-mac.sh
 - API Health：`http://127.0.0.1:8000/api/health`
 - Vite 會把 `/api` proxy 到 FastAPI，不需要 CORS 設定。
 - Mac 預設 provider 是 `ollama_cloud`，直接呼叫 `https://ollama.com/api/chat`，
-  模型固定 `gemma4:31b-cloud`；正式機仍是本機 Ollama `gemma4:31b`。
+  模型固定 `gemma4:31b`；正式機仍是本機 Ollama `gemma4:31b`。
 - Parity profile 對齊 temperature=0.2、top_p=0.95、top_k=64、max output=3072、
   context tier=16384/32768、`think=false` 與相同的短 ASCII masking 規則。
-- 這比 Gemini API 路徑更接近正式環境：兩邊都是 Ollama API + Gemma 4 31B；
-  但 cloud 使用代管原生權重／加速格式，正式機是本機量化版本，因此仍不要求逐字一致。
+- 這比 Gemini API 路徑更接近正式環境：兩邊都是 Ollama API，且 model id 都是 `gemma4:31b`；
+  但 cloud 使用 Ollama 代管權重／加速格式，正式機是本機量化版本，因此仍不要求逐字一致。
 - 因 parity 模式會保留與地端相同的短代碼／LIKE 樣式，Mac 雲端驗證**只能使用 synthetic 或
   已去識別化 SQL**；不要把正式機 production archive 或原始案件 SQL 直接送到雲端。
 
@@ -87,7 +86,7 @@ LLM 連線集中在 `backend/app/config/llm.yaml`，目前內建：
 | Provider | 用途 | 憑證 |
 |---|---|---|
 | `ollama` | 正式機／地端 Gemma 4 | 不需要 API Key |
-| `ollama_cloud` | Mac 開發；Ollama Cloud `gemma4:31b-cloud` | `OLLAMA_API_KEY` 環境變數 |
+| `ollama_cloud` | Mac 開發；Ollama Cloud `gemma4:31b` | `OLLAMA_API_KEY` 環境變數 |
 | `gemini` | 備援雲端 provider | `GEMINI_API_KEY` 環境變數 |
 
 切換只需 `SQLCHECK_LLM_PROVIDER=ollama|ollama_cloud|gemini`。供應商 HTTP 格式都封裝在
@@ -120,7 +119,7 @@ Dockerfile／docker-compose.yml 在開發機只能做語法層級的靜態檢查
 | 前端型別檢查、單元測試、build | ✅ `tsc --noEmit`、`npm run test`、`npm run build` | — |
 | 本機整合（假 Ollama）+ E2E | ✅ | — |
 | Docker 映像建置與啟動 | ❌ 開發機無 Docker | ✅ |
-| 真實模型輸出品質 | 🟡 已設定 Ollama Cloud / `gemma4:31b-cloud` parity，待本機 API Key live 跑 | 🟡 最新版待正式機 `gemma4:31b` + `run_golden.py` 驗收 |
+| 真實模型輸出品質 | 🟡 已設定 Ollama Cloud / `gemma4:31b` parity，待本機 API Key live 跑 | 🟡 最新版待正式機 `gemma4:31b` + `run_golden.py` 驗收 |
 | 一鍵部署腳本完整流程 | 只能 `-CheckOnly` | ✅ |
 
 ### SQL 蒐集檔在哪裡

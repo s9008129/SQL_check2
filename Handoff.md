@@ -33,7 +33,7 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 - 使用者貼 SQL＋COST → 後端 `sql_parser`（sqlglot，Oracle 方言）擷取事實 → `rule_engine`
   依 `rules.yaml` 判 8 條規則（R001 COST、R002 WHERE、R003 Parallel Hint 為 BLOCK 類；
   R004 LIKE 前置萬用字元、R005 條件欄位套函數、R006 OR、R007 重要資料表為 NOTICE 類；
-  R008 重要資料表禁止操作）→ `improvement_score` 算改善優先指數 → `ai_service` 呼叫 Ollama
+  R008 重要資料表禁止操作）→ `improvement_score` 算改善優先指數 → `ai_service` 透過 LLM provider adapter 呼叫 Ollama 或 Gemini
   Gemma4 取得白話建議與建議寫法 → 前端 React 呈現，可列印 PDF。
 - **AI 不裁判、不看資料庫、不編造 COST／執行計畫**；它只解釋、建議、在允許時給一份等價改寫。
 - 單一 Docker 容器（正式主機 10.97.15.58，HTTPS 443 自簽憑證），Ollama 原生跑在 Windows。
@@ -299,6 +299,44 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 - 目前 main merge commit：`7a0b9ebda3cc9f7789da7a4d6fca83e3757aaef4`。
 - 正式主機尚未部署 PR #9／#10，也尚未以正式 Gemma4 做這一版的 live 驗收；不要把 CI 綠燈寫成正式機驗證完成。
 
+### 2026-09-19 Mac + Gemini / Pluggable LLM Provider（PR #11）
+- PR #11 已 squash merge；應用程式功能 commit：`e084d1e5963c0234cb8e867050ed115c2dfd1405`。
+- LLM 連線改由 `backend/app/config/llm.yaml` + `backend/app/services/llm_provider.py` 管理：
+  正式機預設 `ollama / gemma4:31b`；Mac 可設 `SQLCHECK_LLM_PROVIDER=gemini`，
+  使用 `gemini-3.8-flash`。同 provider 換模型只改 config/env；新增不同 API 協定時新增 adapter，
+  不改 rule engine／scoring／frontend。
+- Gemini API Key 只從 `GEMINI_API_KEY` 讀取，不進 YAML／Git／Settings repr；cloud profile
+  預設連短 ASCII literal 也遮罩。**遮罩不代表 SQL 完全匿名**：表名、欄位名、SQL 結構仍可能送到雲端，
+  所以 Mac live 驗證只用 synthetic／已去識別化 SQL，除非另有機關政策明確允許。
+- 新增 `.env.mac.example`、`scripts/dev-mac.sh`：Mac 不需 Docker／Ollama，可直接啟動
+  FastAPI :8000 + Vite :5173；live golden runner 也已 provider-neutral。
+- Gemini 3.8 Flash profile 預設 `GEMINI_THINKING_LEVEL=low`，可在本機 env 改 medium/high。
+- SQL archive 路徑：正式 Docker fallback 仍為 `/data/sql_archive`（host 掛載 `./data:/data`）；
+  Mac profile 使用 Repo 根目錄 `data/sql_archive`。
+- Archive 補強：即使 parser 沒產生 statement，也會優先把本次 submitted SQL 在記憶體中
+  `deidentify_sql()` 後寫入，避免未來學習樣本變成空白。
+- CI：PR #11 最新 head Backend CI #77 **524 passed + Ruff clean**；merge 到 main 後 Backend CI #78
+  亦 **524 passed + Ruff clean**。本 PR 未修改 frontend，因此沒有額外觸發 Frontend CI；
+  最近前端基線仍是 80 tests + production build success（main Frontend CI #59）。
+
+### 2026-09-19 SQL Archive 深度盤點
+- GitHub Repo 的 `data/` 目前只有 `.gitkeep`；`data/sql_archive` 在 Git 歷史中 **沒有任何 commit**。
+  這是既有 `.gitignore` 的刻意設計，避免 runtime 去識別化 SQL 自動進 GitHub。
+- 2026-09-16 E2E 報告證明：曾用 6 份真實測試檔跑本機完整流程，當時確實產生
+  `sql_archive-2026-09.jsonl`，並對原始日期／姓名／身分證等做搜尋確認未殘留。
+  但該 JSONL 是 runtime 檔，**沒有 commit 到 Repo**。
+- 同一份 2026-09-16 報告也明列「正式主機 ./data 實際可寫入性未涵蓋」；因此只靠 GitHub
+  不能證明目前正式主機仍保存哪些歷史 archive。回辦公室後需直接檢查
+  `D:\dev\SQL_check2\data\sql_archive\`。
+- Repo 內保留的是「測試證據」而不是 6 份完整 SQL：E2E 報告可看到檔名、結果與少量片段；
+  完整 SQL 本文沒有進 Git。Synthetic golden cases 則在 `backend/tests/golden/run_golden.py`。
+- 正常網頁流程每次按「開始檢核」會先 `include_ai=false`，再自動送一次 `include_ai=true`；
+  archive 只記第二次，所以正常成功送出的 UI 案例是一案一筆、不重複。純 API 若只呼叫
+  `include_ai=false` 則不會進 archive。
+- 若未來要把 archive 用來持續精進，正確方向是：runtime archive 持續留在受控主機，
+  再做去重／統計／人工挑選後，把「可公開給開發流程的完全去識別化代表案例」升級成 benchmark；
+  不要把 production JSONL 整包自動 commit。
+
 ## 4. 「AI 沒給建議寫法」的判讀順序（接手後最常被問）
 
 1. 看 API 回應或畫面的 outcome：
@@ -312,16 +350,33 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 
 ## 5. 目前狀態與驗證數據
 
-- **目前 main**：`7a0b9ebda3cc9f7789da7a4d6fca83e3757aaef4`（PR #10 merge）。
-- **Backend CI**：513 tests passed；Ruff clean。main 合併後 run #70 success。
-- **Frontend CI**：11 test files／80 tests passed；TypeScript + Vite production build 成功。main 合併後 run #59 success。
-- **Deploy Script CI**：最近一次涉及部署腳本的 main run #7 success；PR #9／#10 未改 deploy 路徑，因此不會重跑。
-- PR #8 已關閉且未合併；其仍有價值的安全／UX內容已重新整理到 PR #9／#10，避免舊分支衝突或誤合併。
-- 正式主機尚未更新到目前 main；因此 **Gemma4 live 品質、Docker 正式部署、最新 UI 列印結果仍待正式機驗收**。
-- Golden Benchmark 已有治理策略與 runner，但依 owner 決策列為後期加分精進項，**不是目前完成主線的必要 gate**。
-- 既有人工驗證（test_01～03.pdf）屬先前版本證據；PR #9／#10 合併後仍應做一輪小型正式機代表案例驗收。
+- **目前應用程式 main**：PR #11 squash merge `e084d1e5963c0234cb8e867050ed115c2dfd1405`。
+- **Backend CI**：main run #78，524 tests passed；Ruff clean。
+- **Frontend CI**：PR #11 未改 frontend；最近 main run #59 為 80 tests + TypeScript/Vite production build success。
+- **Deploy Script CI**：最近涉及部署腳本的 main run #7 success；PR #11 未改 deploy scripts。
+- **Mac / Gemini**：程式與 mock HTTP 測試已完成；尚未使用 owner 自己的 Gemini API Key 做真實 live call。
+- **正式主機**：尚未部署 PR #9～#11 的最終整合版，因此最新版 Gemma4 live 品質、Docker 部署與最新 UI 列印仍待驗收。
+- **SQL Archive**：蒐集程式存在且測試通過，但 GitHub 不保存 runtime JSONL；正式機目前實際累積筆數需回辦公室直接查主機。
+- **Golden Benchmark**：保留為後期精進／考核加分，不是目前主線 gate。
 
 ## 6. 開發機驗證方法（不需部署）
+
+Mac + Gemini（目前在外開發的建議流程）：
+
+```bash
+git switch main
+git pull --ff-only origin main
+cp .env.mac.example .env
+# 編輯 .env，只在本機填 GEMINI_API_KEY
+bash scripts/dev-mac.sh
+
+# 另一個終端可跑 live golden（只用 synthetic／去識別化 SQL）
+set -a; source .env; set +a
+cd backend
+uv run python tests/golden/run_golden.py -v
+```
+
+Windows／正式機相關既有方法：
 
 ```powershell
 # 單元測試
@@ -332,7 +387,7 @@ cd D:\dev\SQL_check2\frontend; npm test -- --run; npm run build
 # 前提：正式主機的 Ollama 11434 不對區網開放（2026-09-17 起的 fail-closed 政策），
 # 必須先建立通道，再把 base_url 指向通道的本機埠，例如：
 #   ssh -N -L 11434:127.0.0.1:11434 <正式主機帳號>@10.97.15.58
-# 然後寫一支 python：dataclasses.replace(get_settings(), ollama=replace(..., base_url="http://127.0.0.1:11434"))
+# 然後寫一支 python：dataclasses.replace(get_settings(), llm=replace(get_settings().llm, base_url="http://127.0.0.1:11434"))
 # 再呼叫 ai_service.get_ai_result(...)，範例見 tasks/lessons.md 2026-09-17 段落與 scratchpad 的 validate_new.py 作法
 # 不要為了圖方便把 11434 重新開放給區網；也不要建立固定的開發機 IP 例外。
 
@@ -353,21 +408,25 @@ curl -sk https://10.97.15.58/api/health
 
 ## 7. 尚未完成／建議的下一步方向（依優先序）
 
-1. **正式主機統一更新目前 main（下一步核心）**：使用 app-only `deploy/deploy.ps1`，一次部署 PR #9 + PR #10，
-   不在這一步修改 Windows Firewall／Ollama infrastructure。
-2. **正式 Gemma4 小型 live 驗收**：用固定代表案例確認：
-   - JOIN-only R002 顯示 REVIEW，不會被 AI 說成符合；
-   - 缺 WHERE／未知 JOIN key 時不編造欄位；
-   - DATE／TIMESTAMP 不因遮罩失去型態；
-   - verified 改寫顯示可確認、unverified 顯示需確認／示意方向；
-   - clean SQL 可合理回傳 not_needed；
-   - 長 SQL 仍能正常 gated／advice-only，不因截斷整體失敗。
-3. **Compact Context ON/OFF 驗收**：在同一個目前版本與同一組案例下比較品質與 latency。
-   因 PR #10 已調整 safety prompt，這次 A/B 的意義是量測「目前版本中 context 有沒有幫助」，不是回溯 Phase 3 的純歷史歸因。
-4. **Prompt slimming**：只有正式機基線穩定後才做；目標是刪除重複說明、降低 token，而不是放寬安全邊界。
-5. **Knowledge coverage 精進**：由日後真實／去識別化案例補 specific detector → catalog guidance；family signal 不直接升 exact。
-6. **Golden Benchmark 擴充（選配加分項）**：有代表 SQL 再自然累積，不要求先湊 30～50 支，也不阻擋主線完成。
-7. **Windows Firewall／11434 hardening（最後獨立處理）**：與 SQL 功能、Prompt、Context 分開驗收，避免一次改太多。
+1. **Mac 真實 Gemini 驗收（現在即可做）**：owner 在 Mac pull main、填自己的 `GEMINI_API_KEY`，
+   先跑 synthetic / 去識別化案例與 live golden；確認 structured JSON、繁中、advice/rewrite、timeout 都正常。
+2. **Mac archive 驗收**：從網頁送 2～3 個去識別化案例，確認 `data/sql_archive/sql_archive-YYYY-MM.jsonl`
+   一案一筆，且沒有原始 literal。這同時驗證未來蒐集資料的主線。
+3. **正式主機統一部署**：Mac 基線穩定後再一次部署目前 main；日常只用 app-only `deploy.ps1`。
+4. **正式 Gemma4 最終驗收**：用同一批代表案例確認最新 safety/UI/provider abstraction 沒有改壞地端模型路徑。
+5. **正式主機 archive 清查**：確認 `D:\dev\SQL_check2\data\sql_archive\` 是否已有 2026-09 JSONL、
+   實際筆數與 fingerprint；若缺檔，GitHub 無法回復歷史完整 SQL，只能由既有測試檔／報告重新建立代表案例。
+6. **規則資料正式化**：`important_tables.yaml` 目前仍是範例重要表；R008 `forbidden_operations: []`。
+   需要業務／正式規範提供重要資料表與禁止操作矩陣，Coding Agent 不自行猜。
+7. **改善優先指數定案**：`rules.yaml improvement_score.provisional: true`；功能可用，但考核前宜由業務端確認權重／分級文案。
+8. **Compact Context A/B → Prompt slimming**：最終模型基線穩定後，用同一批案例比較 Context ON/OFF；
+   確認有幫助才做 prompt 去重，避免同時改兩件事無法歸因。
+9. **Archive 統計／Knowledge coverage**：資料累積後再做 fingerprint 去重、rewrite_outcome 分布、常見 R004/R005/R006
+   與 rejected/advice_only 模式，從真實缺口補 specific detector → catalog guidance。
+10. **Windows Firewall／11434 hardening**：最後獨立驗收 container→Ollama 成功、/api/health AI 可用、
+    第二台 LAN→11434 必須失敗；同時確認憑證信任／使用端連線。
+11. **考核成果封裝**：系統穩定後整理架構圖、CI、代表案例、SQL archive 統計與操作截圖；年度實際數字仍依截止日填入。
+12. **Golden Benchmark 擴充（選配加分）**：有代表資料再自然累積，不要求先湊固定數量，也不阻擋主線完成。
 
 ## 8. 絕對不要做的事（來自 lessons.md 的血淚）
 

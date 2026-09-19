@@ -32,7 +32,7 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
 **測試總數**：後端 191 項（`uv run pytest`）、前端 52 項（`npm run test`），
 外加 Playwright 手動驅動的端對端驗證（1366×768／1920×1080／480px，含檢核與
 附件上傳兩條主要流程），以及正式主機專用的 golden dataset 腳本
-（`backend/tests/golden/run_golden.py`，需真實 Ollama，開發機無法執行）。
+（`backend/tests/golden/run_golden.py`；目前可在 Mac 以 Gemini API 執行，也可在正式機以 Ollama/Gemma 執行）。
 
 **過程中發現並修正的真實問題**（詳見 lessons.md）：
 1. sqlglot `error_level=RAISE` 對壞掉的 SQL 不可靠，需另外檢查頂層節點型別。
@@ -62,7 +62,7 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
 - Python 3.12 / uv、Node 22；Docker 僅正式主機；OLLAMA_MODEL=gemma4:31b（正式主機 `ollama list` 實際顯示的標籤；先前計畫誤記為 gemma4:31b-it-qat，2026-09-15 首次部署 Preflight 發現後修正）。
 
 ## Working Notes
-- 開發機無 Docker/Ollama：AI 測試用 respx + scripts/fake_ollama.py。
+- Windows 開發機無 Docker/Ollama 時仍可用 respx + scripts/fake_ollama.py；Mac 可直接用 Gemini API，不需安裝地端模型。
 - sqlglot hint 只在 SELECT 後成為 exp.Hint → R003 用 token 層判定。
 - 建議寫法回傳前還原遮罩。
 
@@ -182,8 +182,25 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
 - [x] Frontend CI：80 passed + TypeScript/Vite build success。
 - [x] PR #10 merge；main Backend #70 / Frontend #59 success。
 - [x] 舊 PR #8 關閉，避免誤合併舊 76 commits。
-- [ ] **下一步：正式主機一次部署目前 main，做正式 Gemma4 小型代表案例驗收。**
-- [ ] Compact Context ON/OFF A/B（正式機基線穩定後）。
-- [ ] Golden Benchmark 擴充列為後期選配加分項，不阻擋目前主線。
+- [x] 此階段已由 PR #11 的 Mac/Gemini 開發路徑接續；最新待辦見下方 PR #11 區塊。
 
-
+## 2026-09-19：Mac + Gemini / Pluggable LLM Provider（PR #11）
+- [x] LLM provider 從 ai_service 抽離，新增 `config/llm.yaml` 與 `services/llm_provider.py`。
+- [x] 正式機預設 Ollama/Gemma 4；Mac 可用 `SQLCHECK_LLM_PROVIDER=gemini`。
+- [x] Gemini Stable `gemini-3.8-flash` structured JSON adapter、health check、MAX_TOKENS、缺 Key 降級。
+- [x] API Key 僅讀環境變數；Settings repr 不顯示 key。
+- [x] Cloud profile 使用更嚴格 literal masking；文件禁止把 production archive 直接送雲端。
+- [x] 新增 `.env.mac.example` + `scripts/dev-mac.sh`，Mac 不需 Docker/Ollama。
+- [x] live golden runner provider-neutral。
+- [x] archive parser edge case 補強，submitted SQL 先去識別化再落地。
+- [x] PR #11 CI：524 passed + Ruff clean；merge main 後 Backend CI #78 同樣 524 passed + Ruff clean。
+- [x] 深度盤點 GitHub：`data/` 只有 `.gitkeep`，`data/sql_archive` 無 Git 歷史；runtime JSONL 從未 commit。
+- [ ] Mac 用 owner Gemini API Key 做 live golden + 2～3 個 UI 去識別化案例。
+- [ ] 確認 Mac `data/sql_archive` 一案一筆且沒有原始 literal。
+- [ ] 回辦公室後清查正式主機 `D:\dev\SQL_check2\data\sql_archive\` 的實際既有檔案／筆數。
+- [ ] Mac 驗證完成後再一次部署目前 main 到正式機。
+- [ ] 重要資料表正式清單 + R008 禁止操作矩陣由業務端定案。
+- [ ] 改善優先指數 provisional 權重／分級文案由業務端確認。
+- [ ] Compact Context ON/OFF → Prompt slimming。
+- [ ] 最後獨立完成 11434 / Firewall hardening。
+- [ ] Golden Benchmark 擴充為後期選配加分項。

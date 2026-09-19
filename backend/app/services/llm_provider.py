@@ -7,6 +7,7 @@ generation request to/from a vendor API.
 
 Supported v1 providers:
 - ollama: local / formal-host Gemma 4 via /api/chat
+- ollama_cloud: Ollama Cloud direct API via https://ollama.com/api/chat
 - gemini: Google Gemini REST generateContent
 
 Adding a provider should require one adapter here + one profile in llm.yaml,
@@ -65,6 +66,19 @@ def _model_id(model: str) -> str:
     return model.removeprefix("models/")
 
 
+def _ollama_headers(settings: LLMSettings) -> dict[str, str]:
+    if settings.remote:
+        if not settings.api_key:
+            raise LLMConfigurationError(
+                f"{settings.api_key_env or 'OLLAMA_API_KEY'} is required for remote Ollama"
+            )
+        return {
+            "Authorization": f"Bearer {settings.api_key}",
+            "Content-Type": "application/json",
+        }
+    return {}
+
+
 def _ollama_body(
     settings: LLMSettings,
     *,
@@ -73,7 +87,7 @@ def _ollama_body(
     response_schema: dict[str, Any],
     context_window: int,
 ) -> dict[str, Any]:
-    return {
+    body: dict[str, Any] = {
         "model": settings.model,
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -89,8 +103,10 @@ def _ollama_body(
             "num_ctx": context_window,
             "num_predict": settings.max_output_tokens,
         },
-        "keep_alive": settings.keep_alive or "30m",
     }
+    if settings.keep_alive is not None:
+        body["keep_alive"] = settings.keep_alive
+    return body
 
 
 async def _generate_ollama(
@@ -109,8 +125,13 @@ async def _generate_ollama(
         response_schema=response_schema,
         context_window=context_window,
     )
+    headers = _ollama_headers(settings)
     started = time.perf_counter()
-    resp = await client.post(f"{settings.base_url}/api/chat", json=body)
+    resp = await client.post(
+        f"{settings.base_url}/api/chat",
+        headers=headers or None,
+        json=body,
+    )
     resp.raise_for_status()
     elapsed_ms = round((time.perf_counter() - started) * 1000)
     data = resp.json()
@@ -286,7 +307,11 @@ async def check_available(settings: LLMSettings) -> bool:
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             if settings.provider_type == "ollama":
-                resp = await client.get(f"{settings.base_url}/api/tags")
+                headers = _ollama_headers(settings)
+                resp = await client.get(
+                    f"{settings.base_url}/api/tags",
+                    headers=headers or None,
+                )
                 if resp.status_code != 200:
                     return False
                 data = resp.json()

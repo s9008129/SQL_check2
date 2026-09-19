@@ -3,14 +3,15 @@
 # 核心原則：
 # 1. 程式邏輯只看「目前啟用哪個 provider」，不把 Ollama / Gemini 寫死在 ai_service。
 # 2. API Key 永遠只從環境變數讀取，不寫進 YAML / Git。
-# 3. 正式機預設使用 Ollama + Gemma 4 31B；Mac 透過 Gemini API 代管「同一個 Gemma 4 31B IT」
-#    做驗證，不改用 Gemini 3.x，避免測試模型不同而失去比較意義。
-# 4. Parity 驗證刻意讓模型參數與 SQL masking 盡量對齊地端；因此雲端測試只允許
-#    synthetic / 已去識別化 SQL，不可直接送 production 原始 SQL。
+# 3. 正式機預設使用 Ollama + Gemma 4 31B；Mac 優先透過 Ollama Cloud API 呼叫
+#    gemma4:31b，讓 provider / API shape / 模型名稱都直接對齊正式機。
+# 4. Gemini adapter 保留為備援，不再作為 Mac 預設測試路徑。
+# 5. 雲端 parity 驗證只允許 synthetic / 已去識別化 SQL，不可直接送 production 原始 SQL。
 #
 # 切換方式：
-#   SQLCHECK_LLM_PROVIDER=ollama   # 正式機 / 地端
-#   SQLCHECK_LLM_PROVIDER=gemini  # Mac 開發 / 雲端驗證
+#   SQLCHECK_LLM_PROVIDER=ollama        # 正式機 / 地端
+#   SQLCHECK_LLM_PROVIDER=ollama_cloud  # Mac 開發 / Ollama Cloud
+#   SQLCHECK_LLM_PROVIDER=gemini        # 備援雲端 provider
 
 active_provider_env: SQLCHECK_LLM_PROVIDER
 active_provider_default: ollama
@@ -39,6 +40,34 @@ providers:
     keep_alive: "30m"
     max_retries_on_invalid_json: 1
     think_env: OLLAMA_THINK
+    think_default: false
+    allow_short_ascii_literals: true
+
+  ollama_cloud:
+    type: ollama
+    remote: true
+    base_url_env: OLLAMA_CLOUD_BASE_URL
+    base_url_default: "https://ollama.com"
+    model_env: OLLAMA_CLOUD_MODEL
+    model_default: "gemma4:31b"
+    api_key_env: OLLAMA_API_KEY
+    timeout_seconds_env: OLLAMA_CLOUD_TIMEOUT_SECONDS
+    timeout_seconds_default: 180
+    max_output_tokens_env: OLLAMA_CLOUD_NUM_PREDICT
+    max_output_tokens_default: 3072
+    context_window_env: OLLAMA_CLOUD_NUM_CTX
+    context_window_default: 16384
+    context_window_max_env: OLLAMA_CLOUD_NUM_CTX_MAX
+    context_window_max_default: 32768
+    temperature_env: OLLAMA_CLOUD_TEMPERATURE
+    temperature_default: 0.2
+    top_p_env: OLLAMA_CLOUD_TOP_P
+    top_p_default: 0.95
+    top_k_env: OLLAMA_CLOUD_TOP_K
+    top_k_default: 64
+    keep_alive: null
+    max_retries_on_invalid_json: 1
+    think_env: OLLAMA_CLOUD_THINK
     think_default: false
     allow_short_ascii_literals: true
 

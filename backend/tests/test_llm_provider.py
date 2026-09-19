@@ -14,6 +14,28 @@ def base_llm():
     return get_settings().llm
 
 
+
+
+def _ollama_cloud_settings(base_llm):
+    return dataclasses.replace(
+        base_llm,
+        provider="ollama_cloud",
+        provider_type="ollama",
+        remote=True,
+        base_url="https://ollama.com",
+        model="gemma4:31b",
+        api_key_env="OLLAMA_API_KEY",
+        api_key="ollama-test-key",
+        timeout_seconds=30,
+        max_output_tokens=3072,
+        temperature=0.2,
+        top_p=0.95,
+        top_k=64,
+        keep_alive=None,
+        think=False,
+        allow_short_ascii_literals=True,
+    )
+
 def _gemini_settings(base_llm):
     return dataclasses.replace(
         base_llm,
@@ -188,3 +210,73 @@ async def test_gemini_health_uses_non_generating_models_get(base_llm):
     assert await llm_provider.check_available(settings) is True
     assert route.call_count == 1
     assert route.calls[0].request.headers["x-goog-api-key"] == "test-key"
+
+
+@respx.mock
+async def test_ollama_cloud_uses_bearer_auth_and_same_chat_shape(base_llm):
+    settings = _ollama_cloud_settings(base_llm)
+    route = respx.post("https://ollama.com/api/chat").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "message": {"role": "assistant", "content": '{"ok":true}'},
+                "done_reason": "stop",
+                "prompt_eval_count": 123,
+                "eval_count": 45,
+            },
+        )
+    )
+
+    async with httpx.AsyncClient() as client:
+        reply = await llm_provider.generate_structured_json(
+            client,
+            settings,
+            system_prompt="system",
+            user_content="user",
+            response_schema={"type": "object"},
+            context_window=16384,
+        )
+
+    request = route.calls[0].request
+    assert request.headers["authorization"] == "Bearer ollama-test-key"
+    body = json.loads(request.content)
+    assert body["model"] == "gemma4:31b"
+    assert body["format"] == {"type": "object"}
+    assert body["think"] is False
+    assert body["options"]["temperature"] == 0.2
+    assert body["options"]["top_p"] == 0.95
+    assert body["options"]["top_k"] == 64
+    assert body["options"]["num_ctx"] == 16384
+    assert body["options"]["num_predict"] == 3072
+    assert "keep_alive" not in body
+    assert reply.provider == "ollama_cloud"
+    assert reply.model == "gemma4:31b"
+
+
+async def test_ollama_cloud_missing_api_key_fails_as_configuration(base_llm):
+    settings = dataclasses.replace(_ollama_cloud_settings(base_llm), api_key=None)
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(llm_provider.LLMConfigurationError):
+            await llm_provider.generate_structured_json(
+                client,
+                settings,
+                system_prompt="system",
+                user_content="user",
+                response_schema={"type": "object"},
+                context_window=16384,
+            )
+
+
+@respx.mock
+async def test_ollama_cloud_health_uses_bearer_auth(base_llm):
+    settings = _ollama_cloud_settings(base_llm)
+    route = respx.get("https://ollama.com/api/tags").mock(
+        return_value=httpx.Response(
+            200,
+            json={"models": [{"name": "gemma4:31b"}]},
+        )
+    )
+
+    assert await llm_provider.check_available(settings) is True
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["authorization"] == "Bearer ollama-test-key"

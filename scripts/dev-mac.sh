@@ -14,20 +14,29 @@ if [[ -f "$ROOT/.env" ]]; then
   set +a
 fi
 
-export SQLCHECK_LLM_PROVIDER="${SQLCHECK_LLM_PROVIDER:-gemini}"
+export SQLCHECK_LLM_PROVIDER="${SQLCHECK_LLM_PROVIDER:-ollama_cloud}"
 export SQLCHECK_ARCHIVE_DIR="${SQLCHECK_ARCHIVE_DIR:-data/sql_archive}"
 export SQLCHECK_ARCHIVE_ENABLED="${SQLCHECK_ARCHIVE_ENABLED:-true}"
 
-if [[ "$SQLCHECK_LLM_PROVIDER" == "gemini" && -z "${GEMINI_API_KEY:-}" ]]; then
+if [[ "$SQLCHECK_LLM_PROVIDER" == "ollama_cloud" && -z "${OLLAMA_API_KEY:-}" ]]; then
   cat <<'EOF'
-Gemini API Key 尚未設定。
+Ollama Cloud API Key 尚未設定。
 
 請先：
   cp .env.mac.example .env
 然後編輯 .env，填入：
-  GEMINI_API_KEY=你的金鑰
+  OLLAMA_API_KEY=你的金鑰
 
+API Key 可在 https://ollama.com/settings/keys 建立。
 .env 已被 Git 忽略，不會 commit 到 Repo。
+EOF
+  exit 2
+fi
+
+if [[ "$SQLCHECK_LLM_PROVIDER" == "gemini" && -z "${GEMINI_API_KEY:-}" ]]; then
+  cat <<'EOF'
+Gemini API Key 尚未設定。
+請在 .env 設定 GEMINI_API_KEY。
 EOF
   exit 2
 fi

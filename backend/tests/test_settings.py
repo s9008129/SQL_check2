@@ -97,3 +97,29 @@ def test_gemini_default_profile_matches_formal_gemma(monkeypatch):
     finally:
         get_settings.cache_clear()
 
+def test_ollama_cloud_provider_selected_from_environment(monkeypatch):
+    monkeypatch.setenv("SQLCHECK_LLM_PROVIDER", "ollama_cloud")
+    monkeypatch.setenv("OLLAMA_API_KEY", "secret-for-test")
+    monkeypatch.delenv("OLLAMA_CLOUD_MODEL", raising=False)
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+        assert settings.llm.provider == "ollama_cloud"
+        assert settings.llm.provider_type == "ollama"
+        assert settings.llm.remote is True
+        assert settings.llm.base_url == "https://ollama.com"
+        assert settings.llm.model == "gemma4:31b"
+        assert settings.llm.api_key_env == "OLLAMA_API_KEY"
+        assert settings.llm.api_key == "secret-for-test"
+        assert settings.llm.temperature == 0.2
+        assert settings.llm.top_p == 0.95
+        assert settings.llm.top_k == 64
+        assert settings.llm.max_output_tokens == 3072
+        assert settings.llm.context_window == 16384
+        assert settings.llm.context_window_max == 32768
+        assert settings.llm.think is False
+        assert settings.llm.keep_alive is None
+        assert settings.llm.allow_short_ascii_literals is True
+    finally:
+        get_settings.cache_clear()
+

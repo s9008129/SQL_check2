@@ -37,12 +37,12 @@ export const ESTIMATE_NOT_NEEDED_MESSAGE = "目前未發現需要調整的地方
 // R007 …) are a "please look at this", not a confirmed SQL writing problem.
 // This copy must never read like 「目前寫法良好」.
 export const ESTIMATE_NOTICE_ONLY_MESSAGE =
-  "有提醒事項，請確認實際查詢需求後再決定是否調整。";
+  "有改善建議，請確認實際查詢需求後再決定是否調整。";
 
 // The adoption-status card explains trust/actionability, not measured
 // performance improvement.
 export const POTENTIAL_CAVEAT =
-  "此處說明建議目前可採用的程度，不代表實際效能提升幅度；效能仍需於測試環境確認。";
+  "此處說明建議的確認狀態，不代表實際效能提升幅度；效能仍需於測試環境確認。";
 // Lightweight loading copy while ai.status === "pending" (PRD §51's spirit:
 // AI is never a single point of failure, so the rest of the page is fully
 // usable while this is showing).

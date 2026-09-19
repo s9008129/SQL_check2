@@ -6,7 +6,7 @@ import { makeAi } from "../test/fixtures";
 const pass = { status: "PASS" as const, label: "符合中心規範", notice_count: 0, block_count: 0 };
 const block = { status: "BLOCK" as const, label: "不符合中心規範", notice_count: 0, block_count: 1 };
 
-describe("EstimateCard — 建議採用狀態", () => {
+describe("EstimateCard — 改善建議狀態", () => {
   it("renames the old predicted-effect card and never shows a high/medium/low performance gauge", () => {
     render(
       <EstimateCard
@@ -18,7 +18,8 @@ describe("EstimateCard — 建議採用狀態", () => {
         })}
       />,
     );
-    expect(screen.getByText("建議採用狀態")).toBeTruthy();
+    expect(screen.getByText("改善建議狀態")).toBeTruthy();
+    expect(screen.queryByText("可採用")).toBeNull();
     expect(screen.queryByText("預估改善效果")).toBeNull();
     expect(screen.queryByText("改善空間有限，或改法尚需人工確認。")).toBeNull();
     expect(screen.getByTestId("adoption-confirm-first").textContent).toContain("請先確認");
@@ -41,7 +42,7 @@ describe("EstimateCard — 建議採用狀態", () => {
       />,
     );
     const note = screen.getByTestId("adoption-confirmed");
-    expect(note.textContent).toContain("系統確認");
+    expect(note.textContent).toContain("經系統確認");
     expect(note.textContent).toContain("實際執行效率");
   });
 
@@ -76,7 +77,7 @@ describe("EstimateCard — 建議採用狀態", () => {
       />,
     );
     const note = screen.getByTestId("adoption-notice-only");
-    expect(note.textContent).toContain("有提醒事項");
+    expect(note.textContent).toContain("有改善建議");
     expect(note.textContent).not.toContain("目前未發現需要調整");
   });
 

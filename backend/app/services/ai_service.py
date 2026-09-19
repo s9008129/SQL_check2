@@ -1070,6 +1070,7 @@ DEGRADE_MESSAGES: dict[str, str] = {
     "prompt_truncated": "SQL 內容過長，超出 AI 可處理範圍，請拆分後再試。",
     "timeout": "AI 分析逾時（SQL 較長時約需 2～3 分鐘），請稍後再試一次。",
     "connection": "無法連線 AI 服務，仍可依上方規則檢核結果進行確認。",
+    "configuration": "AI 服務尚未完成連線設定，仍可先使用規則檢核結果。",
     "http": "AI 服務回應異常，仍可依上方規則檢核結果進行確認。",
     "invalid_response": DEGRADE_MESSAGE,
 }
@@ -1117,6 +1118,22 @@ def _num_ctx_for(settings: Settings, system_prompt: str, user_content: str) -> i
     while tier < needed and tier * 2 <= settings.llm.context_window_max:
         tier *= 2
     return tier
+
+
+def _chat_request_body(settings: Settings, payload: dict[str, Any]) -> dict[str, Any]:
+    """Compatibility helper for Ollama-focused unit tests/debugging.
+
+    Runtime requests go through llm_provider.generate_structured_json().
+    """
+    user_content = "<SQL_DATA>\n" + json.dumps(payload, ensure_ascii=False) + "\n</SQL_DATA>"
+    num_ctx = _num_ctx_for(settings, SYSTEM_PROMPT, user_content)
+    return llm_provider._ollama_body(  # noqa: SLF001 - same package compatibility hook
+        settings.llm,
+        system_prompt=SYSTEM_PROMPT,
+        user_content=user_content,
+        response_schema=RESPONSE_SCHEMA,
+        context_window=num_ctx,
+    )
 
 
 def _record_call_stats(settings: Settings, reply: llm_provider.ProviderReply) -> None:
@@ -1308,8 +1325,8 @@ async def get_ai_result(
     statements: list[ParsedStatement],
     settings: Settings,
 ) -> AiResult:
-    """Never raises — any failure anywhere in this path (Ollama down,
-    invalid response, or an unexpected bug in this module itself) degrades
+    """Never raises — any failure anywhere in this path (provider down,
+    invalid response, missing cloud credential, or an unexpected bug) degrades
     to the PRD-mandated "unavailable" result rather than propagating."""
     LAST_CALL_STATS.clear()
 

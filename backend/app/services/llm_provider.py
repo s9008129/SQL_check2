@@ -36,6 +36,7 @@ class ProviderReply:
     total_duration_ms: int | None = None
     context_window: int | None = None
     think: bool | None = None
+    thinking_level: str | None = None
 
 
 class LLMConfigurationError(RuntimeError):
@@ -167,6 +168,8 @@ def _gemini_body(
     # can still opt into an explicit value for another model family.
     if settings.temperature is not None:
         generation_config["temperature"] = settings.temperature
+    if settings.thinking_level:
+        generation_config["thinkingConfig"] = {"thinkingLevel": settings.thinking_level}
 
     return {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
@@ -236,6 +239,7 @@ async def _generate_gemini(
         total_duration_ms=elapsed_ms,
         context_window=None,
         think=None,
+        thinking_level=settings.thinking_level,
     )
 
 

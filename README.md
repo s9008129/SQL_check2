@@ -46,6 +46,8 @@ bash scripts/dev-mac.sh
 - Vite 會把 `/api` proxy 到 FastAPI，不需要 CORS 設定。
 - Gemini profile 預設使用較嚴格遮罩，連短 ASCII 常數也不送到雲端；建議 Mac 驗證仍以
   synthetic / 去識別化 SQL 為主。
+- Gemini 3.8 Flash 預設使用 `GEMINI_THINKING_LEVEL=low`，適合這種結構化檢核任務；
+  若要比較更深推理品質，可在本機 `.env` 改成 `medium` 或 `high`。
 
 ### 單獨跑測試
 

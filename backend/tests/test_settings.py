@@ -31,6 +31,7 @@ def test_default_llm_provider_is_ollama(monkeypatch):
         assert settings.llm.provider_type == "ollama"
         assert settings.llm.model == "gemma4:31b"
         assert settings.llm.remote is False
+        assert settings.llm.thinking_level is None
         assert settings.llm.allow_short_ascii_literals is True
     finally:
         get_settings.cache_clear()
@@ -48,6 +49,7 @@ def test_gemini_provider_selected_from_environment(monkeypatch):
         assert settings.llm.model == "gemini-test"
         assert settings.llm.api_key == "secret-for-test"
         assert settings.llm.remote is True
+        assert settings.llm.thinking_level == "low"
         assert settings.llm.allow_short_ascii_literals is False
     finally:
         get_settings.cache_clear()
@@ -61,6 +63,17 @@ def test_archive_relative_default_resolves_under_project_root(monkeypatch):
         assert settings.archive.dir.name == "sql_archive"
         assert settings.archive.dir.parent.name == "data"
         assert settings.archive.dir.is_absolute()
+    finally:
+        get_settings.cache_clear()
+
+def test_gemini_thinking_level_can_be_overridden(monkeypatch):
+    monkeypatch.setenv("SQLCHECK_LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "secret-for-test")
+    monkeypatch.setenv("GEMINI_THINKING_LEVEL", "high")
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+        assert settings.llm.thinking_level == "high"
     finally:
         get_settings.cache_clear()
 

@@ -111,6 +111,7 @@ class LLMSettings:
     keep_alive: str | None
     max_retries_on_invalid_json: int
     think: bool
+    thinking_level: str | None
     allow_short_ascii_literals: bool
 
 
@@ -159,6 +160,7 @@ def _load_llm_settings() -> LLMSettings:
     base_url_env = str(section.get("base_url_env", "")).strip() or None
     model_env = str(section.get("model_env", "")).strip() or None
     temperature_env = str(section.get("temperature_env", "")).strip() or None
+    thinking_level_env = str(section.get("thinking_level_env", "")).strip() or None
 
     base_url = (
         os.environ.get(base_url_env, str(section.get("base_url_default", "")))
@@ -207,6 +209,15 @@ def _load_llm_settings() -> LLMSettings:
             str(section.get("think_env", "")).strip() or None,
             bool(section.get("think_default", False)),
         ),
+        thinking_level=(
+            os.environ.get(
+                thinking_level_env,
+                str(section.get("thinking_level_default", "")),
+            ).strip()
+            if thinking_level_env
+            else str(section.get("thinking_level_default", "")).strip()
+        )
+        or None,
         allow_short_ascii_literals=bool(section.get("allow_short_ascii_literals", not bool(section.get("remote", False)))),
     )
 

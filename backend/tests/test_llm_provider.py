@@ -27,6 +27,7 @@ def _gemini_settings(base_llm):
         timeout_seconds=30,
         max_output_tokens=2048,
         temperature=None,
+        thinking_level="low",
         allow_short_ascii_literals=False,
     )
 
@@ -120,11 +121,13 @@ async def test_gemini_adapter_uses_generate_content_and_json_schema(base_llm):
     assert body["generationConfig"]["responseJsonSchema"] == schema
     assert body["generationConfig"]["maxOutputTokens"] == 2048
     assert "temperature" not in body["generationConfig"]
+    assert body["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}
     assert reply.content == '{"summary":"ok"}'
     assert reply.prompt_tokens == 321
     assert reply.output_tokens == 87
     assert reply.total_tokens == 408
     assert reply.context_window is None
+    assert reply.thinking_level == "low"
 
 
 @respx.mock

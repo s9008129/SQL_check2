@@ -13,7 +13,7 @@ GEMINI_API_KEY).
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -102,7 +102,7 @@ class LLMSettings:
     base_url: str
     model: str
     api_key_env: str | None
-    api_key: str | None
+    api_key: str | None = field(repr=False)
     timeout_seconds: int
     max_output_tokens: int
     context_window: int

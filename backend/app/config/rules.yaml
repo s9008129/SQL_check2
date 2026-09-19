@@ -119,6 +119,10 @@ improvement_score:
     max: 15
     many_tables_threshold: 4
     subquery_depth_threshold: 2
+    # 產品層「優先檢視」下限，不是新增中心規範。
+    # 多表查詢若缺少關聯條件，即使有 WHERE，也不應顯示「目前良好」。
+    score_floors:
+      cartesian_join: 60
     weights:
       many_tables: 4
       cartesian_join: 6

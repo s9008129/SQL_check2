@@ -483,7 +483,7 @@ def _parse_sql_or_fragment(text: str) -> exp.Expression | None:
         if not predicate:
             return None
         try:
-            return parse_one(f"SELECT 1 FROM DUAL WHERE {predicate}", read="oracle")
+            return parse_one(f"SELECT NULL FROM DUAL WHERE {predicate}", read="oracle")
         except Exception:
             return None
 
@@ -493,7 +493,7 @@ def _parse_sql_or_fragment(text: str) -> exp.Expression | None:
         # Bare predicate fragments (without WHERE/ON) get one conservative
         # wrapper so identifier/literal provenance can still be inspected.
         try:
-            return parse_one(f"SELECT 1 FROM DUAL WHERE {stripped}", read="oracle")
+            return parse_one(f"SELECT NULL FROM DUAL WHERE {stripped}", read="oracle")
         except Exception:
             return None
 
@@ -827,10 +827,19 @@ def _revalidate_suggested_sql(
         if orig_sig["select_count"] != new_sig["select_count"]:
             return False, "建議寫法的查詢欄位數與原始不同"
 
-        # Current VERIFIED_REWRITE authority is predicate-only. The detailed
-        # checks above retain specific user-facing reasons for obvious
-        # structure changes; this final skeleton equality closes same-count
-        # holes such as changing SELECT/GROUP BY/ORDER BY expressions.
+        # Current VERIFIED_REWRITE authority is predicate-only. Make a
+        # WHERE-shell change explicit before the generic skeleton comparison:
+        # dropping an existing filter is a condition change, not a
+        # "non-condition structure" change.
+        orig_where = representative.tree.args.get("where")
+        new_where = stmt.tree.args.get("where")
+        if (orig_where is None) != (new_where is None):
+            return False, "建議寫法新增或移除了 WHERE 查詢條件，可能改變查詢結果"
+
+        # The detailed checks above retain specific user-facing reasons for
+        # obvious structure changes; this final skeleton equality closes
+        # same-count holes such as changing SELECT/GROUP BY/ORDER BY
+        # expressions. Predicate equivalence is checked separately below.
         if rewrite_rules.query_skeleton_without_conditions(
             representative.tree
         ) != rewrite_rules.query_skeleton_without_conditions(stmt.tree):

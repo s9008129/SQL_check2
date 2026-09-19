@@ -104,7 +104,7 @@ class ComplianceResult(BaseModel):
 
 
 class ImprovementBreakdownItem(BaseModel):
-    component: Literal["rule_findings", "structure", "cost_ratio", "block_floor"]
+    component: Literal["rule_findings", "structure", "cost_ratio", "structure_floor", "block_floor"]
     label: str
     score: float
     # 2026-09-17: one plain-language sentence per component ("目前 COST 約為

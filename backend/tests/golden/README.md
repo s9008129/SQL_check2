@@ -1,5 +1,10 @@
 # Golden / E2E evidence runner
 
+> Golden corpus governance：見 `docs/golden-benchmark-strategy.md`。本專案不要求先取得
+> 30～50 支由資深 DBA 評分的真實 SQL；可由規範錨點、rewrite correctness anchors、
+> 少量去識別化真實案例與可驗證的合成邊界案例共同建立基準。AI 可協助設計案例，
+> 但不可把自身對 runtime / index / Execution Plan 的猜測當 Ground Truth。
+
 `run_golden.py` checks the live SQLCheck stack (this codebase's own
 `sql_parser` / `rule_engine` / `ai_service`, not a re-implementation) against
 a REAL Ollama/Gemma instance. It is **production-host-only**: it needs a

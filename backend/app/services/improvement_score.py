@@ -1,4 +1,4 @@
-"""改善優先指數編製模型 (PRD §16; weights and bands fully driven by
+"""改善指數編製模型 (PRD §16; weights and bands fully driven by
 `rules.yaml: improvement_score`, see that file's header comment for the
 formula). This module only does arithmetic on data supplied by
 rule_engine.py's findings and sql_parser.py's per-statement facts — it never
@@ -176,7 +176,7 @@ def compute(
                 score=float(structure_floor),
                 detail=(
                     "系統偵測到多表查詢缺少明確關聯條件；這不是新增中心規範，"
-                    f"但為避免畫面誤顯示「目前良好」，改善優先指數至少為 {structure_floor}。"
+                    f"但為避免畫面誤顯示「目前良好」，改善指數至少為 {structure_floor}。"
                 ),
             )
         )

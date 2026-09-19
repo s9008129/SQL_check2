@@ -430,7 +430,10 @@ _TYPED_LITERAL_RE = re.compile(
 )
 
 
-def _humanize_internal_placeholders(text: str) -> str:
+def _humanize_internal_placeholders(
+    text: str,
+    literal_hints: dict[str, dict[str, Any]] | None = None,
+) -> str:
     """Masking tokens are implementation details, never user vocabulary.
 
     Prose deliberately does *not* unmask to the original literal because
@@ -438,7 +441,16 @@ def _humanize_internal_placeholders(text: str) -> str:
     the existing reversible mask/unmask path.
     """
 
+    hints = literal_hints or {}
+
     def repl(match: re.Match[str]) -> str:
+        placeholder = match.group(0)
+        hint = hints.get(placeholder) or hints.get(placeholder.upper()) or {}
+        oracle_type = str(hint.get("oracle_literal_type", "")).lower()
+        if oracle_type == "date":
+            return "原查詢中的日期值"
+        if oracle_type == "timestamp":
+            return "原查詢中的日期時間值"
         return "原查詢中的文字值" if match.group("kind").upper() == "STR" else "原查詢中的數值"
 
     return _INTERNAL_PLACEHOLDER_RE.sub(repl, text)
@@ -460,9 +472,13 @@ def _sanitize_unobservable_db_claims(text: str) -> str:
     return "這項建議是依 SQL 寫法本身提出，實際效能仍需於測試環境確認。"
 
 
-def _sanitize_user_prose(text: str, vocab: dict[str, str]) -> str:
+def _sanitize_user_prose(
+    text: str,
+    vocab: dict[str, str],
+    literal_hints: dict[str, dict[str, Any]] | None = None,
+) -> str:
     text = _apply_vocabulary(text, vocab)
-    text = _humanize_internal_placeholders(text)
+    text = _humanize_internal_placeholders(text, literal_hints)
     return _sanitize_unobservable_db_claims(text)
 
 
@@ -642,6 +658,7 @@ def _filter_advice(
     reverse_map: dict[str, str] | None = None,
     *,
     source_sql: str = "",
+    literal_hints: dict[str, dict[str, Any]] | None = None,
 ) -> list[AdviceItem]:
     kept: list[AdviceItem] = []
     dropped = 0
@@ -654,8 +671,8 @@ def _filter_advice(
         if _contains_forbidden(raw_title, forbidden) or _contains_forbidden(raw_explanation, forbidden):
             dropped += 1
             continue
-        title = _sanitize_user_prose(raw_title, {})
-        explanation = _sanitize_user_prose(raw_explanation, {})
+        title = _sanitize_user_prose(raw_title, {}, literal_hints)
+        explanation = _sanitize_user_prose(raw_explanation, {}, literal_hints)
         # 2026-09-17: code fragments are shown to the reviewer who owns the
         # data, so restore masked literals there too (previously `:STR_002`
         # leaked through into the advice card — confirmed in a production
@@ -882,8 +899,9 @@ def _finalize_suggested_sql(
     cost: int,
     rules_config: dict[str, Any],
     important_tables_config: dict[str, Any],
+    literal_hints: dict[str, dict[str, Any]] | None = None,
 ) -> SuggestedSql:
-    reason = _sanitize_user_prose(raw.reason, vocab)
+    reason = _sanitize_user_prose(raw.reason, vocab, literal_hints)
     # Server-side override (never trust the model on this): candidate_allowed
     # is computed deterministically and wins regardless of what the model
     # claims.
@@ -995,11 +1013,12 @@ def _finalize(
     important_tables_config: dict[str, Any],
     *,
     original_sql: str = "",
+    literal_hints: dict[str, dict[str, Any]] | None = None,
 ) -> AiResult:
     forbidden = ai_guard_cfg.get("forbidden_phrases", [])
     vocab = ai_guard_cfg.get("vocabulary_replacements", {})
 
-    summary: str | None = _sanitize_user_prose(raw.summary, vocab)
+    summary: str | None = _sanitize_user_prose(raw.summary, vocab, literal_hints)
     if _contains_forbidden(summary, forbidden):
         logger.info("ai_service: summary discarded on forbidden-phrase match")
         summary = None
@@ -1010,6 +1029,7 @@ def _finalize(
         vocab,
         reverse_map,
         source_sql=representative.raw_sql if representative is not None else original_sql,
+        literal_hints=literal_hints,
     )
     suggested_sql = _finalize_suggested_sql(
         raw.suggested_sql,
@@ -1023,6 +1043,7 @@ def _finalize(
         cost,
         rules_config,
         important_tables_config,
+        literal_hints,
     )
     # Improvement percentages were never measured Oracle results. The API
     # field remains for wire compatibility, but live and mocked model values
@@ -1453,6 +1474,7 @@ async def get_ai_result(
             settings.rules_config,
             settings.important_tables_config,
             original_sql=sql_text,
+            literal_hints=mask_result.literal_hints,
         )
         level, basis = improvement_potential(result, findings)
         return result.model_copy(update={"improvement_potential": level, "improvement_potential_basis": basis})

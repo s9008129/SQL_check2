@@ -98,16 +98,16 @@ _RESTRICTION_EVIDENCE_TEXT: dict[str, tuple[str, str]] = {
         "外層未寫 WHERE，但子查詢／WITH 內已有 WHERE 限制條件",
     ),
     "join_on_constant": (
-        "限制條件位於 JOIN ON（INNER JOIN 含常數條件）",
-        "INNER JOIN 的 ON 條件可限縮連接結果，但主查詢未使用 WHERE",
+        "限制條件只在 JOIN ON，主查詢未寫 WHERE",
+        "目前沒有獨立的 WHERE 條件，請人工確認是否符合中心規定",
     ),
     "join_on_outer_constant": (
-        "限制條件位於 JOIN ON（外部連接含常數條件）",
-        "外部連接的 ON 條件主要影響副表對應結果，不會縮小主表查詢範圍，且主查詢未使用 WHERE",
+        "限制條件只在 JOIN ON，主查詢未寫 WHERE",
+        "JOIN 的 ON 條件不會縮小主表範圍，請人工確認是否符合中心規定",
     ),
     "join_on_only": (
-        "以 JOIN 條件連接資料表（未寫 WHERE）",
-        "目前只有 JOIN 鍵值關聯，主查詢未使用 WHERE 限制查詢範圍",
+        "只有 JOIN 關聯，主查詢未寫 WHERE",
+        "目前沒有獨立的 WHERE 條件，請人工確認是否符合中心規定",
     ),
 }
 
@@ -137,7 +137,7 @@ def _statement_where_status(s: ParsedStatement, r002_cfg: dict[str, Any]) -> tup
     if verdict == "block":
         return "BLOCK", f"{label}（依設定判定為不符合）", "依中心規範，查詢須有 WHERE 查詢條件"
     if verdict == "review":
-        return "REVIEW", label, f"{note}；請確認是否符合中心作業要求"
+        return "REVIEW", label, note
     return "PASS", label, note
 
 
@@ -248,7 +248,7 @@ def _eval_like(statements: list[ParsedStatement], rules_config: dict[str, Any]) 
             name="LIKE 前置萬用字元",
             status="NOTICE",
             evidence="、".join(evidences),
-            note="可評估調整為後置萬用字元或其他查詢方式",
+            note="可評估是否有更精確的比對方式",
         ), findings
 
     return RuleRow(rule_id="R004", name="LIKE 前置萬用字元", status="PASS", evidence="未發現", note="目前無需調整"), findings
@@ -278,7 +278,7 @@ def _eval_function_on_condition(
             name="條件欄位使用函數",
             status="NOTICE",
             evidence="、".join(evidences),
-            note="可評估調整寫法，讓資料庫有更多機會採用較有效率的查詢方式",
+            note="可評估改成直接比對欄位值的寫法",
         ), findings
 
     return RuleRow(rule_id="R005", name="條件欄位使用函數", status="PASS", evidence="未發現", note="目前無需調整"), findings
@@ -310,7 +310,7 @@ def _eval_or(statements: list[ParsedStatement], rules_config: dict[str, Any]) ->
             name="OR 條件",
             status="NOTICE",
             evidence="、".join(evidences) if multi else f"共 {total} 處",
-            note="可評估是否能簡化條件或改用其他查詢方式",
+            note="可評估是否能簡化 OR 條件",
         ), findings
 
     return RuleRow(rule_id="R006", name="OR 條件", status="PASS", evidence="未發現", note="目前無需調整"), findings

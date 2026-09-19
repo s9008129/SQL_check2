@@ -83,12 +83,11 @@ def _eval_cost(cost: int, rules_config: dict[str, Any]) -> tuple[RuleRow, list[F
 # ---------------------------------------------------------------------------
 # R002 — WHERE 查詢條件
 #
-# 2026-09-16 業務決定：不再只死認「有沒有 WHERE 關鍵字」。SELECT 沒有寫
-# WHERE 時，sql_parser.py 的 restriction_kind 會分類是否仍有「實質限制條件」
-# （JOIN ON 含常數、以 JOIN 鍵值連接、或限制條件寫在子查詢／WITH 內）；每種
-# kind 的判定結果（PASS／REVIEW／BLOCK）由 rules.yaml 的
-# R002.restriction_verdicts 決定，不寫死在程式碼裡。UPDATE/DELETE 仍只看
-# `has_where`（accept_join_on，未變動）。
+# SELECT 沒有 top-level WHERE 時，sql_parser.py 的 restriction_kind 會分類是否仍有
+# 限制條件證據（JOIN ON 含常數、JOIN 鍵值關聯、或子查詢／WITH 內有 WHERE）；
+# 每種 kind 的 PASS／REVIEW／BLOCK 由 rules.yaml 決定。2026-09-19 預設設定改為：
+# 子查詢／WITH 內確有 WHERE 可 PASS；只有 JOIN ON 證據時 REVIEW，不把「有 JOIN」
+# 自動翻譯成「符合中心明文 WHERE 要求」。UPDATE/DELETE 邏輯不變。
 # ---------------------------------------------------------------------------
 # (label, note) 供 restriction_kind 為 PASS／REVIEW／BLOCK 時的白話說明。note
 # 只在最終判定為 PASS 時顯示於「說明」欄；BLOCK／REVIEW 一律沿用既有固定文案，
@@ -96,22 +95,19 @@ def _eval_cost(cost: int, rules_config: dict[str, Any]) -> tuple[RuleRow, list[F
 _RESTRICTION_EVIDENCE_TEXT: dict[str, tuple[str, str]] = {
     "source_where": (
         "限制條件位於子查詢／WITH 內",
-        "外層未寫 WHERE，但主表來源已限制查詢範圍，實際效果等同查詢條件",
+        "外層未寫 WHERE，但子查詢／WITH 內已有 WHERE 限制條件",
     ),
     "join_on_constant": (
         "限制條件位於 JOIN ON（INNER JOIN 含常數條件）",
-        "未寫 WHERE，但 INNER JOIN 的 ON 條件已限縮結果，實際效果等同查詢條件",
+        "INNER JOIN 的 ON 條件可限縮連接結果，但主查詢未使用 WHERE",
     ),
     "join_on_outer_constant": (
         "限制條件位於 JOIN ON（外部連接含常數條件）",
-        "未寫 WHERE，JOIN ON 已帶有條件，視同已設定查詢條件；惟該條件位於外部連接"
-        "（LEFT/RIGHT/FULL JOIN）的 ON，主要影響副表對應結果，不會縮小主表查詢範圍，"
-        "建議確認主表是否需另加查詢條件",
+        "外部連接的 ON 條件主要影響副表對應結果，不會縮小主表查詢範圍，且主查詢未使用 WHERE",
     ),
     "join_on_only": (
         "以 JOIN 條件連接資料表（未寫 WHERE）",
-        "本次未寫 WHERE，但已以 JOIN ON 條件限定資料表對應關係，視同已設定查詢條件；"
-        "建議確認是否需再加上其他限制條件",
+        "目前只有 JOIN 鍵值關聯，主查詢未使用 WHERE 限制查詢範圍",
     ),
 }
 
@@ -141,7 +137,7 @@ def _statement_where_status(s: ParsedStatement, r002_cfg: dict[str, Any]) -> tup
     if verdict == "block":
         return "BLOCK", f"{label}（依設定判定為不符合）", "依中心規範，查詢須有 WHERE 查詢條件"
     if verdict == "review":
-        return "REVIEW", label, "請人工確認是否已有適當查詢條件"
+        return "REVIEW", label, f"{note}；請確認是否符合中心作業要求"
     return "PASS", label, note
 
 
@@ -180,11 +176,16 @@ def _eval_where(statements: list[ParsedStatement], rules_config: dict[str, Any])
             rule_id="R002", name="WHERE 查詢條件", status="BLOCK", evidence=evidence, note="依中心規範，查詢須有 WHERE 查詢條件"
         ), findings
 
-    reviewed = [(s, ev) for s, status, ev, _ in per_stmt if status == "REVIEW"]
+    reviewed = [(s, ev, note) for s, status, ev, note in per_stmt if status == "REVIEW"]
     if reviewed:
-        evidence = "、".join(f"{_seg_prefix(s, multi)}{ev}" for s, ev in reviewed)
+        evidence = "、".join(f"{_seg_prefix(s, multi)}{ev}" for s, ev, _note in reviewed)
+        notes = list(dict.fromkeys(note for _s, _ev, note in reviewed))
         return RuleRow(
-            rule_id="R002", name="WHERE 查詢條件", status="REVIEW", evidence=evidence, note="請人工確認是否已有適當查詢條件"
+            rule_id="R002",
+            name="WHERE 查詢條件",
+            status="REVIEW",
+            evidence=evidence,
+            note="；".join(notes),
         ), findings
 
     # Everything PASS — either a real WHERE, or restriction evidence

@@ -255,6 +255,21 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 - 正式主機後續標準流程：先 `git pull --ff-only origin main`，再
   `pwsh -NoProfile -File .\deploy\deploy.ps1 -SkipPull -RequireAi`。
 
+### 2026-09-19 R002 語意校正 + Evidence-first UI + Golden Benchmark 治理
+- R002 預設不再把「只有 JOIN ON、top-level 無 WHERE」直接標成符合中心規範：
+  `source_where`（子查詢／WITH 內確有 WHERE）維持 PASS；`join_on_constant`、
+  `join_on_outer_constant`、`join_on_only` 改 REVIEW。目的不是退回死板 keyword check，
+  而是同時保留 SQL 結構事實與中心公開文字「應有 WHERE」的合規邊界。
+- 智慧建議 UI 不再顯示 Gemma 主觀的「影響：高／中／低」作為主要嚴重度。Advice card 改以
+  「系統可確認／需人工確認／觀念提醒」顯示證據層級；`impact` 欄位仍保留在 API/分析資料，
+  但不作為使用者採用建議的信任訊號。
+- 結果頁新增「先看結論」，資訊順序改為：結論 → 摘要 → 建議先看 → 優化前後比較 →
+  改善潛力 → 規則明細。讓非技術使用者先回答「有沒有違規／哪裡要改／怎麼改」。
+- Golden Dataset 改採 `docs/golden-benchmark-strategy.md`：不要求 30～50 支資深 DBA
+  標註的真實 SQL。可用規範錨點 + rewrite correctness anchors + 少量去識別化真實案例 +
+  可驗證合成邊界案例。高階模型可協助設計／去重／生成變體，但不得把 runtime/index/plan
+  猜測當 Ground Truth。改善指數校準目前是「檢視優先度 contract calibration」，不是效能分數。
+
 ## 4. 「AI 沒給建議寫法」的判讀順序（接手後最常被問）
 
 1. 看 API 回應或畫面的 outcome：

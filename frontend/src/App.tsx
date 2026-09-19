@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import InputPanel from "./components/InputPanel";
 import SummaryCards from "./components/SummaryCards";
+import ResultOverview from "./components/ResultOverview";
 import ComplianceTable from "./components/ComplianceTable";
 import ImprovementAdvice from "./components/ImprovementAdvice";
 import EstimateCard from "./components/EstimateCard";
@@ -198,15 +199,16 @@ export default function App() {
                 </span>
               </div>
 
+              <ResultOverview result={result} />
               <SummaryCards result={result} />
+              <ImprovementAdvice ai={result.ai} />
+              <SqlCompare originalSql={submittedSql} ai={result.ai} />
+              <EstimateCard ai={result.ai} />
               <ComplianceTable
                 rules={result.rules}
                 compliance={result.compliance}
                 parseMessage={result.parse_message}
               />
-              <ImprovementAdvice ai={result.ai} />
-              <EstimateCard ai={result.ai} />
-              <SqlCompare originalSql={submittedSql} ai={result.ai} />
               <PrintFooter applicationNo={result.application_no} onScrollToInput={scrollToInput} />
             </>
           )}

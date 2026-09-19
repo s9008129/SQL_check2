@@ -167,6 +167,23 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
 - [x] 智慧改善建議：以「系統可確認／需人工確認／觀念提醒」取代畫面上的 AI impact 高／中／低。
 - [x] 結果頁：新增「先看結論」，並把建議與前後比較移到規則明細之前。
 - [x] Golden Benchmark：新增無資深 DBA 情境的治理策略，不把 AI 自評 runtime 當 Golden Truth。
-- [ ] PR CI 全綠後 merge；正式主機部署後以既有 golden cases 做 Compact Context ON/OFF A/B。
+- [x] PR #9 CI 全綠並 merge。
+
+## 2026-09-19：AI Safety + 白話化整合（PR #10）
+- [x] 防止 AI 建議新增原 SQL 沒有的欄位／資料表／JOIN key／業務常數。
+- [x] DATE／TIMESTAMP 遮罩保留型態提示，不暴露原值。
+- [x] Server 端清理 index／Execution Plan／Full Table Scan 等不可觀測宣稱。
+- [x] Prompt 改為「不知道就不要猜 SQL」，並對齊 R002 JOIN-only = REVIEW。
+- [x] Gemma 不再被要求猜改善百分比。
+- [x] OR→IN fragment 驗證支援 WHERE／ON wrapper；完整 rewrite 增加 query skeleton 複核。
+- [x] Cartesian join 改善優先指數最低 60，但不新增中心規範 BLOCK。
+- [x] UI 統一為「改善優先指數／建議採用狀態／原寫法與建議寫法」。
+- [x] Backend CI：513 passed + Ruff clean。
+- [x] Frontend CI：80 passed + TypeScript/Vite build success。
+- [x] PR #10 merge；main Backend #70 / Frontend #59 success。
+- [x] 舊 PR #8 關閉，避免誤合併舊 76 commits。
+- [ ] **下一步：正式主機一次部署目前 main，做正式 Gemma4 小型代表案例驗收。**
+- [ ] Compact Context ON/OFF A/B（正式機基線穩定後）。
+- [ ] Golden Benchmark 擴充列為後期選配加分項，不阻擋目前主線。
 
 

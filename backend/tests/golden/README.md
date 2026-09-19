@@ -7,9 +7,8 @@
 
 `run_golden.py` checks the live SQLCheck stack (this codebase's own
 `sql_parser` / `rule_engine` / `ai_service`, not a re-implementation) against
-a REAL live LLM provider instance. It is **production-host-only**: it needs a
-reachable LLM provider with the configured model already pulled, so it cannot run
-on a development Mac.
+a REAL live LLM provider instance. It can run against either the formal-host
+Ollama/Gemma provider or a Mac development machine configured for Gemini API.
 
 ## Run
 
@@ -18,9 +17,8 @@ cd backend
 uv run python tests/golden/run_golden.py --base-url http://localhost:11434 -v
 ```
 
-- `--base-url` overrides `OLLAMA_BASE_URL` for this one run. LLM provider must stay
-  reachable only from the SQLCheck container/host itself — do not expose TCP
-  11434 to LAN clients just to run this.
+- `--base-url` overrides the **active provider** base URL for this one run. When using
+  formal-host Ollama, do not expose TCP 11434 to LAN clients just to run this.
 - `-v` prints a one-line per-case summary (rewrite outcome, advice count,
   improvement potential, wall-clock latency, prompt/eval token counts).
 - `--out <path>` additionally writes the de-identified evidence JSON. Without

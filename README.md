@@ -97,8 +97,9 @@ cd deploy
 ./deploy.ps1
 ```
 
-腳本會自動：檢查 Docker Desktop／Ollama、設定 `OLLAMA_HOST` 並重啟 Ollama、
-設定僅限容器來源的防火牆規則、產生自簽 HTTPS 憑證、建置並啟動容器、執行健康檢查。
+日常 `deploy.ps1` 只處理應用程式：Git fast-forward 更新、保留 `.env`、建立 rollback image、
+build／recreate SQLCheck container、TLS、health 與 smoke test。它**不會**修改 Windows Firewall、
+`OLLAMA_HOST` 或 Ollama process；11434／Firewall 最後另用 `deploy/deploy-infra.ps1` 驗收。
 詳見 [`deploy/README-deploy.md`](./deploy/README-deploy.md)。
 
 `docker compose build` 只能在正式主機（可連網際網路）執行——開發機沒有 Docker，
@@ -112,7 +113,7 @@ Dockerfile／docker-compose.yml 在開發機只能做語法層級的靜態檢查
 | 前端型別檢查、單元測試、build | ✅ `tsc --noEmit`、`npm run test`、`npm run build` | — |
 | 本機整合（假 Ollama）+ E2E | ✅ | — |
 | Docker 映像建置與啟動 | ❌ 開發機無 Docker | ✅ |
-| 真實模型輸出品質 | ✅ Mac 可用 Gemini API | ✅ 正式機用 Gemma 4 + `run_golden.py` |
+| 真實模型輸出品質 | 🟡 已支援 Gemini API，待用本機 API Key live 跑 | 🟡 最新版待正式機 Gemma 4 + `run_golden.py` 驗收 |
 | 一鍵部署腳本完整流程 | 只能 `-CheckOnly` | ✅ |
 
 ### SQL 蒐集檔在哪裡
@@ -128,9 +129,8 @@ GitHub Repo**；正式機與 Mac 各自保留自己的 runtime archive。若未�
 2. 不建立任何應用資料庫，不保存任何「可識別」的案件資料：申請單號、原始 SQL、附件檔名
    一律不落地。**例外（2026-09-16，使用者明確決定）**：`backend/app/services/
    sql_archive.py` 會把去識別化後的 SQL、規則結果、AI 建議寫入 `data/sql_archive/*.jsonl`
-   （申請單號／原始常數值一律不寫入），供後續離線分析用途；見
-   `deploy/README-deploy.md`「去識別化 SQL 蒐集檔」一節，可用 `SQLCHECK_ARCHIVE_ENABLED=false`
-   完全停用。
+   （申請單號／原始常數值一律不寫入），供後續離線分析用途。蒐集檔位置與 Git 邊界見上方
+   「SQL 蒐集檔在哪裡」；可用 `SQLCHECK_ARCHIVE_ENABLED=false` 完全停用。
 3. 不連財政資訊中心 Oracle，不取得 Execution Plan／Index／實際資料。
 4. 規則引擎（`backend/app/services/rule_engine.py`）是唯一決定「符合／不符合中心規範」的地方；
    AI provider 只負責白話解釋與建議，不能決定合規、改善優先指數或宣稱實測效能。

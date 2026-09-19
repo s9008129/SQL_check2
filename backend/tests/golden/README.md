@@ -7,8 +7,8 @@
 
 `run_golden.py` checks the live SQLCheck stack (this codebase's own
 `sql_parser` / `rule_engine` / `ai_service`, not a re-implementation) against
-a REAL Ollama/Gemma instance. It is **production-host-only**: it needs a
-reachable Ollama with the configured model already pulled, so it cannot run
+a REAL live LLM provider instance. It is **production-host-only**: it needs a
+reachable LLM provider with the configured model already pulled, so it cannot run
 on a development Mac.
 
 ## Run
@@ -18,7 +18,7 @@ cd backend
 uv run python tests/golden/run_golden.py --base-url http://localhost:11434 -v
 ```
 
-- `--base-url` overrides `OLLAMA_BASE_URL` for this one run. Ollama must stay
+- `--base-url` overrides `OLLAMA_BASE_URL` for this one run. LLM provider must stay
   reachable only from the SQLCheck container/host itself — do not expose TCP
   11434 to LAN clients just to run this.
 - `-v` prints a one-line per-case summary (rewrite outcome, advice count,
@@ -56,3 +56,21 @@ deterministic expectations (`expect_compliance`, `expect_finding_rule_ids`,
 behaviour — one explicit AI expectation. Keep per-advice `impact` a
 *recorded* observation, not an assertion: it is reference material only and
 never feeds the deterministic improvement score or potential level.
+
+## Mac / Gemini
+
+Mac 不需要安裝地端模型。先在 Repo 根目錄：
+
+```bash
+cp .env.mac.example .env
+# 填入 GEMINI_API_KEY
+set -a; source .env; set +a
+cd backend
+uv run python tests/golden/run_golden.py -v
+```
+
+`SQLCHECK_LLM_PROVIDER=gemini` 時，runner 走與網頁完全相同的
+`ai_service -> llm_provider` 路徑。正式機改回 `ollama` 即可，不需要改測試案例。
+
+請只用 synthetic / 已去識別化 SQL 做雲端驗證；真實 production archive 不要上傳到 Gemini。
+

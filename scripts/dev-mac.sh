@@ -69,7 +69,7 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
-echo "[3/4] 啟動 FastAPI :8000（provider=$SQLCHECK_LLM_PROVIDER）..."
+echo "[3/4] 啟動 FastAPI :8000（provider=${SQLCHECK_LLM_PROVIDER}）..."
 (
   cd "$BACKEND"
   uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000

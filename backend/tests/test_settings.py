@@ -49,8 +49,8 @@ def test_gemini_provider_selected_from_environment(monkeypatch):
         assert settings.llm.model == "gemini-test"
         assert settings.llm.api_key == "secret-for-test"
         assert settings.llm.remote is True
-        assert settings.llm.thinking_level == "low"
-        assert settings.llm.allow_short_ascii_literals is False
+        assert settings.llm.thinking_level == "minimal"
+        assert settings.llm.allow_short_ascii_literals is True
     finally:
         get_settings.cache_clear()
 
@@ -74,6 +74,26 @@ def test_gemini_thinking_level_can_be_overridden(monkeypatch):
     try:
         settings = get_settings()
         assert settings.llm.thinking_level == "high"
+    finally:
+        get_settings.cache_clear()
+
+def test_gemini_default_profile_matches_formal_gemma(monkeypatch):
+    monkeypatch.setenv("SQLCHECK_LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "secret-for-test")
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_THINKING_LEVEL", raising=False)
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+        assert settings.llm.model == "gemma-4-31b-it"
+        assert settings.llm.temperature == 0.2
+        assert settings.llm.top_p == 0.95
+        assert settings.llm.top_k == 64
+        assert settings.llm.thinking_level == "minimal"
+        assert settings.llm.max_output_tokens == 3072
+        assert settings.llm.context_window == 16384
+        assert settings.llm.context_window_max == 32768
+        assert settings.llm.allow_short_ascii_literals is True
     finally:
         get_settings.cache_clear()
 

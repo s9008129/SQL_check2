@@ -11,8 +11,9 @@
 
 正式環境只有**一個** Docker Container（`sqlcheck-app`），內含 FastAPI + 規則引擎 +
 已建置的 React 靜態檔；正式機仍使用 Windows Host 上的 Ollama／Gemma 4，容器透過
-`host.docker.internal:11434` 呼叫。AI 連線已抽成 provider adapter：開發環境可切換
-Gemini API，而規則引擎、遮罩、改寫複核與前端不需要跟著改。系統**不**連任何資料庫（含 Oracle）。
+`host.docker.internal:11434` 呼叫。AI 連線已抽成 provider adapter：Mac 開發環境可透過 Gemini API 代管
+**Gemma 4 31B IT**，與正式機的 Ollama `gemma4:31b` 對齊模型家族與推理設定；
+規則引擎、遮罩、改寫複核與前端不需要跟著改。系統**不**連任何資料庫（含 Oracle）。
 
 ```
 瀏覽器 --HTTPS(443)--> [sqlcheck-app 唯一容器]
@@ -44,10 +45,16 @@ bash scripts/dev-mac.sh
 - 網頁：`http://127.0.0.1:5173`
 - API Health：`http://127.0.0.1:8000/api/health`
 - Vite 會把 `/api` proxy 到 FastAPI，不需要 CORS 設定。
-- Gemini profile 預設使用較嚴格遮罩，連短 ASCII 常數也不送到雲端；建議 Mac 驗證仍以
-  synthetic / 去識別化 SQL 為主。
-- Gemini 3.8 Flash 預設使用 `GEMINI_THINKING_LEVEL=low`，適合這種結構化檢核任務；
-  若要比較更深推理品質，可在本機 `.env` 改成 `medium` 或 `high`。
+- **Gemini API 只是雲端傳輸／代管服務，實際模型不是 Gemini 3.x，而是
+  `gemma-4-31b-it`**，用來對照正式機 `gemma4:31b`。
+- Parity profile 同步對齊：temperature=0.2、top_p=0.95、top_k=64、max output=3072、
+  context tier=16384/32768、地端 `think=false` 對應 API `GEMINI_THINKING_LEVEL=minimal`，
+  以及相同的短 ASCII masking 規則。
+- 這是「同一 Gemma 4 31B IT 模型家族 + 同一 SQLCheck 推理設定」的有效對照；但不是 bit-for-bit
+  相同執行環境：Ollama `gemma4:31b` 是 Q4_K_M 本機量化版本，Google API 是代管版本，
+  因此輸出仍可能有小幅差異，驗收應比較安全邊界與建議品質，不要求逐字一致。
+- 因 parity 模式會保留與地端相同的短代碼／LIKE 樣式，Mac 雲端驗證**只能使用 synthetic 或
+  已去識別化 SQL**；不要把正式機 production archive 或原始案件 SQL 直接送到雲端。
 
 ### 單獨跑測試
 
@@ -81,7 +88,7 @@ LLM 連線集中在 `backend/app/config/llm.yaml`，目前內建：
 | Provider | 用途 | 憑證 |
 |---|---|---|
 | `ollama` | 正式機／地端 Gemma 4 | 不需要 API Key |
-| `gemini` | Mac 開發／雲端驗證 | `GEMINI_API_KEY` 環境變數 |
+| `gemini` | Mac 開發；Gemini API 代管 `gemma-4-31b-it` | `GEMINI_API_KEY` 環境變數 |
 
 切換只需 `SQLCHECK_LLM_PROVIDER=ollama|gemini`。供應商 HTTP 格式都封裝在
 `backend/app/services/llm_provider.py`；未來新增其他模型服務時，不應改動規則引擎。
@@ -113,7 +120,7 @@ Dockerfile／docker-compose.yml 在開發機只能做語法層級的靜態檢查
 | 前端型別檢查、單元測試、build | ✅ `tsc --noEmit`、`npm run test`、`npm run build` | — |
 | 本機整合（假 Ollama）+ E2E | ✅ | — |
 | Docker 映像建置與啟動 | ❌ 開發機無 Docker | ✅ |
-| 真實模型輸出品質 | 🟡 已支援 Gemini API，待用本機 API Key live 跑 | 🟡 最新版待正式機 Gemma 4 + `run_golden.py` 驗收 |
+| 真實模型輸出品質 | 🟡 已設定 Gemini API / `gemma-4-31b-it` parity，待本機 API Key live 跑 | 🟡 最新版待正式機 `gemma4:31b` + `run_golden.py` 驗收 |
 | 一鍵部署腳本完整流程 | 只能 `-CheckOnly` | ✅ |
 
 ### SQL 蒐集檔在哪裡

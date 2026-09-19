@@ -303,14 +303,17 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 - PR #11 已 squash merge；應用程式功能 commit：`e084d1e5963c0234cb8e867050ed115c2dfd1405`。
 - LLM 連線改由 `backend/app/config/llm.yaml` + `backend/app/services/llm_provider.py` 管理：
   正式機預設 `ollama / gemma4:31b`；Mac 可設 `SQLCHECK_LLM_PROVIDER=gemini`，
-  使用 `gemini-3.8-flash`。同 provider 換模型只改 config/env；新增不同 API 協定時新增 adapter，
+  但 Gemini API 實際呼叫 `gemma-4-31b-it`，不是 Gemini 3.x。這是為了與地端 31B IT 做有效對照。
+  同 provider 換模型只改 config/env；新增不同 API 協定時新增 adapter，
   不改 rule engine／scoring／frontend。
 - Gemini API Key 只從 `GEMINI_API_KEY` 讀取，不進 YAML／Git／Settings repr；cloud profile
   預設連短 ASCII literal 也遮罩。**遮罩不代表 SQL 完全匿名**：表名、欄位名、SQL 結構仍可能送到雲端，
   所以 Mac live 驗證只用 synthetic／已去識別化 SQL，除非另有機關政策明確允許。
 - 新增 `.env.mac.example`、`scripts/dev-mac.sh`：Mac 不需 Docker／Ollama，可直接啟動
   FastAPI :8000 + Vite :5173；live golden runner 也已 provider-neutral。
-- Gemini 3.8 Flash profile 預設 `GEMINI_THINKING_LEVEL=low`，可在本機 env 改 medium/high。
+- Parity profile：temperature=0.2、max output=3072、context tier=16384/32768；
+  地端 `OLLAMA_THINK=false` 對應 API `GEMINI_THINKING_LEVEL=minimal`。
+  短 ASCII masking 也與地端一致，所以雲端只跑 synthetic／已去識別化 SQL。
 - SQL archive 路徑：正式 Docker fallback 仍為 `/data/sql_archive`（host 掛載 `./data:/data`）；
   Mac profile 使用 Repo 根目錄 `data/sql_archive`。
 - Archive 補強：即使 parser 沒產生 statement，也會優先把本次 submitted SQL 在記憶體中

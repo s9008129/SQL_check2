@@ -187,9 +187,9 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
 ## 2026-09-19：Mac + Gemini / Pluggable LLM Provider（PR #11）
 - [x] LLM provider 從 ai_service 抽離，新增 `config/llm.yaml` 與 `services/llm_provider.py`。
 - [x] 正式機預設 Ollama/Gemma 4；Mac 可用 `SQLCHECK_LLM_PROVIDER=gemini`。
-- [x] Gemini Stable `gemini-3.8-flash` structured JSON adapter、health check、MAX_TOKENS、缺 Key 降級。
+- [x] Gemini API adapter 改為代管與正式機同系列的 `gemma-4-31b-it`；structured JSON、health check、MAX_TOKENS、缺 Key 降級。
 - [x] API Key 僅讀環境變數；Settings repr 不顯示 key。
-- [x] Cloud profile 使用更嚴格 literal masking；文件禁止把 production archive 直接送雲端。
+- [x] Parity profile 與地端使用相同短 ASCII masking；因此文件限制雲端只跑 synthetic／已去識別化 SQL。
 - [x] 新增 `.env.mac.example` + `scripts/dev-mac.sh`，Mac 不需 Docker/Ollama。
 - [x] live golden runner provider-neutral。
 - [x] archive parser edge case 補強，submitted SQL 先去識別化再落地。

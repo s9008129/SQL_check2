@@ -270,6 +270,35 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
   可驗證合成邊界案例。高階模型可協助設計／去重／生成變體，但不得把 runtime/index/plan
   猜測當 Ground Truth。改善指數校準目前是「檢視優先度 contract calibration」，不是效能分數。
 
+### 2026-09-19 AI Safety + Business-readable v1（PR #10）
+- PR #10 已從最新 main 重新整理舊 PR #8 的可用內容並正式合併；舊 PR #8 已關閉，不再直接合併 76 commits 的舊分支。
+- AI 輸出新增 deterministic 防幻覺守門：
+  - 建議 SQL 若新增原 SQL 未出現的欄位／資料表／別名，隱藏可執行片段並改成「請先確認」；
+  - 若新增原 SQL 未提供的業務常數，同樣不顯示可直接套用的 SQL；
+  - DATE／TIMESTAMP typed literal 遮罩後保留型態提示，不暴露原值；
+  - 使用者可見文字會清理 SQLCheck 無法觀測的 index／Full Table Scan／Execution Plan 等宣稱；
+  - :STR_xxx／:NUM_xxx 這類 masking 內部代號不再出現在使用者可見說明。
+- Prompt 最高原則收斂為「不知道就不要猜 SQL」：缺 WHERE、未知 JOIN key、未知 datatype 或業務條件時，
+  先說明需要確認什麼，不為了看起來具體而編造 SQL。Gemma 也不再被要求猜改善百分比。
+- Prompt 的 where_evidence 已與 PR #9 對齊：source_where 可 PASS；只有 JOIN ON 證據時預設 REVIEW，
+  模型不得自行翻成「符合中心規範」。
+- Rewrite 安全再加固：
+  - OR→IN 的 advice fragment 可處理前置 WHERE／ON wrapper；
+  - 完整改寫新增 query skeleton 比對，條件以外的 SELECT／FROM／GROUP BY／ORDER BY／DISTINCT 等若被改動會被擋下。
+- 改善優先指數新增產品層 cartesian_join 最低 60 分；這不是新增中心規範 BLOCK，只避免「多表但缺關聯條件」仍顯示目前良好。
+- UI 白話化完成：
+  - 「改善指數」→「改善優先指數」；
+  - 「預估改善效果」→「建議採用狀態」；
+  - 「優化前後比較」→「原寫法與建議寫法」；
+  - verified／corrected／unverified 顯示為「查詢結果已確認／系統修正後／示意方向（請勿直接套用）」。
+  PR #9 的「先看結論」與「系統可確認／需人工確認／觀念提醒」仍保留。
+- CI 驗證：
+  - PR #10 Backend CI：513 passed；Ruff All checks passed；
+  - PR #10 Frontend CI：11 test files／80 tests 全過；TypeScript + Vite production build 成功；
+  - 合併 main 後 Backend CI #70、Frontend CI #59 亦成功。
+- 目前 main merge commit：`7a0b9ebda3cc9f7789da7a4d6fca83e3757aaef4`。
+- 正式主機尚未部署 PR #9／#10，也尚未以正式 Gemma4 做這一版的 live 驗收；不要把 CI 綠燈寫成正式機驗證完成。
+
 ## 4. 「AI 沒給建議寫法」的判讀順序（接手後最常被問）
 
 1. 看 API 回應或畫面的 outcome：
@@ -283,15 +312,14 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 
 ## 5. 目前狀態與驗證數據
 
-- GitHub Actions `Backend CI` 已成為 backend PR/main 的固定 gate。Compact Context v1 最新 CI：
-  **499 passed / Ruff All checks passed**（2026-09-18，PR #6）。前一個 Large-AND robustness PR #5
-  為 484 passed / Ruff clean；Pattern Selector PR #4 為 481 passed / Ruff clean。
-- 前端本輪沒有修改；最近一次既有前端基線為 74 項測試與 build 全過。不要因 backend CI 綠燈
-  宣稱重新跑過前端。
-- 正式主機尚未用 Compact Context 版本做 Gemma live A/B。project owner 已要求：先把核心程式與
-  Skill 修到 review/CI 完成，再一次通知正式主機 git pull；因此不要提早要求正式機更新。
-- 既有人工驗證（test_01～03.pdf）：多重缺陷 SQL、笛卡兒積 SQL、乾淨 SQL 三案皆符合當時版本預期。
-- 報告：`E2E_TEST_report_20260917.md`、`E2E_TEST_report_20260917_round2.md`、`SQLCheck2_E2E_test_report_20260916.md`。
+- **目前 main**：`7a0b9ebda3cc9f7789da7a4d6fca83e3757aaef4`（PR #10 merge）。
+- **Backend CI**：513 tests passed；Ruff clean。main 合併後 run #70 success。
+- **Frontend CI**：11 test files／80 tests passed；TypeScript + Vite production build 成功。main 合併後 run #59 success。
+- **Deploy Script CI**：最近一次涉及部署腳本的 main run #7 success；PR #9／#10 未改 deploy 路徑，因此不會重跑。
+- PR #8 已關閉且未合併；其仍有價值的安全／UX內容已重新整理到 PR #9／#10，避免舊分支衝突或誤合併。
+- 正式主機尚未更新到目前 main；因此 **Gemma4 live 品質、Docker 正式部署、最新 UI 列印結果仍待正式機驗收**。
+- Golden Benchmark 已有治理策略與 runner，但依 owner 決策列為後期加分精進項，**不是目前完成主線的必要 gate**。
+- 既有人工驗證（test_01～03.pdf）屬先前版本證據；PR #9／#10 合併後仍應做一輪小型正式機代表案例驗收。
 
 ## 6. 開發機驗證方法（不需部署）
 
@@ -325,20 +353,21 @@ curl -sk https://10.97.15.58/api/health
 
 ## 7. 尚未完成／建議的下一步方向（依優先序）
 
-1. **正式主機統一更新 + Gemma A/B 驗證（目前核心）**：PR #6 Compact Context 已 merge；
-   App-only deploy split 通過後才通知正式機一次 git pull。用同一組 golden 跑 Context on/off，
-   比較 advice/rewrite 品質與 latency。
-2. **Prompt slimming / A-B**：只有正式機 context on/off 基線穩定後，才縮短 system prompt 內重複 optimization prose；
-   不和 context 接線混在同一變更，避免無法歸因。
-3. **Knowledge coverage 精進**：依正式 SQL／去識別化 archive 的實際缺口補「specific detector → catalog guidance」，
-   不把 family signal 直接升級成 exact，也不新增無法證明的 rewrite。
-4. **Windows Firewall / 11434 hardening（最後獨立處理）**：正式主機 10.97.15.58
-   目前 Step 3 會因既有 11434 規則 scope 不符而 fail-closed。這是已知部署／安全議題，不再作為
-   Knowledge／Selector／Context 開發 gate；最後再獨立修正式主機規則、deploy diagnostics 與三項 E2E
-   （container→Ollama、`/api/health`、第二台 LAN 11434 必須失敗）。
-6. **before 片段校正**：模型偶爾跳行複製 before；可在後端用與前端 `locateOriginalFragment` 相同的 token 重疊邏輯校正到原始行。
-7. **蒐集檔分析**：`data/sql_archive/*.jsonl` 累積後統計 `rewrite_outcome` 分布；若 `rejected` 比例高，檢視複核是否過嚴。
-8. **R002 `restriction_verdicts`**：目前全 PASS 是業務決定；若中心日後要求較嚴，改 `rules.yaml` 即可，程式與測試已涵蓋 pass／review／block。
+1. **正式主機統一更新目前 main（下一步核心）**：使用 app-only `deploy/deploy.ps1`，一次部署 PR #9 + PR #10，
+   不在這一步修改 Windows Firewall／Ollama infrastructure。
+2. **正式 Gemma4 小型 live 驗收**：用固定代表案例確認：
+   - JOIN-only R002 顯示 REVIEW，不會被 AI 說成符合；
+   - 缺 WHERE／未知 JOIN key 時不編造欄位；
+   - DATE／TIMESTAMP 不因遮罩失去型態；
+   - verified 改寫顯示可確認、unverified 顯示需確認／示意方向；
+   - clean SQL 可合理回傳 not_needed；
+   - 長 SQL 仍能正常 gated／advice-only，不因截斷整體失敗。
+3. **Compact Context ON/OFF 驗收**：在同一個目前版本與同一組案例下比較品質與 latency。
+   因 PR #10 已調整 safety prompt，這次 A/B 的意義是量測「目前版本中 context 有沒有幫助」，不是回溯 Phase 3 的純歷史歸因。
+4. **Prompt slimming**：只有正式機基線穩定後才做；目標是刪除重複說明、降低 token，而不是放寬安全邊界。
+5. **Knowledge coverage 精進**：由日後真實／去識別化案例補 specific detector → catalog guidance；family signal 不直接升 exact。
+6. **Golden Benchmark 擴充（選配加分項）**：有代表 SQL 再自然累積，不要求先湊 30～50 支，也不阻擋主線完成。
+7. **Windows Firewall／11434 hardening（最後獨立處理）**：與 SQL 功能、Prompt、Context 分開驗收，避免一次改太多。
 
 ## 8. 絕對不要做的事（來自 lessons.md 的血淚）
 

@@ -29,6 +29,10 @@ const EVIDENCE_META: Record<EvidenceLevel, { label: string; tone: string; badge:
   },
 };
 
+function canShowConcreteExample(item: AdviceItem): boolean {
+  return item.verification === "verified" || item.verification === "corrected";
+}
+
 export function adviceEvidenceLevel(item: AdviceItem): EvidenceLevel {
   if (item.verification === "verified" || item.verification === "corrected") return "confirmed";
   if (item.verification === "unverified") return "review";
@@ -77,7 +81,7 @@ export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
                         </span>
                       </div>
                       <p>{item.explanation}</p>
-                      {item.example && <code>{item.example}</code>}
+                      {item.example && canShowConcreteExample(item) && <code>{item.example}</code>}
                     </div>
                   );
                 })}

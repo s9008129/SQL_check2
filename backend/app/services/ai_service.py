@@ -817,7 +817,7 @@ def _filter_advice(
                 title = "請先確認日期或時間條件"
                 explanation = (
                     "這個改善方向涉及日期／時間常數的型態前提。"
-                    "系統目前無法確認可採用的改寫，因此只保留方向提醒。"
+                    "系統目前無法確認這個改法，因此只保留方向提醒。"
                 )
         elif example:
             if before:

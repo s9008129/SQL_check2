@@ -1549,6 +1549,41 @@ def test_typed_date_wrapper_loss_blocks_executable_looking_example():
     ) is False
 
 
+def test_typed_literal_safety_fallback_hides_example_and_uses_safe_copy():
+    from app.schemas import AdviceItem
+
+    source = "SELECT A.ID FROM TEST_DATA A WHERE A.UPDATE_TIME = DATE '2026-09-18'"
+    before = "A.UPDATE_TIME = DATE '2026-09-18'"
+    example = "A.UPDATE_TIME = '2026-09-18'"
+    assert ai_service._advice_example_safety_issue(source, before, example) == "typed_literal"
+
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="評估日期條件",
+                explanation="將日期條件改寫為不含型別的文字比較。",
+                before=before,
+                example=example,
+                impact="medium",
+            )
+        ],
+        [],
+        {},
+        {},
+        source_sql=source,
+    )
+
+    item = result[0]
+    assert item.verification == "unverified"
+    assert item.example is None
+    assert item.before is None
+    assert "可採用" not in item.explanation
+    assert item.explanation == (
+        "這個改善方向涉及日期／時間常數的型態前提。"
+        "系統目前無法確認這個改法，因此只保留方向提醒。"
+    )
+
+
 def test_internal_masking_placeholders_become_plain_privacy_safe_prose():
     text = ai_service._sanitize_user_prose(
         "請確認 :STR_001 與 :NUM_002 的實際格式。",

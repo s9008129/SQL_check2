@@ -161,3 +161,12 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
 ## 2026-09-17 深夜：預估改善效果改為改善潛力等級
 - 完成：伺服器推算高／中／低＋依據句＋警語，畫面不再有百分比。後端 342、前端 73 全過。
 - 待辦：部署後重印 docx 報告確認；蒐集檔累積後比對等級與實際採用結果。
+
+## 2026-09-19：R002 合規語意 + Evidence-first UI
+- [x] R002：子查詢／WITH 內 WHERE 維持 PASS；只有 JOIN ON 證據時改 REVIEW，不再自動宣稱符合中心 WHERE 要求。
+- [x] 智慧改善建議：以「系統可確認／需人工確認／觀念提醒」取代畫面上的 AI impact 高／中／低。
+- [x] 結果頁：新增「先看結論」，並把建議與前後比較移到規則明細之前。
+- [x] Golden Benchmark：新增無資深 DBA 情境的治理策略，不把 AI 自評 runtime 當 Golden Truth。
+- [ ] PR CI 全綠後 merge；正式主機部署後以既有 golden cases 做 Compact Context ON/OFF A/B。
+
+

@@ -127,7 +127,7 @@ def improvement_potential(result: AiResult, findings: list[Finding]) -> tuple[st
     if provided:
         basis.append("已提供整段建議寫法，系統已確認查詢結果不變")
     if verified_advice:
-        basis.append(f"{len(verified_advice)} 項建議片段的查詢結果已由系統確認不變")
+        basis.append(f"系統已驗證 {len(verified_advice)} 項建議片段可保留原查詢結果")
     # 2026-09-17 user request: the per-advice impact/verification breakdown
     # is NOT listed here (the advice cards already carry it).
 

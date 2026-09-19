@@ -38,7 +38,7 @@ describe("SummaryCards — improvement colour states", () => {
     expect(screen.queryByTestId("breakdown-list")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /指數組成/ }));
     const list = screen.getByTestId("breakdown-list");
-    expect(list.textContent).toContain("指數為 0～100 分");
+    expect(list.textContent).toContain("0～100 分，綜合規則、SQL 結構與 COST 計算。");
     expect(list.textContent).toContain("+40 分");
     expect(list.textContent).toContain("目前 COST 68,888 約為規範門檻 100,000 的 69%");
     expect(list.textContent).toContain("至少 80 分");

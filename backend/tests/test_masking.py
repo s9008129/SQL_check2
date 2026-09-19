@@ -189,6 +189,17 @@ def test_number_literal_produces_literal_hint():
     assert hint["shape"] == "digits"
 
 
+def test_date_and_timestamp_literals_keep_type_hint_without_exposing_value():
+    result = mask_sql(
+        "SELECT * FROM T A WHERE A.D = DATE '2026-09-18' "
+        "AND A.TS < TIMESTAMP '2026-09-18 12:34:56'"
+    )
+    assert "2026-09-18" not in result.masked_sql
+    assert result.literal_hints[":STR_001"]["oracle_literal_type"] == "date"
+    assert result.literal_hints[":STR_002"]["oracle_literal_type"] == "timestamp"
+    assert "2026-09-18" not in str(result.literal_hints)
+
+
 def test_placeholder_numbering_has_no_gap_from_kept_short_literals():
     # A kept short literal must not consume a placeholder number — the next
     # masked literal must still be :STR_001, not :STR_002.

@@ -1,0 +1,63 @@
+# SQLCheck AI 大型語言模型連線設定。
+#
+# 核心原則：
+# 1. 程式邏輯只看「目前啟用哪個 provider」，不把 Ollama / Gemini 寫死在 ai_service。
+# 2. API Key 永遠只從環境變數讀取，不寫進 YAML / Git。
+# 3. 正式機預設仍使用 Ollama + Gemma 4 31B；Mac 開發機可切成 Gemini，不需要 Docker / Ollama。
+# 4. 雲端 provider 預設採較嚴格遮罩：短 ASCII 常數也不送出，避免把業務代碼帶到外部 API。
+#
+# 切換方式：
+#   SQLCHECK_LLM_PROVIDER=ollama   # 正式機 / 地端
+#   SQLCHECK_LLM_PROVIDER=gemini  # Mac 開發 / 雲端驗證
+
+active_provider_env: SQLCHECK_LLM_PROVIDER
+active_provider_default: ollama
+
+providers:
+  ollama:
+    type: ollama
+    remote: false
+    base_url_env: OLLAMA_BASE_URL
+    base_url_default: "http://host.docker.internal:11434"
+    model_env: OLLAMA_MODEL
+    model_default: "gemma4:31b"
+    timeout_seconds_env: OLLAMA_TIMEOUT_SECONDS
+    timeout_seconds_default: 180
+    max_output_tokens_env: OLLAMA_NUM_PREDICT
+    max_output_tokens_default: 3072
+    context_window_env: OLLAMA_NUM_CTX
+    context_window_default: 16384
+    context_window_max_env: OLLAMA_NUM_CTX_MAX
+    context_window_max_default: 32768
+    temperature_default: 0.2
+    keep_alive: "30m"
+    max_retries_on_invalid_json: 1
+    think_env: OLLAMA_THINK
+    think_default: false
+    allow_short_ascii_literals: true
+
+  gemini:
+    type: gemini
+    remote: true
+    base_url_env: GEMINI_BASE_URL
+    base_url_default: "https://generativelanguage.googleapis.com/v1beta"
+    model_env: GEMINI_MODEL
+    # 2026-09 官方模型清單中的 Stable Flash；可隨時以 GEMINI_MODEL 覆寫。
+    model_default: "gemini-3.8-flash"
+    api_key_env: GEMINI_API_KEY
+    timeout_seconds_env: GEMINI_TIMEOUT_SECONDS
+    timeout_seconds_default: 120
+    max_output_tokens_env: GEMINI_MAX_OUTPUT_TOKENS
+    max_output_tokens_default: 3072
+    # Gemini 的輸入 context 由服務端模型能力管理，不送 Ollama 的 num_ctx 參數；
+    # 這兩個值只保留給 SQLCheck 的本地長度估算／統一介面，不直接傳給 Gemini。
+    context_window_default: 131072
+    context_window_max_default: 1048576
+    # null = 不覆寫模型預設 temperature。Gemini 3 系列官方建議維持預設值。
+    temperature_default: null
+    keep_alive: null
+    max_retries_on_invalid_json: 1
+    think_default: false
+    # 雲端開發驗證預設連 4 字元以下代碼也遮罩；需要研究值形狀時仍會送 literal_hints，
+    # 但不會送真實值。若日後機關政策允許，可再新增獨立 provider profile 放寬。
+    allow_short_ascii_literals: false

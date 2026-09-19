@@ -74,12 +74,21 @@ class FragmentVerification:
 # Parsing / normalization helpers
 # ---------------------------------------------------------------------------
 def parse_predicate(text: str) -> exp.Expression | None:
-    """Parse a bare condition fragment (`A.X = 1 AND ...`). Returns None when
-    the text is not a condition (prose, a whole SELECT, garbage)."""
+    """Parse a condition fragment (`A.X = 1 AND ...`).
+
+    Advice fragments commonly include a leading WHERE/ON purely as a UI
+    wrapper. Strip that one syntactic wrapper before verification so a
+    provably-safe OR→IN fragment is not downgraded to "unverified" just
+    because the model copied the WHERE keyword.
+    """
     if not text or not text.strip():
         return None
+    predicate = text.strip().rstrip(";")
+    predicate = re.sub(r"^\s*(?:WHERE|ON)\b", "", predicate, flags=re.IGNORECASE).strip()
+    if not predicate:
+        return None
     try:
-        tree = parse_one(f"SELECT 1 FROM DUAL WHERE {text.strip().rstrip(';')}", read=DIALECT)
+        tree = parse_one(f"SELECT 1 FROM DUAL WHERE {predicate}", read=DIALECT)
     except Exception:
         return None
     if not isinstance(tree, exp.Select):
@@ -98,6 +107,32 @@ def normalize(expr: exp.Expression) -> str:
 def normalize_text(text: str) -> str | None:
     expr = parse_predicate(text)
     return normalize(expr) if expr is not None else None
+
+
+def query_skeleton_without_conditions(tree: exp.Expression) -> str:
+    """Canonical query structure with predicate bodies replaced by TRUE.
+
+    SQLCheck's verified runtime rewrites are predicate-only. This skeleton
+    therefore lets the full-rewrite validator prove that everything outside
+    WHERE/HAVING/JOIN-ON stayed unchanged: selected expressions, aliases,
+    FROM/subquery structure, GROUP BY, ORDER BY, DISTINCT, etc.
+
+    Predicate equivalence itself is checked separately by
+    verify_predicate_changes. Combining both checks is deliberately stricter
+    than comparing only column counts or flag sets.
+    """
+    copied = normalize_identifiers(tree.copy(), dialect=DIALECT)
+    for select in copied.find_all(exp.Select):
+        where = select.args.get("where")
+        if where is not None:
+            where.set("this", exp.true())
+        having = select.args.get("having")
+        if having is not None:
+            having.set("this", exp.true())
+        for join in select.args.get("joins") or []:
+            if join.args.get("on") is not None:
+                join.set("on", exp.true())
+    return copied.sql(dialect=DIALECT)
 
 
 def _conjuncts(expr: exp.Expression) -> list[exp.Expression]:

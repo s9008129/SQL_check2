@@ -1197,8 +1197,8 @@ async def _one_attempt(
         raise _NonChineseResponseError("summary contains no Chinese")
 
     logger.info(
-        "ai_service: provider=%s model=%s finish_reason=%s output_tokens=%s "
-        "prompt_tokens=%s total_duration_ms=%s",
+        "ai_service: provider=%s model=%s finish_reason=%s "
+        "eval_count=%s prompt_eval_count=%s total_duration_ms=%s",
         reply.provider,
         reply.model,
         reply.finish_reason,

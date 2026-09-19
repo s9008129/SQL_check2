@@ -725,7 +725,7 @@ async def test_suggested_sql_that_would_newly_block_is_rejected(settings, chat_u
 
     assert result.suggested_sql.available is False
     assert "未通過系統安全複核" in result.suggested_sql.reason
-    assert "不符合中心規範" in result.suggested_sql.reason
+    assert "新增或移除了 WHERE 查詢條件" in result.suggested_sql.reason
 
 
 @respx.mock

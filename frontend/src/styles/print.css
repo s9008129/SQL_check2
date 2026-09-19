@@ -107,3 +107,27 @@
     break-inside: avoid;
   }
 }
+
+
+@media print {
+  .summary { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .result-overview-kicker { font-size: 14px !important; }
+  .result-overview-title { font-size: 22px !important; }
+  .result-overview-detail { font-size: 14px !important; }
+  .card-title { font-size: 21px !important; }
+  .m-label { font-size: 14px !important; }
+  .m-value { font-size: 28px !important; }
+  .m-sub { font-size: 13px !important; }
+  .metric.tone-yellow,
+  .metric.tone-purple,
+  .card-ai,
+  .a-confirmed,
+  .a-review,
+  .a-info,
+  .fragment-unverified,
+  .fragment-after-unverified,
+  .result-overview-yellow {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}

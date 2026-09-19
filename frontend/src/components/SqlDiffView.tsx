@@ -32,10 +32,10 @@ export interface FullSqlDiffProps {
 export function FullSqlDiff({ original, suggested }: FullSqlDiffProps) {
   const rows = useMemo(() => computeAlignedDiff(original, suggested), [original, suggested]);
   return (
-    <div className="diff-table" role="table" aria-label="原始 SQL 與查詢結果已確認的建議寫法逐行對照">
+    <div className="diff-table" role="table" aria-label="原寫法與已確認建議寫法逐行對照">
       <div className="diff-col-head" role="row">
-        <span>原始 SQL</span>
-        <span>查詢結果已確認的建議寫法</span>
+        <span>原寫法</span>
+        <span>建議寫法（已確認）</span>
       </div>
       {rows.map((row, i) => (
         <div className={`diff-row diff-row-${row.kind}`} role="row" key={i}>
@@ -78,9 +78,9 @@ export interface FragmentDiffProps {
 // Only rule-derived rewrites are called 建議寫法; anything the system could
 // not prove equivalent is a sketch.
 export const FRAGMENT_LABEL: Record<NonNullable<FragmentDiffProps["verification"]>, string> = {
-  verified: "查詢結果已確認的建議寫法",
-  corrected: "系統修正後的建議寫法",
-  unverified: "示意方向（請勿直接套用）",
+  verified: "建議寫法（已確認）",
+  corrected: "建議寫法（已修正）",
+  unverified: "參考寫法（需確認）",
 };
 
 /**
@@ -91,7 +91,7 @@ export const FRAGMENT_LABEL: Record<NonNullable<FragmentDiffProps["verification"
  */
 export function FragmentDiff({ title, before, after, note, verification }: FragmentDiffProps) {
   const { left, right } = useMemo(() => computeWordDiff(before, after), [before, after]);
-  const label = verification ? FRAGMENT_LABEL[verification] : "建議片段（需確認後再用）";
+  const label = verification ? FRAGMENT_LABEL[verification] : "參考寫法（需確認）";
   return (
     <div className={`fragment-diff${verification ? ` fragment-${verification}` : ""}`} data-testid="fragment-diff">
       <div className="fragment-title">{title}</div>

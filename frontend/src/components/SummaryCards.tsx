@@ -37,7 +37,7 @@ function findCostRule(rules: RuleRow[]): RuleRow | undefined {
   return rules.find((r) => r.rule_id === "R001") ?? rules.find((r) => r.name.includes("COST"));
 }
 
-const COMPLIANT_VALUE_STYLE: React.CSSProperties = { fontSize: 22 };
+const STATUS_VALUE_STYLE: React.CSSProperties = { fontSize: 26 };
 
 /**
  * 頂部 4 張摘要 Card (PRD §29): 中心規範／COST／改善指數／智慧改善建議。
@@ -64,6 +64,7 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
   const aiPending = ai.status === "pending";
   const aiUnavailable = ai.status === "unavailable";
   const improvementColor = improvementTone(improvement.color);
+  const reviewCount = rules.filter((r) => r.status === "REVIEW").length;
 
   return (
     <section className="summary" aria-label="檢核摘要">
@@ -72,14 +73,16 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
         icon={compliance.status === "PASS" ? "✓" : compliance.status === "BLOCK" ? "✕" : "?"}
         label="中心規範"
         value={compliance.label}
-        valueStyle={COMPLIANT_VALUE_STYLE}
+        valueStyle={STATUS_VALUE_STYLE}
         bad={compliance.status === "BLOCK"}
         sub={
           compliance.block_count > 0
             ? `${compliance.block_count} 項不符合`
-            : compliance.notice_count > 0
-              ? `${compliance.notice_count} 項提醒`
-              : "目前無提醒事項"
+            : compliance.status === "REVIEW"
+              ? `${reviewCount || 1} 項需確認${compliance.notice_count > 0 ? ` · ${compliance.notice_count} 項提醒` : ""}`
+              : compliance.notice_count > 0
+                ? `${compliance.notice_count} 項提醒`
+                : "目前無提醒事項"
         }
       />
 
@@ -88,14 +91,14 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
         icon={costBlocked ? "✕" : costNotApplicable ? "–" : "✓"}
         label="COST"
         value={costCompliant ? "符合中心規範" : formatCost(cost)}
-        valueStyle={costCompliant ? COMPLIANT_VALUE_STYLE : undefined}
+        valueStyle={costCompliant ? STATUS_VALUE_STYLE : undefined}
         bad={costBlocked}
         sub={costRule?.note ?? "—"}
       />
 
       <div className={`metric tone-${improvementColor}`}>
         <div className="m-top">
-          <div className="m-label">改善優先指數</div>
+          <div className="m-label">改善指數</div>
           <div className="m-icon m-icon-text" data-testid="improvement-level">
             {improvement.label}
           </div>
@@ -103,7 +106,7 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
         <div className="score-line">
           <div className={`m-value${improvementColor === "red" ? " m-value-bad" : ""}`}>{improvement.score} / 100</div>
         </div>
-        <div className="m-sub">分數越高，代表越需要優先檢視與改善</div>
+        <div className="m-sub">分數越高，越需要優先檢視</div>
         {improvement.breakdown.length > 0 && (
           <>
             <button
@@ -116,7 +119,7 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
             </button>
             {breakdownOpen && (
               <div className="breakdown-list" data-testid="breakdown-list">
-                <p className="breakdown-intro">指數為 0～100 分，依規則命中、SQL 結構、COST 與必要的最低分數門檻綜合計算。</p>
+                <p className="breakdown-intro">0～100 分，綜合規則、SQL 結構與 COST 計算。</p>
                 {improvement.breakdown.map((item) => (
                   <div className="breakdown-row" key={item.component}>
                     <div className="breakdown-head">

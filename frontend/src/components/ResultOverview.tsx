@@ -21,16 +21,16 @@ export default function ResultOverview({ result }: ResultOverviewProps) {
   } else if (result.compliance.status === "REVIEW") {
     tone = "yellow";
     title = reviewCount > 0 ? `有 ${reviewCount} 項需要人工確認` : "有項目需要人工確認";
-    detail = "系統已找到限制條件或複雜結構，但不直接替代中心作業要求的人工判斷。";
+    detail = "請確認目前的查詢條件是否符合中心規定。";
   } else if (result.ai.status === "pending") {
     detail = "規則檢核已完成；AI 正在整理可讀的改善建議。";
   } else if (result.ai.status === "unavailable") {
     detail = "規則檢核已完成；智慧改善建議目前暫不提供。";
   } else if (adviceCount > 0) {
-    title = `符合中心規範，另有 ${adviceCount} 項寫法可再檢視`;
-    detail = "下方先列最值得看的改善點，再提供前後寫法對照。";
+    title = `符合中心規範，另有 ${adviceCount} 項建議`;
+    detail = "先看下方重點，再決定是否需要調整。";
   } else {
-    detail = "規則檢核與智慧建議目前都沒有發現明顯需要調整的地方。";
+    detail = "目前沒有需要調整的項目。";
   }
 
   return (

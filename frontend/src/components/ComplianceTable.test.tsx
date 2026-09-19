@@ -67,3 +67,52 @@ it("labels REVIEW separately from ordinary reminders", () => {
   expect(screen.getByText("1 項需確認")).toBeTruthy();
   expect(screen.queryByText(/1 提醒/)).toBeNull();
 });
+
+
+it("annotates resolved R005/R006 NOTICE rows without changing NOTICE status", () => {
+  const result = makeResult({
+    rules: [
+      {
+        rule_id: "R005",
+        name: "條件欄位使用函數",
+        status: "NOTICE",
+        evidence: "SUBSTR(CODE)",
+        note: "提醒：可評估調整",
+      },
+      {
+        rule_id: "R006",
+        name: "OR 條件",
+        status: "NOTICE",
+        evidence: "同欄位 OR",
+        note: "提醒：可評估調整",
+      },
+    ],
+  });
+  render(
+    <ComplianceTable
+      rules={result.rules}
+      compliance={result.compliance}
+      parseMessage={null}
+      verifiedRewrites={[
+        {
+          statement_index: 0,
+          rule: "substr_eq_to_like",
+          source_rule_id: "R005",
+          title: "SUBSTR 比對改為 LIKE",
+          before: "SUBSTR(A.C, 1, 3) = '107'",
+          after: "A.C LIKE '107%'",
+        },
+        {
+          statement_index: 0,
+          rule: "or_eq_to_in",
+          source_rule_id: "R006",
+          title: "同欄位 OR 改為 IN",
+          before: "A.C = '1' OR A.C = '2'",
+          after: "A.C IN ('1', '2')",
+        },
+      ]}
+    />,
+  );
+  expect(screen.getAllByText("已提供結果相同的改寫，可參考上方「改寫對照」。")).toHaveLength(2);
+  expect(screen.getByText("2 項提醒")).toBeTruthy();
+});

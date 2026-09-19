@@ -17,6 +17,11 @@
     display: none !important;
   }
 
+  .full-sql-details,
+  .copy-sql-btn {
+    display: none !important;
+  }
+
   .layout {
     display: block;
     max-width: none;

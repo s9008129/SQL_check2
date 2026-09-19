@@ -1,10 +1,11 @@
-import type { ComplianceResult, RuleRow } from "../types/api";
+import type { ComplianceResult, RuleRow, VerifiedRewrite } from "../types/api";
 import { complianceTone, ruleStatusIcon, ruleStatusTone } from "../lib/status";
 
 export interface ComplianceTableProps {
   rules: RuleRow[];
   compliance: ComplianceResult;
   parseMessage: string | null;
+  verifiedRewrites?: VerifiedRewrite[];
 }
 
 function summarize(rules: RuleRow[]) {
@@ -16,8 +17,9 @@ function summarize(rules: RuleRow[]) {
 }
 
 /** 中心規則比對區 (PRD §30): 只呈現規則事實 — 狀態、檢核項目、本次內容、簡短說明。 */
-export default function ComplianceTable({ rules, compliance, parseMessage }: ComplianceTableProps) {
+export default function ComplianceTable({ rules, compliance, parseMessage, verifiedRewrites = [] }: ComplianceTableProps) {
   const { pass, notice, review, block } = summarize(rules);
+  const resolvedRuleIds = new Set(verifiedRewrites.map((rewrite) => rewrite.source_rule_id));
   const parts = [
     block > 0 ? `${block} 項不符合` : null,
     review > 0 ? `${review} 項需確認` : null,
@@ -44,7 +46,12 @@ export default function ComplianceTable({ rules, compliance, parseMessage }: Com
               </div>
               <div className="r-name">{rule.name}</div>
               <div className="r-evidence">{rule.evidence}</div>
-              <div className="r-note">{rule.note}</div>
+              <div className="r-note">
+                {rule.note}
+                {rule.status === "NOTICE" && resolvedRuleIds.has(rule.rule_id) && (
+                  <div className="r-annotation">已提供結果相同的改寫，可參考上方「改寫對照」。</div>
+                )}
+              </div>
             </div>
           ))}
         </div>

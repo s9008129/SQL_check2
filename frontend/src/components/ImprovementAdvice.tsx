@@ -10,19 +10,19 @@ type EvidenceLevel = "confirmed" | "review" | "info";
 
 const EVIDENCE_META: Record<EvidenceLevel, { label: string; tone: string; badge: string; title: string }> = {
   confirmed: {
-    label: "已確認",
+    label: "可採用",
     tone: "a-confirmed",
     badge: "green",
-    title: "此建議的 SQL 改寫已通過系統的確定性驗證。",
+    title: "系統已比對改寫前後條件，查詢結果相同；正式使用前仍請測試。",
   },
   review: {
-    label: "需確認",
+    label: "請先確認",
     tone: "a-review",
     badge: "yellow",
     title: "改善方向具參考價值，但系統無法只靠 SQL 文字確認查詢結果完全相同。",
   },
   info: {
-    label: "提醒",
+    label: "僅供參考",
     tone: "a-info",
     badge: "purple",
     title: "這是撰寫或治理上的提醒，不代表本案已證明存在效能問題。",
@@ -87,7 +87,7 @@ export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
                 })}
               </div>
             )}
-            {ai.advice.length > 0 && <div className="ai-disclaimer">AI 建議僅供參考，採用前請先測試。</div>}
+            {ai.advice.length > 0 && <div className="ai-disclaimer">AI 建議僅供參考，不代表實際效能提升；採用前請先測試。</div>}
           </>
         )}
       </div>

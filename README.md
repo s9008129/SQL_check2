@@ -1,6 +1,6 @@
 # SQLCheck 2.0
 
-地方稅自撰 SQL 的「規範檢核 + 改善優先指數 + 智慧改善建議 + 建議寫法對照」工具。
+地方稅自撰 SQL 的「規範檢核 + 改善優先指數 + 智慧改善建議 + 改寫對照」工具。
 
 - 產品需求：[`SQLCheck2_PRD_v6_AI_Estimated_Improvement.md`](./SQLCheck2_PRD_v6_AI_Estimated_Improvement.md)
 - 視覺雛形：[`SQLCheck2_dashboard_prototype_v4.html`](./SQLCheck2_dashboard_prototype_v4.html)
@@ -141,5 +141,13 @@ GitHub Repo**；正式機與 Mac 各自保留自己的 runtime archive。若未�
 4. 規則引擎（`backend/app/services/rule_engine.py`）是唯一決定「符合／不符合中心規範」的地方；
    AI provider 只負責白話解釋與建議，不能決定合規、改善優先指數或宣稱實測效能。
 5. AI 不得聲稱資料庫實際行為（索引、全表掃描、Execution Plan），也不得捏造改善後 Oracle COST。
+
+### 確定性改寫對照
+
+`/api/analyze` 會在 AI 之外，直接從原始 SQL 發現目前白名單中的確定性改寫，並以
+`verified_rewrites` 回傳。現階段只有同欄位 OR→IN（R006）與 SUBSTR 等值→canonical LIKE
+（R005）；這份清單由伺服器規則產生，與 `include_ai`、AI 等待中或 AI 不可用無關，不能由模型
+新增、移除或改寫。前端的「改寫對照」預設顯示「重點改寫」片段；完整 SQL 仍可在收合區展開，
+列印時只保留主要片段對照。
 
 詳細規則與理由見 PRD 文件開頭「§0 Coding Agent 必須先理解的產品決策」。

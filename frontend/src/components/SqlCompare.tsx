@@ -1,16 +1,17 @@
-import { useMemo } from "react";
-import type { AdviceItem, AiResult } from "../types/api";
+import { useMemo, useState } from "react";
+import type { AdviceItem, AiResult, VerifiedRewrite } from "../types/api";
 import { FragmentDiff, FullSqlDiff } from "./SqlDiffView";
 import { locateOriginalFragment, looksLikeSqlFragment } from "../lib/sqlDiff";
 
 export interface SqlCompareProps {
   originalSql: string;
   ai: AiResult;
+  verifiedRewrites?: VerifiedRewrite[];
 }
 
 interface Segment {
   title: string;
-  before: string | null;
+  before: string;
   after: string;
   note: string | null;
   verification: AdviceItem["verification"];
@@ -41,7 +42,8 @@ function toSegments(originalSql: string, advice: AdviceItem[]): Segment[] {
     const { sql: after, assumption } = splitAssumption(raw);
     if (!after || !looksLikeSqlFragment(after)) continue;
     const before = item.before?.trim() || locateOriginalFragment(originalSql, after);
-    const verification = item.before?.trim() ? (item.verification ?? null) : null;
+    if (!before) continue;
+    const verification = item.verification ?? null;
     const notes = [
       assumption ? `前提：${assumption}` : null,
       item.assumption ? `前提：${item.assumption}` : null,
@@ -53,69 +55,98 @@ function toSegments(originalSql: string, advice: AdviceItem[]): Segment[] {
   return segments;
 }
 
-export default function SqlCompare({ originalSql, ai }: SqlCompareProps) {
+function toVerifiedRewriteSegments(rewrites: VerifiedRewrite[]): Segment[] {
+  return rewrites.map((rewrite) => ({
+    title: rewrite.title,
+    before: rewrite.before,
+    after: rewrite.after,
+    note: null,
+    verification: "verified",
+  }));
+}
+
+function mergeSegments(primary: Segment[], fallback: Segment[]): Segment[] {
+  const seen = new Set<string>();
+  return [...primary, ...fallback].filter((segment) => {
+    const key = `${segment.before?.trim() ?? ""}\u0000${segment.after.trim()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export default function SqlCompare({ originalSql, ai, verifiedRewrites = [] }: SqlCompareProps) {
+  const [copied, setCopied] = useState(false);
   const suggestedSql =
     ai.status === "ok" && ai.suggested_sql?.available && ai.suggested_sql.sql
       ? ai.suggested_sql.sql
       : null;
 
   const segments = useMemo(
-    () => (ai.status === "ok" ? toSegments(originalSql, ai.advice) : []),
-    [ai.status, ai.advice, originalSql],
+    () =>
+      mergeSegments(
+        toVerifiedRewriteSegments(verifiedRewrites),
+        ai.status === "ok" ? toSegments(originalSql, ai.advice) : [],
+      ),
+    [ai.status, ai.advice, originalSql, verifiedRewrites],
   );
 
-  if (ai.status !== "ok" || (suggestedSql === null && segments.length === 0)) {
+  if (suggestedSql === null && segments.length === 0) {
     return null;
   }
 
   const statusTone = "green";
-  const statusText = "已確認";
+  const statusText = "結果相同";
+
+  async function copySuggestedSql() {
+    if (!suggestedSql || !navigator.clipboard?.writeText) return;
+    try {
+      await navigator.clipboard.writeText(suggestedSql);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // Clipboard permission failures should not affect the diff itself.
+    }
+  }
 
   return (
     <section className={`card card-compare card-compare-${statusTone}`}>
       <div className="card-head">
-        <div className="card-title">建議寫法</div>
+        <div className="card-title">改寫對照</div>
         <span className={`badge ${statusTone}`}>{statusText}</span>
       </div>
       <div className="card-body">
-        {suggestedSql !== null && (
-          <div className="sql-box sql-box-light">
-            <div className="sql-head">
-              <span>
-                原寫法與建議寫法對照 · <mark className="diff-add legend">黃底</mark> 為修改處
-              </span>
-            </div>
-            <FullSqlDiff original={originalSql} suggested={suggestedSql} />
+        {segments.length > 0 && (
+          <div className="segment-list">
+            <div className="segment-list-title">重點改寫</div>
+            {segments.map((seg, i) => (
+              <FragmentDiff
+                key={i}
+                title={`${i + 1}. ${seg.title}`}
+                before={seg.before}
+                after={seg.after}
+                note={seg.note}
+                verification={seg.verification}
+              />
+            ))}
           </div>
         )}
 
-        {segments.length > 0 && (
-          <div className="segment-list">
-            <div className="segment-list-title">寫法對照</div>
-            {segments.map((seg, i) =>
-              seg.before ? (
-                <FragmentDiff
-                  key={i}
-                  title={`${i + 1}. ${seg.title}`}
-                  before={seg.before}
-                  after={seg.after}
-                  note={seg.note}
-                  verification={seg.verification}
-                />
-              ) : (
-                <div className="fragment-diff fragment-unverified" key={i} data-testid="fragment-diff">
-                  <div className="fragment-title">
-                    {i + 1}. {seg.title}
-                  </div>
-                  <div className="fragment-cell fragment-after fragment-after-unverified">
-                    <div className="fragment-label">參考寫法（需確認）</div>
-                    <code>{seg.after}</code>
-                  </div>
-                  {seg.note && <div className="fragment-note">{seg.note}</div>}
-                </div>
-              ),
-            )}
-          </div>
+        {suggestedSql !== null && (
+          <details className="full-sql-details">
+            <summary>完整 SQL</summary>
+            <div className="sql-box sql-box-light">
+              <div className="sql-head">
+                <span>
+                  原寫法與改後寫法對照 · <mark className="diff-add legend">黃底</mark> 為修改處
+                </span>
+                <button className="copy-btn copy-sql-btn" type="button" onClick={() => void copySuggestedSql()}>
+                  {copied ? "已複製" : "複製改後 SQL"}
+                </button>
+              </div>
+              <FullSqlDiff original={originalSql} suggested={suggestedSql} />
+            </div>
+          </details>
         )}
       </div>
     </section>

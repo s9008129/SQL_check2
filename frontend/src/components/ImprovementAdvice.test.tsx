@@ -44,9 +44,12 @@ describe("ImprovementAdvice", () => {
         })}
       />,
     );
-    expect(screen.getByText("已確認")).toBeTruthy();
-    expect(screen.getByText("需確認")).toBeTruthy();
-    expect(screen.getByText("提醒")).toBeTruthy();
+    expect(screen.getByText("可採用")).toBeTruthy();
+    expect(
+      screen.getByTitle("系統已比對改寫前後條件，查詢結果相同；正式使用前仍請測試。"),
+    ).toBeTruthy();
+    expect(screen.getByText("請先確認")).toBeTruthy();
+    expect(screen.getByText("僅供參考")).toBeTruthy();
     expect(screen.queryByText("影響：高")).toBeNull();
     expect(screen.queryByText("影響：低")).toBeNull();
   });
@@ -99,7 +102,7 @@ describe("ImprovementAdvice", () => {
 it("does not repeat the AI summary when detailed advice cards are visible", () => {
   render(<ImprovementAdvice ai={makeAi({ summary: "這句摘要不應重複顯示。" })} />);
   expect(screen.queryByText("這句摘要不應重複顯示。")).toBeNull();
-  expect(screen.getByText("AI 建議僅供參考，採用前請先測試。")).toBeTruthy();
+  expect(screen.getByText("AI 建議僅供參考，不代表實際效能提升；採用前請先測試。")).toBeTruthy();
 });
 
 
@@ -120,6 +123,6 @@ it("never renders copyable SQL for an unverified advice item", () => {
       })}
     />,
   );
-  expect(screen.getByText("需確認")).toBeTruthy();
+  expect(screen.getByText("請先確認")).toBeTruthy();
   expect(screen.queryByText("A.NAME LIKE '明%'")).toBeNull();
 });

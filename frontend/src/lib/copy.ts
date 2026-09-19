@@ -18,7 +18,7 @@ export const AI_UNAVAILABLE_MESSAGE =
 
 // 2026-09-17 — red warning under the SQL compare card title (user request:
 // suggestions are AI output and must be tried on a test DB first).
-export const SUGGESTED_SQL_WARNING = "AI 建議僅供參考，採用前請先測試。";
+export const SUGGESTED_SQL_WARNING = "AI 建議僅供參考，不代表實際效能提升；採用前請先測試。";
 
 // 2026-09-17 — the three genuinely different "no rewrite" situations get
 // their own copy, so "SQL is already fine" never reads like a refusal.

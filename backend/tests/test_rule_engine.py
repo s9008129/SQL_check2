@@ -115,8 +115,8 @@ def test_where_via_inner_join_on_constant_requires_review(cfg):
     assert r002.status == "REVIEW"
     assert compliance.status == "REVIEW"
     assert "JOIN ON" in r002.evidence
-    assert "主查詢未使用 WHERE" in r002.note
-    assert "中心作業要求" in r002.note
+    assert "沒有獨立的 WHERE" in r002.note
+    assert "人工確認" in r002.note
     assert any(f.rule_id == "R002" and f.status == "REVIEW" for f in findings)
 
 
@@ -129,7 +129,7 @@ def test_where_via_left_join_on_constant_requires_review_and_explains_outer_side
     assert compliance.status == "REVIEW"
     # Must not overclaim: an outer-joined ON constant restricts only the
     # joined (副) table, never the driving (主) table's row count.
-    assert "不會縮小主表查詢範圍" in r002.note
+    assert "不會縮小主表範圍" in r002.note
     assert any(f.rule_id == "R002" and f.status == "REVIEW" for f in findings)
 
 
@@ -141,7 +141,7 @@ def test_where_via_join_key_equality_only_requires_review(cfg):
     assert r002.status == "REVIEW"
     assert compliance.status == "REVIEW"
     assert "JOIN" in r002.evidence
-    assert "主查詢未使用 WHERE" in r002.note
+    assert "沒有獨立的 WHERE" in r002.note
     assert any(f.rule_id == "R002" and f.status == "REVIEW" for f in findings)
 
 

@@ -1,48 +1,61 @@
-import type { AiResult, ImpactLevel } from "../types/api";
+import type { AdviceItem, AiResult } from "../types/api";
 import { AI_PENDING_MESSAGE, AI_UNAVAILABLE_MESSAGE } from "../lib/copy";
+import { looksLikeSqlFragment } from "../lib/sqlDiff";
 
 export interface ImprovementAdviceProps {
   ai: AiResult;
 }
 
-// 2026-09-17 (evening user decision): every AI advice card keeps the same
-// AI-owned purple/neutral surface — a large red card made an "AI 認為影響高"
-// suggestion look as severe as a 不符合 finding. The impact level is now
-// carried by a thin left colour bar (a-high/a-medium/a-low, see app.css)
-// plus the small badge below; the surface itself must stay neutral.
-const IMPACT_TONE: Record<ImpactLevel, string> = {
-  high: "a-high",
-  medium: "a-medium",
-  low: "a-low",
-};
-const DEFAULT_TONE = "a-low";
+type EvidenceLevel = "confirmed" | "review" | "info";
 
-const IMPACT_LABEL: Record<ImpactLevel, string> = {
-  low: "影響：低",
-  medium: "影響：中",
-  high: "影響：高",
+const EVIDENCE_META: Record<EvidenceLevel, { label: string; tone: string; badge: string; title: string }> = {
+  confirmed: {
+    label: "系統可確認",
+    tone: "a-confirmed",
+    badge: "green",
+    title: "此建議的 SQL 改寫已通過系統的確定性驗證。",
+  },
+  review: {
+    label: "需人工確認",
+    tone: "a-review",
+    badge: "yellow",
+    title: "改善方向具參考價值，但系統無法只靠 SQL 文字確認查詢結果完全相同。",
+  },
+  info: {
+    label: "觀念提醒",
+    tone: "a-info",
+    badge: "purple",
+    title: "這是撰寫或治理上的提醒，不代表本案已證明存在效能問題。",
+  },
 };
 
-const IMPACT_BADGE_TONE: Record<ImpactLevel, string> = {
-  low: "gray",
-  medium: "yellow",
-  high: "red",
-};
+export function adviceEvidenceLevel(item: AdviceItem): EvidenceLevel {
+  if (item.verification === "verified" || item.verification === "corrected") return "confirmed";
+  if (item.verification === "unverified") return "review";
 
-/** 智慧改善建議區 (PRD §26 / §31): 2–3 個簡潔彩色卡片，說明可以留意什麼、為什麼、怎麼改。 */
+  const example = item.example?.trim() ?? "";
+  if (item.before?.trim() && example) return "review";
+  if (example && looksLikeSqlFragment(example)) return "review";
+  return "info";
+}
+
+/**
+ * 智慧改善建議：不再把 Gemma 的 high/medium/low impact 當成主要視覺訊號。
+ * 模型看不到 execution plan / index / statistics，因此畫面改以伺服器可驗證的
+ * 「系統可確認／需人工確認／觀念提醒」呈現可信度與採用方式。
+ */
 export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
   return (
     <section className="card">
       <div className="card-head">
         <div>
-          <div className="card-title">智慧改善建議</div>
+          <div className="card-title">建議先看這些</div>
+          <div className="card-desc">直接看哪裡值得調整、為什麼，以及可以怎麼寫。</div>
         </div>
         {ai.status === "ok" && <span className="badge purple">{ai.advice.length} 項建議</span>}
       </div>
       <div className="card-body">
-        {ai.status === "pending" && (
-          <div className="ai-note">{AI_PENDING_MESSAGE}</div>
-        )}
+        {ai.status === "pending" && <div className="ai-note">{AI_PENDING_MESSAGE}</div>}
 
         {ai.status === "unavailable" && (
           <div className="ai-note">{ai.message?.trim() ? ai.message : AI_UNAVAILABLE_MESSAGE}</div>
@@ -55,23 +68,21 @@ export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
               <div className="ai-note">目前沒有額外的改善建議。</div>
             ) : (
               <div className="advice-grid">
-                {ai.advice.map((item, index) => (
-                  <div className={`advice-box ${item.impact ? IMPACT_TONE[item.impact] : DEFAULT_TONE}`} key={`${item.title}-${index}`}>
-                    <h4>
-                      {item.title}
-                      {item.impact && (
-                        <span
-                          className={`badge ${IMPACT_BADGE_TONE[item.impact]}`}
-                          style={{ marginLeft: 8 }}
-                        >
-                          {IMPACT_LABEL[item.impact]}
+                {ai.advice.map((item, index) => {
+                  const evidence = EVIDENCE_META[adviceEvidenceLevel(item)];
+                  return (
+                    <div className={`advice-box ${evidence.tone}`} key={`${item.title}-${index}`}>
+                      <div className="advice-title-row">
+                        <h4>{item.title}</h4>
+                        <span className={`badge ${evidence.badge} evidence-badge`} title={evidence.title}>
+                          {evidence.label}
                         </span>
-                      )}
-                    </h4>
-                    <p>{item.explanation}</p>
-                    {item.example && <code>{item.example}</code>}
-                  </div>
-                ))}
+                      </div>
+                      <p>{item.explanation}</p>
+                      {item.example && <code>{item.example}</code>}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </>

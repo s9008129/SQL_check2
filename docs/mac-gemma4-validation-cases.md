@@ -1,4 +1,4 @@
-# Mac / Gemini API：Gemma 4 31B 五情境驗證
+# Mac / Ollama Cloud：Gemma 4 31B 五情境驗證
 
 目的：在沒有正式案件 SQL 的 Mac 上，用 **synthetic SQL** 驗證與正式機相同的 Gemma 4 31B
 模型路徑。這五案是依 2026-09-16～17 的 E2E 紀錄抽象化重建，**不是原始案件 SQL 的還原**；

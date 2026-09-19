@@ -306,7 +306,7 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
   但 Gemini API 實際呼叫 `gemma-4-31b-it`，不是 Gemini 3.x。這是為了與地端 31B IT 做有效對照。
   同 provider 換模型只改 config/env；新增不同 API 協定時新增 adapter，
   不改 rule engine／scoring／frontend。
-- Gemini API Key 只從 `GEMINI_API_KEY` 讀取，不進 YAML／Git／Settings repr；cloud profile
+- Ollama Cloud API Key 只從 `GEMINI_API_KEY` 讀取，不進 YAML／Git／Settings repr；cloud profile
   預設連短 ASCII literal 也遮罩。**遮罩不代表 SQL 完全匿名**：表名、欄位名、SQL 結構仍可能送到雲端，
   所以 Mac live 驗證只用 synthetic／已去識別化 SQL，除非另有機關政策明確允許。
 - 新增 `.env.mac.example`、`scripts/dev-mac.sh`：Mac 不需 Docker／Ollama，可直接啟動
@@ -357,7 +357,7 @@ deterministic 規則引擎判定是否符合中心規範，再由本機 Ollama �
 - **Backend CI**：main run #78，524 tests passed；Ruff clean。
 - **Frontend CI**：PR #11 未改 frontend；最近 main run #59 為 80 tests + TypeScript/Vite production build success。
 - **Deploy Script CI**：最近涉及部署腳本的 main run #7 success；PR #11 未改 deploy scripts。
-- **Mac / Gemini**：程式與 mock HTTP 測試已完成；尚未使用 owner 自己的 Gemini API Key 做真實 live call。
+- **Mac / Gemini**：程式與 mock HTTP 測試已完成；尚未使用 owner 自己的 Ollama Cloud API Key 做真實 live call。
 - **正式主機**：尚未部署 PR #9～#11 的最終整合版，因此最新版 Gemma4 live 品質、Docker 部署與最新 UI 列印仍待驗收。
 - **SQL Archive**：蒐集程式存在且測試通過，但 GitHub 不保存 runtime JSONL；正式機目前實際累積筆數需回辦公室直接查主機。
 - **Golden Benchmark**：保留為後期精進／考核加分，不是目前主線 gate。

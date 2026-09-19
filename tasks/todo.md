@@ -184,9 +184,9 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
 - [x] 舊 PR #8 關閉，避免誤合併舊 76 commits。
 - [x] 此階段已由 PR #11 的 Mac/Gemini 開發路徑接續；最新待辦見下方 PR #11 區塊。
 
-## 2026-09-19：Mac + Gemini / Pluggable LLM Provider（PR #11）
+## 2026-09-19：Mac + Cloud / Pluggable LLM Provider（PR #11 起）
 - [x] LLM provider 從 ai_service 抽離，新增 `config/llm.yaml` 與 `services/llm_provider.py`。
-- [x] 正式機預設 Ollama/Gemma 4；Mac 可用 `SQLCHECK_LLM_PROVIDER=gemini`。
+- [x] 正式機預設 Ollama/Gemma 4；Mac 原支援 Gemini，現改以 `SQLCHECK_LLM_PROVIDER=ollama_cloud` 為主要驗證路徑。
 - [x] Gemini API adapter 改為代管與正式機同系列的 `gemma-4-31b-it`；structured JSON、health check、MAX_TOKENS、缺 Key 降級。
 - [x] API Key 僅讀環境變數；Settings repr 不顯示 key。
 - [x] Parity profile 與地端使用相同短 ASCII masking；因此文件限制雲端只跑 synthetic／已去識別化 SQL。
@@ -195,7 +195,7 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
 - [x] archive parser edge case 補強，submitted SQL 先去識別化再落地。
 - [x] PR #11 CI：524 passed + Ruff clean；merge main 後 Backend CI #78 同樣 524 passed + Ruff clean。
 - [x] 深度盤點 GitHub：`data/` 只有 `.gitkeep`，`data/sql_archive` 無 Git 歷史；runtime JSONL 從未 commit。
-- [ ] Mac 用 owner Gemini API Key 做 live golden + 2～3 個 UI 去識別化案例。
+- [ ] Mac 用 owner Ollama Cloud API Key 做 live golden + 5 個 synthetic UI 案例。
 - [ ] 確認 Mac `data/sql_archive` 一案一筆且沒有原始 literal。
 - [ ] 回辦公室後清查正式主機 `D:\dev\SQL_check2\data\sql_archive\` 的實際既有檔案／筆數。
 - [ ] Mac 驗證完成後再一次部署目前 main 到正式機。
@@ -204,3 +204,12 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
 - [ ] Compact Context ON/OFF → Prompt slimming。
 - [ ] 最後獨立完成 11434 / Firewall hardening。
 - [ ] Golden Benchmark 擴充為後期選配加分項。
+
+## 2026-09-19：Mac 改走 Ollama Cloud
+- [x] 新增 `ollama_cloud` provider profile：`https://ollama.com/api/chat` + `gemma4:31b-cloud`。
+- [x] 使用官方 `OLLAMA_API_KEY` Bearer auth；Key 只從環境變數讀取。
+- [x] Mac `.env.mac.example` / `scripts/dev-mac.sh` 預設改為 Ollama Cloud。
+- [x] Cloud profile 對齊地端 SQLCheck sampling / context / think / masking 設定。
+- [x] Gemini adapter 保留為 fallback，不刪除。
+- [ ] 使用 Pro 帳號 API Key 做 Mac live health + 5 案人工驗收。
+

@@ -6,8 +6,8 @@ The runtime is intentionally provider-agnostic:
 - rules.yaml / important_tables.yaml: deterministic governance rules
 
 Secrets are never stored in YAML. Cloud provider credentials are read only from
-an environment variable declared by the selected profile (for Gemini:
-GEMINI_API_KEY).
+an environment variable declared by the selected profile (for example:
+OLLAMA_API_KEY or GEMINI_API_KEY).
 """
 
 from __future__ import annotations

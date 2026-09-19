@@ -135,6 +135,19 @@ def test_build_record_fingerprint_stable_for_same_deidentified_sql():
     assert r1["sql_fingerprint"] == r2["sql_fingerprint"]
 
 
+
+
+def test_build_record_prefers_submitted_sql_for_future_learning_archive():
+    # Even if parser output is incomplete in a future edge case, the archive
+    # should de-identify the submitted text itself rather than silently store
+    # an empty SQL sample.
+    record = sql_archive.build_record(
+        **_base_kwargs("SELECT A.X FROM T A WHERE A.X = 1"),
+        sql_text="SELEKT BROKEN WHERE NAME = '王小明'",
+    )
+    assert record["sql_deidentified"]
+    assert "王小明" not in record["sql_deidentified"]
+
 # ---------------------------------------------------------------------------
 # append_record / record_analysis (I/O)
 # ---------------------------------------------------------------------------

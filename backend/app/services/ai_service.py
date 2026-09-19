@@ -1,6 +1,6 @@
 """AI advisory service (PRD §17.4, §20, §22, §23, §25, §46, §47, §56):
-wraps a single Ollama `/api/chat` call behind a small, deterministic
-pre/post-processing pipeline.
+wraps a selectable LLM provider behind a small, deterministic pre/post-
+processing pipeline. Vendor HTTP details live in services/llm_provider.py.
 
 Hard boundaries this module exists to enforce (PRD §13.1, §56 — repeated
 here because every function below exists to defend one of these):
@@ -44,7 +44,7 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlglot import exp, parse_one
 
 from app.schemas import AdviceItem, AiResult, Finding, SuggestedSql
-from app.services import context_adapter, pattern_selector, rewrite_rules, rule_engine
+from app.services import context_adapter, llm_provider, pattern_selector, rewrite_rules, rule_engine
 from app.services.masking import mask_sql, scrub_invented_placeholders, unmask_sql
 from app.services.rule_engine import GLOBAL_STATEMENT_INDEX
 from app.services.sql_parser import ParsedStatement, parse_sql_text, structural_signature
@@ -63,14 +63,11 @@ _VERIFIED = {"verified", "corrected"}
 # being touched, not evidence about how the SQL is written.
 _WRITE_STYLE_RULE_IDS = frozenset({"R004", "R005", "R006"})
 
-# 2026-09-17: last Ollama call's *diagnostics* only (latency + token counts),
-# for the production-host golden runner (backend/tests/golden/run_golden.py)
-# to record as evidence. Deliberately holds no prompt, SQL or response text.
-# `get_ai_result` resets it at the start of every call, and calls are
-# serialized by `_OLLAMA_SEMAPHORE`, so a sequential reader (the golden
-# runner) always sees the stats of the call it just made.
+# Last provider call's diagnostics only (latency + token counts), for the
+# golden runner. Deliberately contains no prompt, SQL, API key or model text.
+# Compatibility keys (num_ctx/eval_count/prompt_eval_count) are kept so older
+# evidence tooling still works when the active provider is Ollama.
 LAST_CALL_STATS: dict[str, Any] = {}
-_STATS_NUMERIC_KEYS = ("eval_count", "prompt_eval_count", "total_duration_ms")
 
 
 def improvement_potential(result: AiResult, findings: list[Finding]) -> tuple[str | None, list[str]]:
@@ -148,13 +145,13 @@ def improvement_potential(result: AiResult, findings: list[Finding]) -> tuple[st
 _PROMPT_PATH = PROMPTS_DIR / "sql_review_zh_tw.txt"
 SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
 
-# Ollama serializes requests anyway (PRD §46); this makes it explicit and
-# bounds how long a caller waits for the lock itself (see `_request_ai`).
-_OLLAMA_SEMAPHORE = asyncio.Semaphore(1)
+# Keep one in-flight model request per SQLCheck process. This matches the
+# formal-host Ollama constraint and also prevents a Mac dev session from
+# accidentally fanning out paid Gemini requests.
+_LLM_SEMAPHORE = asyncio.Semaphore(1)
 
-# Ollama /api/chat `format`: a raw JSON Schema object (not the string
-# "json"), matching Pydantic field names in app.schemas exactly, so the
-# model is constrained to emit exactly this shape.
+# Provider-neutral JSON Schema. Ollama receives it as `format`; Gemini
+# receives it as generationConfig.responseJsonSchema.
 RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -1073,6 +1070,7 @@ DEGRADE_MESSAGES: dict[str, str] = {
     "prompt_truncated": "SQL 內容過長，超出 AI 可處理範圍，請拆分後再試。",
     "timeout": "AI 分析逾時（SQL 較長時約需 2～3 分鐘），請稍後再試一次。",
     "connection": "無法連線 AI 服務，仍可依上方規則檢核結果進行確認。",
+    "configuration": "AI 服務尚未完成連線設定，仍可先使用規則檢核結果。",
     "http": "AI 服務回應異常，仍可依上方規則檢核結果進行確認。",
     "invalid_response": DEGRADE_MESSAGE,
 }
@@ -1085,174 +1083,134 @@ def _unavailable(kind: str | None = None) -> AiResult:
 
 
 # ---------------------------------------------------------------------------
-# Ollama network call
+# LLM provider call
 # ---------------------------------------------------------------------------
 _CJK_RE = re.compile(r"[㐀-鿿]")
 
 
 def _estimate_tokens(text: str) -> int:
-    """Slightly pessimistic token estimate, calibrated against Ollama's
-    `prompt_eval_count` for the Gemma4 tokenizer on 2026-09-17: the Chinese
-    system prompt (4,379 CJK + 5,999 other chars) measured ≈5,000 tokens;
-    this formula gives 5,879 (~1.17×). Over-estimating only costs a little
-    KV-cache; under-estimating silently truncates the prompt (see
-    `_PromptTruncatedError`)."""
+    """Pessimistic tokenizer-independent estimate used only for local
+    context sizing and the full-rewrite output gate.
+
+    The exact provider token count is recorded from the response when the
+    provider exposes it; this estimate never claims to be a billing count.
+    """
     cjk = len(_CJK_RE.findall(text))
     return int(cjk + (len(text) - cjk) / 4) + 1
 
 
 def _num_ctx_for(settings: Settings, system_prompt: str, user_content: str) -> int:
-    """2026-09-17: size the context window per request. Ollama does NOT
-    fail when the prompt exceeds num_ctx — it drops tokens silently, and a
-    model that lost its system prompt answers in English and invents table
-    names (seen on a production DOCX). Needed = prompt + reply + margin.
-    Only doubling tiers of `num_ctx` are used (num_ctx, ×2, ×4 … ≤
-    num_ctx_max): every distinct num_ctx value makes Ollama reload the
-    31B model, so 1024-granular values would thrash between requests."""
-    needed = _estimate_tokens(system_prompt) + _estimate_tokens(user_content) + settings.ollama.num_predict + 512
-    tier = settings.ollama.num_ctx
-    while tier < needed and tier * 2 <= settings.ollama.num_ctx_max:
+    """Choose a context tier.
+
+    Ollama needs an explicit num_ctx and can silently truncate a prompt, so
+    SQLCheck doubles the configured tier up to context_window_max. Cloud
+    providers such as Gemini manage their own model context; the adapter
+    ignores this value, but returning a stable value keeps diagnostics and
+    tests provider-neutral.
+    """
+    needed = (
+        _estimate_tokens(system_prompt)
+        + _estimate_tokens(user_content)
+        + settings.llm.max_output_tokens
+        + 512
+    )
+    tier = settings.llm.context_window
+    while tier < needed and tier * 2 <= settings.llm.context_window_max:
         tier *= 2
     return tier
 
 
 def _chat_request_body(settings: Settings, payload: dict[str, Any]) -> dict[str, Any]:
+    """Compatibility helper for Ollama-focused unit tests/debugging.
+
+    Runtime requests go through llm_provider.generate_structured_json().
+    """
     user_content = "<SQL_DATA>\n" + json.dumps(payload, ensure_ascii=False) + "\n</SQL_DATA>"
     num_ctx = _num_ctx_for(settings, SYSTEM_PROMPT, user_content)
-    if num_ctx > settings.ollama.num_ctx:
-        logger.info("ai_service: num_ctx raised to %d for a long prompt (default %d)", num_ctx, settings.ollama.num_ctx)
-    return {
-        "model": settings.ollama.model,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
-        "format": RESPONSE_SCHEMA,
-        "stream": False,
-        # Gemma4 thinks by default; for a schema-constrained JSON reply the
-        # thinking only burns num_predict (confirmed: 3072 tokens of thinking,
-        # empty content, done_reason=length -> "unavailable"). See app.yaml.
-        "think": settings.ollama.think,
-        "options": {
-            "temperature": settings.ollama.temperature,
-            "num_ctx": num_ctx,
-            # Config-driven rather than a hardcoded 1024: OllamaSettings
-            # already carries num_predict (default 1024, same value) for
-            # exactly this purpose.
-            "num_predict": settings.ollama.num_predict,
-        },
-        "keep_alive": settings.ollama.keep_alive,
-    }
+    return llm_provider._ollama_body(  # noqa: SLF001 - same package compatibility hook
+        settings.llm,
+        system_prompt=SYSTEM_PROMPT,
+        user_content=user_content,
+        response_schema=RESPONSE_SCHEMA,
+        context_window=num_ctx,
+    )
 
 
-def _record_call_stats(body: dict[str, Any], data: dict[str, Any]) -> None:
-    """Publish this call's observable diagnostics for the golden runner.
-
-    Whitelisted scalars only — never the prompt, the SQL or the model's text,
-    so this can never become a second copy of the request/response payload.
-    Best-effort by construction: any unexpected shape leaves the previous
-    stats in place rather than raising into the analysis path.
-    """
+def _record_call_stats(settings: Settings, reply: llm_provider.ProviderReply) -> None:
+    """Publish whitelisted diagnostics only; never prompt/SQL/model output."""
     try:
-        options = body.get("options") or {}
-        stats: dict[str, Any] = {
-            "model": body.get("model"),
-            "num_ctx": options.get("num_ctx"),
-            "num_predict": options.get("num_predict"),
-            "think": body.get("think"),
-            "done_reason": data.get("done_reason"),
-            "total_duration_ms": (data.get("total_duration") or 0) // 1_000_000,
-        }
-        for key in _STATS_NUMERIC_KEYS:
-            if key == "total_duration_ms":
-                continue
-            value = data.get(key)
-            stats[key] = value if isinstance(value, int) else None
         LAST_CALL_STATS.clear()
-        LAST_CALL_STATS.update(stats)
+        LAST_CALL_STATS.update(
+            {
+                "provider": reply.provider,
+                "model": reply.model,
+                "num_ctx": reply.context_window,
+                "num_predict": settings.llm.max_output_tokens,
+                "think": reply.think,
+                "done_reason": reply.finish_reason,
+                "eval_count": reply.output_tokens,
+                "prompt_eval_count": reply.prompt_tokens,
+                "total_tokens": reply.total_tokens,
+                "total_duration_ms": reply.total_duration_ms,
+            }
+        )
     except Exception as exc:  # noqa: BLE001 - diagnostics must never break analysis
         logger.debug("ai_service: could not record call stats: %s", type(exc).__name__)
 
 
-class _TruncatedResponseError(Exception):
-    """Raised when Ollama reports `done_reason == "length"` — the model hit
-    `num_predict` before finishing its JSON output. Distinguished from a
-    generic JSON-decode failure so `_request_ai` can degrade immediately
-    with a specific log line instead of silently retrying with the exact
-    same parameters (which would very likely truncate the same way again —
-    the fix for a truncation is raising `ollama.num_predict` in app.yaml,
-    not retrying)."""
-
-    def __init__(self, eval_count: int | None):
-        super().__init__("truncated")
-        self.eval_count = eval_count
-
-
-class _PromptTruncatedError(Exception):
-    """Raised when Ollama's `prompt_eval_count` reached the `num_ctx` we
-    sent: the prompt was silently cut, so whatever the model answered was
-    produced without (part of) the system prompt and/or the SQL. Never
-    retried — the same prompt would be cut the same way."""
-
-    def __init__(self, prompt_eval_count: int, num_ctx: int):
-        super().__init__("prompt truncated")
-        self.prompt_eval_count = prompt_eval_count
-        self.num_ctx = num_ctx
-
-
 class _NonChineseResponseError(ValueError):
     """The prompt mandates Traditional Chinese; a long summary with no CJK
-    character at all means the model lost its instructions (observed
-    together with prompt truncation). Treated like an invalid response:
-    retried once, then degraded."""
+    character at all is treated as invalid and retried once."""
 
 
 _MIN_SUMMARY_LEN_FOR_LANGUAGE_CHECK = 20
 
 
-async def _one_attempt(client: httpx.AsyncClient, settings: Settings, payload: dict[str, Any]) -> _AiRawResponse:
-    """Exactly one POST + parse + validate. Raises on any problem; the
-    caller decides retry-once (invalid JSON/shape) vs immediate-fail
-    (connection/timeout/HTTP-status/truncation) based on the exception type.
-    """
-    body = _chat_request_body(settings, payload)
-    resp = await client.post(f"{settings.ollama.base_url}/api/chat", json=body)
-    resp.raise_for_status()
-    data = resp.json()
-    prompt_eval_count = data.get("prompt_eval_count")
-    if isinstance(prompt_eval_count, int) and prompt_eval_count >= body["options"]["num_ctx"]:
-        raise _PromptTruncatedError(prompt_eval_count, body["options"]["num_ctx"])
-    if data.get("done_reason") == "length":
-        thinking_chars = len((data.get("message") or {}).get("thinking") or "")
-        if thinking_chars:
-            logger.info(
-                "ai_service: truncated while thinking (thinking_chars=%d) — model thinking mode is on; "
-                "set ollama.think_default=false / OLLAMA_THINK=false",
-                thinking_chars,
-            )
-        raise _TruncatedResponseError(data.get("eval_count"))
-    content = data["message"]["content"]  # Ollama's documented chat shape
-    raw = json.loads(content)
+async def _one_attempt(
+    client: httpx.AsyncClient,
+    settings: Settings,
+    payload: dict[str, Any],
+) -> _AiRawResponse:
+    """Exactly one provider POST + JSON parse + Pydantic validation."""
+    user_content = "<SQL_DATA>\n" + json.dumps(payload, ensure_ascii=False) + "\n</SQL_DATA>"
+    num_ctx = _num_ctx_for(settings, SYSTEM_PROMPT, user_content)
+    if settings.llm.provider_type == "ollama" and num_ctx > settings.llm.context_window:
+        logger.info(
+            "ai_service: num_ctx raised to %d for a long prompt (default %d)",
+            num_ctx,
+            settings.llm.context_window,
+        )
+
+    reply = await llm_provider.generate_structured_json(
+        client,
+        settings.llm,
+        system_prompt=SYSTEM_PROMPT,
+        user_content=user_content,
+        response_schema=RESPONSE_SCHEMA,
+        context_window=num_ctx,
+    )
+
+    raw = json.loads(reply.content)
     parsed = _AiRawResponse.model_validate(raw)
     summary = parsed.summary or ""
     if len(summary) >= _MIN_SUMMARY_LEN_FOR_LANGUAGE_CHECK and not _CJK_RE.search(summary):
         raise _NonChineseResponseError("summary contains no Chinese")
-    # INFO, never DEBUG: this is the only place the actual model latency and
-    # token counts are observable, and none of these fields can ever embed
-    # SQL text or prompt content.
+
     logger.info(
-        "ai_service: ollama response done_reason=%s eval_count=%s prompt_eval_count=%s total_duration_ms=%s thinking_chars=%d",
-        data.get("done_reason"),
-        data.get("eval_count"),
-        data.get("prompt_eval_count"),
-        (data.get("total_duration") or 0) // 1_000_000,
-        len(data["message"].get("thinking") or ""),
+        "ai_service: provider=%s model=%s done_reason=%s "
+        "eval_count=%s prompt_eval_count=%s total_duration_ms=%s",
+        reply.provider,
+        reply.model,
+        reply.finish_reason,
+        reply.output_tokens,
+        reply.prompt_tokens,
+        reply.total_duration_ms,
     )
-    _record_call_stats(body, data)
+    _record_call_stats(settings, reply)
     return parsed
 
 
-# A second attempt only makes sense if Ollama still has time to answer.
+# A second attempt only makes sense if the provider still has time to answer.
 _MIN_RETRY_BUDGET_SECONDS = 60.0
 
 
@@ -1261,6 +1219,8 @@ def _transport_failure_kind(exc: Exception) -> str:
         return "timeout"
     if isinstance(exc, httpx.HTTPStatusError):
         return "http"
+    if isinstance(exc, llm_provider.LLMConfigurationError):
+        return "configuration"
     return "connection"
 
 
@@ -1273,24 +1233,17 @@ async def _request_ai(
 ) -> tuple[_AiRawResponse | None, str | None, bool]:
     """Returns (raw, failure_kind, used_retry_payload).
 
-    One overall `deadline` (monotonic seconds) bounds the whole call,
-    including any retry, so the frontend watchdog stays strictly above it.
-    - Transport errors (connection/timeout/HTTP status) fail immediately.
-    - Prompt truncated by Ollama fails immediately (same prompt → same cut).
-    - Output truncated (`done_reason=length`): 2026-09-17 — if the caller
-      supplied `retry_payload` (the same request with candidate_allowed
-      forced false, i.e. advice-only, a much shorter reply) and at least
-      `_MIN_RETRY_BUDGET_SECONDS` remain, retry once with it. This is a
-      retry with *different* parameters; same-parameter retries of a
-      truncation would cut the same way again.
-    - Invalid JSON / schema / non-Chinese: retried once with the same payload.
+    One overall deadline bounds the whole provider call, including retry.
+    Transport/configuration failures fail immediately. A provider-reported
+    output-token truncation may retry once in advice-only mode. Invalid JSON,
+    schema, or non-Chinese output may retry once with the same payload.
     """
 
     def remaining() -> float:
         return deadline - time.monotonic()
 
     try:
-        await asyncio.wait_for(_OLLAMA_SEMAPHORE.acquire(), timeout=max(remaining(), 0.0))
+        await asyncio.wait_for(_LLM_SEMAPHORE.acquire(), timeout=max(remaining(), 0.0))
     except TimeoutError:
         return None, "timeout", False
 
@@ -1300,30 +1253,36 @@ async def _request_ai(
             used_retry = False
             try:
                 return await _one_attempt(client, settings, payload), None, False
-            except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            except (httpx.RequestError, httpx.HTTPStatusError, llm_provider.LLMConfigurationError) as exc:
                 return None, _transport_failure_kind(exc), False
-            except _PromptTruncatedError as exc:
+            except llm_provider.LLMPromptTruncatedError as exc:
                 logger.info(
-                    "ai_service: prompt truncated by ollama (prompt_eval_count=%d >= num_ctx=%d) — "
-                    "degrading without retry; raise ollama.num_ctx_max or shorten the SQL",
-                    exc.prompt_eval_count,
-                    exc.num_ctx,
+                    "ai_service: prompt truncated by provider "
+                    "(prompt_tokens=%d >= context_window=%d) — degrading without retry",
+                    exc.prompt_tokens,
+                    exc.context_window,
                 )
                 return None, "prompt_truncated", False
-            except _TruncatedResponseError as exc:
+            except llm_provider.LLMOutputTruncatedError as exc:
+                if exc.thinking_chars:
+                    logger.info(
+                        "ai_service: truncated while thinking (thinking_chars=%d) — "
+                        "disable provider thinking for schema-constrained JSON output",
+                        exc.thinking_chars,
+                    )
                 if retry_payload is None or remaining() < _MIN_RETRY_BUDGET_SECONDS:
                     logger.info(
-                        "ai_service: model output truncated (done_reason=length, eval_count=%s) — "
+                        "ai_service: provider output truncated (output_tokens=%s) — "
                         "degrading (retry_payload=%s, remaining=%.0fs)",
-                        exc.eval_count,
+                        exc.output_tokens,
                         retry_payload is not None,
                         remaining(),
                     )
                     return None, "output_truncated", False
                 logger.info(
-                    "ai_service: model output truncated (done_reason=length, eval_count=%s) — "
+                    "ai_service: provider output truncated (output_tokens=%s) — "
                     "retrying once in advice-only mode (remaining=%.0fs)",
-                    exc.eval_count,
+                    exc.output_tokens,
                     remaining(),
                 )
                 second_payload = retry_payload
@@ -1331,21 +1290,24 @@ async def _request_ai(
             except _NonChineseResponseError:
                 logger.info("ai_service: response not in Chinese — retrying once")
             except (json.JSONDecodeError, ValidationError, KeyError, TypeError):
-                pass  # retry exactly once below
+                pass
 
+            if settings.llm.max_retries_on_invalid_json <= 0 and not used_retry:
+                return None, "invalid_response", False
             if remaining() <= 0:
                 return None, "timeout", used_retry
+
             client.timeout = httpx.Timeout(max(remaining(), 1.0))
             try:
                 return await _one_attempt(client, settings, second_payload), None, used_retry
-            except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            except (httpx.RequestError, httpx.HTTPStatusError, llm_provider.LLMConfigurationError) as exc:
                 return None, _transport_failure_kind(exc), used_retry
-            except _PromptTruncatedError:
+            except llm_provider.LLMPromptTruncatedError:
                 return None, "prompt_truncated", used_retry
-            except _TruncatedResponseError as exc:
+            except llm_provider.LLMOutputTruncatedError as exc:
                 logger.info(
-                    "ai_service: model output truncated again on retry (done_reason=length, eval_count=%s) — degrading",
-                    exc.eval_count,
+                    "ai_service: provider output truncated again on retry (output_tokens=%s) — degrading",
+                    exc.output_tokens,
                 )
                 return None, "output_truncated", used_retry
             except _NonChineseResponseError:
@@ -1354,7 +1316,7 @@ async def _request_ai(
             except (json.JSONDecodeError, ValidationError, KeyError, TypeError):
                 return None, "invalid_response", used_retry
     finally:
-        _OLLAMA_SEMAPHORE.release()
+        _LLM_SEMAPHORE.release()
 
 
 # ---------------------------------------------------------------------------
@@ -1369,24 +1331,34 @@ async def get_ai_result(
     statements: list[ParsedStatement],
     settings: Settings,
 ) -> AiResult:
-    """Never raises — any failure anywhere in this path (Ollama down,
-    invalid response, or an unexpected bug in this module itself) degrades
+    """Never raises — any failure anywhere in this path (provider down,
+    invalid response, missing cloud credential, or an unexpected bug) degrades
     to the PRD-mandated "unavailable" result rather than propagating."""
     LAST_CALL_STATS.clear()
 
-    deadline = time.monotonic() + settings.ollama.timeout_seconds
+    deadline = time.monotonic() + settings.llm.timeout_seconds
     try:
         representative = _pick_representative(statements, findings)
         if representative is not None:
             statement_type = representative.statement_type
-            mask_result = mask_sql(representative.raw_sql, settings.masking.keep_short_ascii_literal_max_len)
+            mask_result = mask_sql(
+                representative.raw_sql,
+                settings.masking.keep_short_ascii_literal_max_len
+                if settings.llm.allow_short_ascii_literals
+                else 0,
+            )
         else:
             statement_type = "UNKNOWN"
-            mask_result = mask_sql(sql_text, settings.masking.keep_short_ascii_literal_max_len)
+            mask_result = mask_sql(
+                sql_text,
+                settings.masking.keep_short_ascii_literal_max_len
+                if settings.llm.allow_short_ascii_literals
+                else 0,
+            )
 
         sql_tokens = _estimate_tokens(mask_result.masked_sql)
         candidate_allowed, decline_code = _compute_gates(
-            statements, settings.ai_gate, sql_tokens=sql_tokens, num_predict=settings.ollama.num_predict
+            statements, settings.ai_gate, sql_tokens=sql_tokens, num_predict=settings.llm.max_output_tokens
         )
 
         # Pattern Selector stays fail-open: a catalog/selector problem must
@@ -1493,16 +1465,11 @@ async def get_ai_result(
         return _unavailable()
 
 
+async def check_llm_available(settings: Settings) -> bool:
+    """Backs /api/health for whichever provider is active."""
+    return await llm_provider.check_available(settings.llm)
+
+
 async def check_ollama_available(settings: Settings) -> bool:
-    """Backs /api/health. Must stay fast and never raise: GET /api/tags,
-    true iff HTTP 200 and settings.ollama.model appears in models[].name."""
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{settings.ollama.base_url}/api/tags")
-        if resp.status_code != 200:
-            return False
-        data = resp.json()
-        names = {m.get("name") for m in data.get("models", [])}
-        return settings.ollama.model in names
-    except Exception:
-        return False
+    """Backward-compatible alias for older callers/tests."""
+    return await check_llm_available(settings)

@@ -1,16 +1,19 @@
 """Application settings: YAML config loading + environment variable overrides.
 
-Deliberately plain (stdlib + PyYAML, no pydantic-settings): the PRD's backend
-dependency list (§39) does not include a settings framework, and the only
-things that vary by environment are a handful of Ollama connection values
-already named explicitly in PRD §46. See CLAUDE plan "改善優先指數編製模型"
-for why rules/scoring config is data (YAML), not code.
+The runtime is intentionally provider-agnostic:
+- app.yaml: product/runtime settings (upload, guards, archive, knowledge context)
+- llm.yaml: selectable LLM provider profiles (Ollama, Gemini, future providers)
+- rules.yaml / important_tables.yaml: deterministic governance rules
+
+Secrets are never stored in YAML. Cloud provider credentials are read only from
+an environment variable declared by the selected profile (for Gemini:
+GEMINI_API_KEY).
 """
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -19,6 +22,7 @@ import yaml
 
 CONFIG_DIR = Path(__file__).resolve().parent / "config"
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load_yaml(name: str) -> dict[str, Any]:
@@ -28,7 +32,9 @@ def _load_yaml(name: str) -> dict[str, Any]:
     return data or {}
 
 
-def _env_int(name: str, default: int) -> int:
+def _env_int(name: str | None, default: int) -> int:
+    if not name:
+        return default
     raw = os.environ.get(name)
     if raw is None or raw.strip() == "":
         return default
@@ -38,11 +44,30 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _env_bool(name: str, default: bool) -> bool:
+def _env_bool(name: str | None, default: bool) -> bool:
+    if not name:
+        return default
     raw = os.environ.get(name)
     if raw is None or raw.strip() == "":
         return default
     return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _env_float(name: str | None, default: float | None) -> float | None:
+    if not name:
+        return default
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _resolve_project_path(raw: str) -> Path:
+    path = Path(raw).expanduser()
+    return path if path.is_absolute() else PROJECT_ROOT / path
 
 
 @dataclass(frozen=True)
@@ -63,20 +88,31 @@ class UploadSettings:
 
 
 @dataclass(frozen=True)
-class OllamaSettings:
+class LLMSettings:
+    """One active provider profile from config/llm.yaml.
+
+    The common fields are deliberately named by product meaning
+    (max_output_tokens / context_window) rather than one vendor's API names.
+    Provider-specific request translation lives in services/llm_provider.py.
+    """
+
+    provider: str
+    provider_type: str
+    remote: bool
     base_url: str
     model: str
+    api_key_env: str | None
+    api_key: str | None = field(repr=False)
     timeout_seconds: int
-    num_ctx: int
-    num_predict: int
-    temperature: float
-    keep_alive: str
+    max_output_tokens: int
+    context_window: int
+    context_window_max: int
+    temperature: float | None
+    keep_alive: str | None
     max_retries_on_invalid_json: int
-    think: bool = False
-    # 2026-09-17: upper bound for the per-request num_ctx that ai_service
-    # raises when a long SQL would not fit into `num_ctx` (see
-    # ai_service._num_ctx_for). Default 32768 = Gemma4's comfortable window.
-    num_ctx_max: int = 32768
+    think: bool
+    thinking_level: str | None
+    allow_short_ascii_literals: bool
 
 
 @dataclass(frozen=True)
@@ -95,7 +131,7 @@ class Settings:
     app_name: str
     app_title: str
     upload: UploadSettings
-    ollama: OllamaSettings
+    llm: LLMSettings
     ai_gate: dict[str, Any]
     ai_guard: dict[str, Any]
     knowledge_context: dict[str, Any]
@@ -106,6 +142,86 @@ class Settings:
     prompts_dir: Path = PROMPTS_DIR
 
 
+def _load_llm_settings() -> LLMSettings:
+    cfg = _load_yaml("llm.yaml")
+    provider_env = str(cfg.get("active_provider_env", "SQLCHECK_LLM_PROVIDER"))
+    provider = os.environ.get(provider_env, str(cfg.get("active_provider_default", "ollama"))).strip().lower()
+
+    providers = cfg.get("providers", {})
+    if not isinstance(providers, dict) or provider not in providers:
+        known = ", ".join(sorted(providers)) if isinstance(providers, dict) else ""
+        raise ValueError(f"Unknown LLM provider '{provider}'. Available: {known}")
+
+    section = providers[provider] or {}
+    provider_type = str(section.get("type", provider)).strip().lower()
+    api_key_env = section.get("api_key_env")
+    api_key_env = str(api_key_env) if api_key_env else None
+
+    base_url_env = str(section.get("base_url_env", "")).strip() or None
+    model_env = str(section.get("model_env", "")).strip() or None
+    temperature_env = str(section.get("temperature_env", "")).strip() or None
+    thinking_level_env = str(section.get("thinking_level_env", "")).strip() or None
+
+    base_url = (
+        os.environ.get(base_url_env, str(section.get("base_url_default", "")))
+        if base_url_env
+        else str(section.get("base_url_default", ""))
+    ).rstrip("/")
+    model = (
+        os.environ.get(model_env, str(section.get("model_default", "")))
+        if model_env
+        else str(section.get("model_default", ""))
+    ).strip()
+
+    if not base_url:
+        raise ValueError(f"LLM provider '{provider}' has no base_url")
+    if not model:
+        raise ValueError(f"LLM provider '{provider}' has no model")
+
+    return LLMSettings(
+        provider=provider,
+        provider_type=provider_type,
+        remote=bool(section.get("remote", False)),
+        base_url=base_url,
+        model=model,
+        api_key_env=api_key_env,
+        api_key=os.environ.get(api_key_env) if api_key_env else None,
+        timeout_seconds=_env_int(
+            str(section.get("timeout_seconds_env", "")).strip() or None,
+            int(section.get("timeout_seconds_default", 120)),
+        ),
+        max_output_tokens=_env_int(
+            str(section.get("max_output_tokens_env", "")).strip() or None,
+            int(section.get("max_output_tokens_default", 3072)),
+        ),
+        context_window=_env_int(
+            str(section.get("context_window_env", "")).strip() or None,
+            int(section.get("context_window_default", 16384)),
+        ),
+        context_window_max=_env_int(
+            str(section.get("context_window_max_env", "")).strip() or None,
+            int(section.get("context_window_max_default", section.get("context_window_default", 16384))),
+        ),
+        temperature=_env_float(temperature_env, section.get("temperature_default")),
+        keep_alive=str(section["keep_alive"]) if section.get("keep_alive") is not None else None,
+        max_retries_on_invalid_json=int(section.get("max_retries_on_invalid_json", 1)),
+        think=_env_bool(
+            str(section.get("think_env", "")).strip() or None,
+            bool(section.get("think_default", False)),
+        ),
+        thinking_level=(
+            os.environ.get(
+                thinking_level_env,
+                str(section.get("thinking_level_default", "")),
+            ).strip()
+            if thinking_level_env
+            else str(section.get("thinking_level_default", "")).strip()
+        )
+        or None,
+        allow_short_ascii_literals=bool(section.get("allow_short_ascii_literals", not bool(section.get("remote", False)))),
+    )
+
+
 @lru_cache
 def get_settings() -> Settings:
     app_cfg = _load_yaml("app.yaml")
@@ -114,69 +230,31 @@ def get_settings() -> Settings:
 
     app_section = app_cfg.get("app", {})
     upload_section = app_cfg.get("upload", {})
-    ollama_section = app_cfg.get("ollama", {})
     masking_section = app_cfg.get("masking", {})
     archive_section = app_cfg.get("archive", {})
 
     upload = UploadSettings(
         max_file_mb=int(upload_section.get("max_file_mb", 10)),
         max_extracted_chars=int(upload_section.get("max_extracted_chars", 300_000)),
-        allowed_extensions=tuple(
-            ext.lower() for ext in upload_section.get("allowed_extensions", [])
-        ),
+        allowed_extensions=tuple(ext.lower() for ext in upload_section.get("allowed_extensions", [])),
         docx_max_uncompressed_mb=int(upload_section.get("docx_max_uncompressed_mb", 80)),
         docx_max_compression_ratio=int(upload_section.get("docx_max_compression_ratio", 100)),
-    )
-
-    ollama = OllamaSettings(
-        base_url=os.environ.get(
-            ollama_section.get("base_url_env", "OLLAMA_BASE_URL"),
-            ollama_section.get("base_url_default", "http://host.docker.internal:11434"),
-        ),
-        model=os.environ.get(
-            ollama_section.get("model_env", "OLLAMA_MODEL"),
-            ollama_section.get("model_default", "gemma4:31b"),
-        ),
-        timeout_seconds=_env_int(
-            ollama_section.get("timeout_seconds_env", "OLLAMA_TIMEOUT_SECONDS"),
-            int(ollama_section.get("timeout_seconds_default", 120)),
-        ),
-        num_ctx=_env_int(
-            ollama_section.get("num_ctx_env", "OLLAMA_NUM_CTX"),
-            # 2026-09-17: fallback kept in sync with app.yaml's num_ctx_default
-            # (16384, not the old 8192) — app.yaml is the source of truth, this
-            # only applies if that key ever goes missing.
-            int(ollama_section.get("num_ctx_default", 16384)),
-        ),
-        num_predict=int(ollama_section.get("num_predict", 1024)),
-        temperature=float(ollama_section.get("temperature", 0.2)),
-        keep_alive=str(ollama_section.get("keep_alive", "30m")),
-        max_retries_on_invalid_json=int(ollama_section.get("max_retries_on_invalid_json", 1)),
-        think=_env_bool(
-            ollama_section.get("think_env", "OLLAMA_THINK"),
-            bool(ollama_section.get("think_default", False)),
-        ),
-        num_ctx_max=_env_int(
-            ollama_section.get("num_ctx_max_env", "OLLAMA_NUM_CTX_MAX"),
-            int(ollama_section.get("num_ctx_max_default", 32768)),
-        ),
     )
 
     masking = MaskingSettings(
         keep_short_ascii_literal_max_len=int(masking_section.get("keep_short_ascii_literal_max_len", 4)),
     )
 
+    archive_dir_raw = os.environ.get(
+        str(archive_section.get("dir_env", "SQLCHECK_ARCHIVE_DIR")),
+        str(archive_section.get("dir_default", "data/sql_archive")),
+    )
     archive = ArchiveSettings(
         enabled=_env_bool(
-            archive_section.get("enabled_env", "SQLCHECK_ARCHIVE_ENABLED"),
+            str(archive_section.get("enabled_env", "SQLCHECK_ARCHIVE_ENABLED")),
             bool(archive_section.get("enabled", True)),
         ),
-        dir=Path(
-            os.environ.get(
-                archive_section.get("dir_env", "SQLCHECK_ARCHIVE_DIR"),
-                archive_section.get("dir_default", "/data/sql_archive"),
-            )
-        ),
+        dir=_resolve_project_path(archive_dir_raw),
     )
 
     knowledge_context = dict(app_cfg.get("knowledge_context", {}))
@@ -187,9 +265,9 @@ def get_settings() -> Settings:
 
     return Settings(
         app_name=app_section.get("name", "SQLCheck AI"),
-        app_title=app_section.get("title", "SQL 效能優化助手"),
+        app_title=app_section.get("title", "SQL 智慧效能檢核與改善助手"),
         upload=upload,
-        ollama=ollama,
+        llm=_load_llm_settings(),
         ai_gate=app_cfg.get("ai_gate", {}),
         ai_guard=app_cfg.get("ai_guard", {}),
         knowledge_context=knowledge_context,

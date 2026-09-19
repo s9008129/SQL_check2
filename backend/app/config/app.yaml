@@ -1,4 +1,4 @@
-# SQLCheck 2.0 應用程式設定（上傳限制、Ollama 連線、AI 守門清單）。
+# SQLCheck 2.0 應用程式設定（上傳限制、AI 守門、Knowledge、蒐集檔）。
 # 環境變數（見 .env.example）永遠可覆寫本檔案列出的 *_env 對應項目。
 
 app:
@@ -20,47 +20,8 @@ upload:
   docx_max_uncompressed_mb: 80
   docx_max_compression_ratio: 100
 
-ollama:
-  base_url_env: OLLAMA_BASE_URL
-  base_url_default: "http://host.docker.internal:11434"
-  model_env: OLLAMA_MODEL
-  model_default: "gemma4:31b"
-  timeout_seconds_env: OLLAMA_TIMEOUT_SECONDS
-  # 2026-09-16 由 120 調高為 180：31B 模型在 num_predict 提高到 3072 後，最長回覆
-  # （中文 summary + 3 條建議 + SQL 改寫）實測需要更多時間，120 秒偏緊。
-  timeout_seconds_default: 180
-  num_ctx_env: OLLAMA_NUM_CTX
-  # 2026-09-17 由 8192 改 16384：實測 system prompt 約 5,700 token，加上完整
-  # num_predict 3072 已超過 8192；正式主機 gemma4:31b 以 16384 可正常執行。
-  # ai_service 只會在 num_ctx_default 的 2 倍、4 倍…（≤ num_ctx_max）之間切換，
-  # 因為每個不同的 num_ctx 值都會讓 Ollama 重新載入模型。
-  num_ctx_default: 16384
-  # 2026-09-17 新增：一份三層巢狀、含大量中文別名的正式 SQL（約 6,000 字）加上約
-  # 4,000 token 的 system prompt 超過 8192，Ollama 會「靜默截斷 prompt」
-  # （log 可見 prompt_eval_count 恰等於 num_ctx），模型失去系統指令後改用英文回答、
-  # 捏造資料表名稱。ai_service 現在依每次 prompt 長度估算需要的 num_ctx，
-  # 在 num_ctx_default 與 num_ctx_max 之間自動放大；若仍不足則降級為「暫時無法
-  # 使用」而不是顯示幻覺。num_ctx 越大 KV cache 越吃 VRAM，正式主機若回應明顯變慢
-  # 可調低此上限。
-  num_ctx_max_env: OLLAMA_NUM_CTX_MAX
-  num_ctx_max_default: 32768
-  # 2026-09-16 由 1024 調高為 3072：實測（正式主機 E2E）確認 1024 對「中文
-  # summary + 最多 3 條建議（各含 explanation/example）+ 完整 SQL 改寫」經常不夠，
-  # 導致輸出被截斷成無效 JSON、觸發重試、最終降級為「暫時無法使用」。若正式主機
-  # VRAM 吃緊導致回應變慢，可視情況調低，但務必同時檢查 log 中的
-  # `done_reason=length` 是否又開始出現。
-  num_predict: 3072
-  temperature: 0.2
-  keep_alive: "30m"
-  max_retries_on_invalid_json: 1
-  # 2026-09-17 新增：關閉 Gemma4 的「思考模式」。實測（正式主機直接打 Ollama）確認
-  # 預設開啟思考時，含 OR 條件的簡單查詢會把 3072 個 num_predict 全部耗在內部推理
-  # （抓到 8,431 字的 thinking 內容），content 完全空白、done_reason=length，最終
-  # 降級成「暫時無法使用」；關閉後同一查詢 14 秒完成、輸出完整 JSON。結構化 JSON
-  # 輸出任務不需要思考模式，這也讓每次回應快 3–5 倍。可用環境變數 OLLAMA_THINK=true
-  # 重新開啟（例如換成不支援 think 參數的模型時設為 true 以外的值不會有影響）。
-  think_env: OLLAMA_THINK
-  think_default: false
+# LLM provider connection settings moved to config/llm.yaml.
+# app.yaml now contains only product/runtime behavior that is provider-independent.
 
 # Pattern Catalog → Gemma compact context（2026-09-18）。
 # 只允許 Pattern Selector 的 exact match；family_signal / OUT_OF_SCOPE 永不注入。
@@ -79,7 +40,7 @@ ai_gate:
   #
   # 2026-09-17 新增「長度」守門：完整改寫要把整段 SQL 再輸出一次，估算
   # sql_tokens × rewrite_token_ratio + rewrite_reply_overhead_tokens（summary 與最多
-  # 3 條建議的固定開銷）若超過 ollama.num_predict，就不允許改寫（decline_code
+  # 3 條建議的固定開銷）若超過目前 LLM provider 的 max_output_tokens，就不允許改寫（decline_code
   # too_long_for_rewrite），只提供方向與片段。正式主機實測：約 6,000 字的三層巢狀
   # SQL 讓模型嘗試改寫時撞到 3072 token 上限，JSON 被截斷、整份回覆作廢。
   rewrite_token_ratio: 1.2

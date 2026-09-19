@@ -62,9 +62,9 @@ def _ext_of(filename: str) -> str:
 async def health() -> HealthResponse:
     settings = get_settings()
     try:
-        available = await ai_service.check_ollama_available(settings)
+        available = await ai_service.check_llm_available(settings)
     except Exception as exc:  # noqa: BLE001 - health check must never itself fail
-        _log_exception_type_only("check_ollama_available raised unexpectedly", exc)
+        _log_exception_type_only("check_llm_available raised unexpectedly", exc)
         available = False
     return HealthResponse(status="ok", ai_available=available)
 
@@ -169,6 +169,7 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
                 ai_result=ai_result,
                 cost=payload.cost,
                 settings=settings,
+                sql_text=payload.sql,
             )
         except Exception as exc:  # noqa: BLE001 - archive must never affect the response
             _log_exception_type_only("sql_archive.record_analysis raised unexpectedly", exc)

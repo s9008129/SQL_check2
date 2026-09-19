@@ -121,4 +121,4 @@ archive:
   enabled: true
   enabled_env: SQLCHECK_ARCHIVE_ENABLED
   dir_env: SQLCHECK_ARCHIVE_DIR
-  dir_default: "data/sql_archive"
+  dir_default: "/data/sql_archive"

@@ -9,8 +9,8 @@ describe("SummaryCards — improvement colour states", () => {
     const { container } = render(<SummaryCards result={result} />);
     expect(screen.getByText("68 / 100")).toBeTruthy();
     expect(screen.getByTestId("improvement-level").textContent).toBe("建議改善");
-    expect(screen.getByText("改善優先指數")).toBeTruthy();
-    expect(screen.queryByText("改善指數")).toBeNull();
+    expect(screen.getByText("改善指數")).toBeTruthy();
+    expect(screen.queryByText("改善優先指數")).toBeNull();
     expect(screen.queryByText("67")).toBeNull();
     expect(container.querySelector(".tone-yellow")).toBeTruthy();
   });
@@ -161,5 +161,23 @@ describe("SummaryCards — AI-dependent card", () => {
     });
     render(<SummaryCards result={result} />);
     expect(screen.getByText("暫不提供")).toBeTruthy();
+  });
+});
+
+
+describe("SummaryCards — REVIEW wording", () => {
+  it("shows the number of items that need confirmation instead of saying there are no reminders", () => {
+    render(
+      <SummaryCards
+        result={makeResult({
+          compliance: { status: "REVIEW", label: "請人工確認", notice_count: 0, block_count: 0 },
+          rules: [
+            { rule_id: "R002", name: "WHERE 查詢條件", status: "REVIEW", evidence: "JOIN ON", note: "請人工確認" },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText("1 項需確認")).toBeTruthy();
+    expect(screen.queryByText("目前無提醒事項")).toBeNull();
   });
 });

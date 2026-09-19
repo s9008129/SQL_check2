@@ -55,6 +55,10 @@ providers:
     context_window_max_default: 1048576
     # null = 不覆寫模型預設 temperature。Gemini 3 系列官方建議維持預設值。
     temperature_default: null
+    # SQLCheck 是結構化、單次的 SQL 建議任務，開發驗證預設 low 可降低延遲與 token 成本。
+    # Gemini 3.8 Flash 支援 low / medium / high；可用環境變數覆寫。
+    thinking_level_env: GEMINI_THINKING_LEVEL
+    thinking_level_default: low
     keep_alive: null
     max_retries_on_invalid_json: 1
     think_default: false

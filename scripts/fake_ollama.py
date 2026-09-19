@@ -96,6 +96,24 @@ def _advice_payload(profile: str = "high") -> dict:
                 "rewrite_outcome": "advice_only",
             },
         }
+    if profile == "unverified_high":
+        return {
+            "summary": "（假資料）這個方向仍需人工確認，但模型自評把握較高。",
+            "advice": [
+                {
+                    "title": "（假資料）確認條件方向",
+                    "explanation": "這個改善方向仍需依實際業務條件確認。",
+                    "example": "",
+                    "confidence_score": 96,
+                }
+            ],
+            "suggested_sql": {
+                "available": False,
+                "reason": "需要人工確認，僅保留改善方向。",
+                "confidence_score": 96,
+                "rewrite_outcome": "advice_only",
+            },
+        }
     if profile == "none":
         return {
             "summary": "（假資料）目前資訊不足，先保留檢查方向。",
@@ -222,6 +240,8 @@ class _FakeOllamaHandler(BaseHTTPRequestHandler):
             profile = "medium"
         elif "CONF_LOW" in request_text:
             profile = "low"
+        elif "CONF_UNVERIFIED_HIGH" in request_text:
+            profile = "unverified_high"
         elif "CONF_NONE" in request_text:
             profile = "none"
         elif "CONF_TYPED_SAFETY" in request_text:

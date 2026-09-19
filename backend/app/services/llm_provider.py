@@ -84,6 +84,8 @@ def _ollama_body(
         "think": settings.think,
         "options": {
             "temperature": settings.temperature if settings.temperature is not None else 0.2,
+            **({"top_p": settings.top_p} if settings.top_p is not None else {}),
+            **({"top_k": settings.top_k} if settings.top_k is not None else {}),
             "num_ctx": context_window,
             "num_predict": settings.max_output_tokens,
         },
@@ -168,6 +170,10 @@ def _gemini_body(
     # confounded by a different sampling temperature.
     if settings.temperature is not None:
         generation_config["temperature"] = settings.temperature
+    if settings.top_p is not None:
+        generation_config["topP"] = settings.top_p
+    if settings.top_k is not None:
+        generation_config["topK"] = settings.top_k
     if settings.thinking_level:
         generation_config["thinkingConfig"] = {"thinkingLevel": settings.thinking_level}
 

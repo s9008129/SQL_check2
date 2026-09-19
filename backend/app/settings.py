@@ -108,6 +108,8 @@ class LLMSettings:
     context_window: int
     context_window_max: int
     temperature: float | None
+    top_p: float | None
+    top_k: int | None
     keep_alive: str | None
     max_retries_on_invalid_json: int
     think: bool
@@ -160,6 +162,8 @@ def _load_llm_settings() -> LLMSettings:
     base_url_env = str(section.get("base_url_env", "")).strip() or None
     model_env = str(section.get("model_env", "")).strip() or None
     temperature_env = str(section.get("temperature_env", "")).strip() or None
+    top_p_env = str(section.get("top_p_env", "")).strip() or None
+    top_k_env = str(section.get("top_k_env", "")).strip() or None
     thinking_level_env = str(section.get("thinking_level_env", "")).strip() or None
 
     base_url = (
@@ -203,6 +207,8 @@ def _load_llm_settings() -> LLMSettings:
             int(section.get("context_window_max_default", section.get("context_window_default", 16384))),
         ),
         temperature=_env_float(temperature_env, section.get("temperature_default")),
+        top_p=_env_float(top_p_env, section.get("top_p_default")),
+        top_k=_env_int(top_k_env, int(section["top_k_default"])) if section.get("top_k_default") is not None else None,
         keep_alive=str(section["keep_alive"]) if section.get("keep_alive") is not None else None,
         max_retries_on_invalid_json=int(section.get("max_retries_on_invalid_json", 1)),
         think=_env_bool(

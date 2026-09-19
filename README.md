@@ -47,8 +47,12 @@ bash scripts/dev-mac.sh
 - Vite 會把 `/api` proxy 到 FastAPI，不需要 CORS 設定。
 - **Gemini API 只是雲端傳輸／代管服務，實際模型不是 Gemini 3.x，而是
   `gemma-4-31b-it`**，用來對照正式機 `gemma4:31b`。
-- Parity profile 同步對齊：temperature=0.2、max output=3072、context tier=16384/32768、
-  地端 `think=false` 對應 API `GEMINI_THINKING_LEVEL=minimal`，以及相同的短 ASCII masking 規則。
+- Parity profile 同步對齊：temperature=0.2、top_p=0.95、top_k=64、max output=3072、
+  context tier=16384/32768、地端 `think=false` 對應 API `GEMINI_THINKING_LEVEL=minimal`，
+  以及相同的短 ASCII masking 規則。
+- 這是「同一 Gemma 4 31B IT 模型家族 + 同一 SQLCheck 推理設定」的有效對照；但不是 bit-for-bit
+  相同執行環境：Ollama `gemma4:31b` 是 Q4_K_M 本機量化版本，Google API 是代管版本，
+  因此輸出仍可能有小幅差異，驗收應比較安全邊界與建議品質，不要求逐字一致。
 - 因 parity 模式會保留與地端相同的短代碼／LIKE 樣式，Mac 雲端驗證**只能使用 synthetic 或
   已去識別化 SQL**；不要把正式機 production archive 或原始案件 SQL 直接送到雲端。
 

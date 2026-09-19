@@ -32,6 +32,10 @@ providers:
     context_window_max_env: OLLAMA_NUM_CTX_MAX
     context_window_max_default: 32768
     temperature_default: 0.2
+    top_p_env: OLLAMA_TOP_P
+    top_p_default: 0.95
+    top_k_env: OLLAMA_TOP_K
+    top_k_default: 64
     keep_alive: "30m"
     max_retries_on_invalid_json: 1
     think_env: OLLAMA_THINK
@@ -57,8 +61,14 @@ providers:
     # generateContent 本身不會收到 Ollama 的 num_ctx；這兩個值用於 SQLCheck 自己的估算。
     context_window_default: 16384
     context_window_max_default: 32768
-    # 與正式 Ollama profile 對齊。
+    # 與正式 Ollama profile 對齊。Ollama 官方 gemma4:31b 的模型預設 top_p=0.95 / top_k=64；
+    # 專案另外把 temperature 固定為 0.2，因此雲端 parity 也明確送出相同值。
+    temperature_env: GEMINI_TEMPERATURE
     temperature_default: 0.2
+    top_p_env: GEMINI_TOP_P
+    top_p_default: 0.95
+    top_k_env: GEMINI_TOP_K
+    top_k_default: 64
     # 地端 OLLAMA_THINK=false；Gemma 4 API 僅支援 high / minimal，因此 parity 使用 minimal。
     thinking_level_env: GEMINI_THINKING_LEVEL
     thinking_level_default: minimal

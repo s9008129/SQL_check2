@@ -27,8 +27,10 @@ def _gemini_settings(base_llm):
         timeout_seconds=30,
         max_output_tokens=2048,
         temperature=0.2,
+        top_p=0.95,
+        top_k=64,
         thinking_level="minimal",
-        allow_short_ascii_literals=False,
+        allow_short_ascii_literals=True,
     )
 
 
@@ -71,6 +73,8 @@ async def test_ollama_adapter_keeps_existing_chat_shape(base_llm):
     assert body["format"] == {"type": "object"}
     assert body["options"]["num_ctx"] == 16384
     assert body["options"]["num_predict"] == settings.max_output_tokens
+    assert body["options"]["top_p"] == 0.95
+    assert body["options"]["top_k"] == 64
     assert reply.content == '{"ok":true}'
     assert reply.prompt_tokens == 123
     assert reply.output_tokens == 45
@@ -121,6 +125,8 @@ async def test_gemini_adapter_uses_generate_content_and_json_schema(base_llm):
     assert body["generationConfig"]["responseJsonSchema"] == schema
     assert body["generationConfig"]["maxOutputTokens"] == 2048
     assert body["generationConfig"]["temperature"] == 0.2
+    assert body["generationConfig"]["topP"] == 0.95
+    assert body["generationConfig"]["topK"] == 64
     assert body["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "minimal"}
     assert reply.content == '{"summary":"ok"}'
     assert reply.prompt_tokens == 321

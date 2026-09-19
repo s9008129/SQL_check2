@@ -30,7 +30,7 @@ def _default_ai_stubs(monkeypatch):
     async def _fake_check(_settings):
         return True
 
-    monkeypatch.setattr(api_module.ai_service, "check_ollama_available", _fake_check)
+    monkeypatch.setattr(api_module.ai_service, "check_llm_available", _fake_check)
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +40,7 @@ async def test_health_ok_when_ai_available(client, monkeypatch):
     async def _true(_settings):
         return True
 
-    monkeypatch.setattr(api_module.ai_service, "check_ollama_available", _true)
+    monkeypatch.setattr(api_module.ai_service, "check_llm_available", _true)
     resp = await client.get("/api/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok", "ai_available": True}
@@ -50,7 +50,7 @@ async def test_health_ok_when_ai_unavailable(client, monkeypatch):
     async def _false(_settings):
         return False
 
-    monkeypatch.setattr(api_module.ai_service, "check_ollama_available", _false)
+    monkeypatch.setattr(api_module.ai_service, "check_llm_available", _false)
     resp = await client.get("/api/health")
     assert resp.status_code == 200
     assert resp.json()["ai_available"] is False
@@ -60,7 +60,7 @@ async def test_health_survives_ai_check_raising(client, monkeypatch):
     async def _raise(_settings):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(api_module.ai_service, "check_ollama_available", _raise)
+    monkeypatch.setattr(api_module.ai_service, "check_llm_available", _raise)
     resp = await client.get("/api/health")
     assert resp.status_code == 200
     assert resp.json()["ai_available"] is False

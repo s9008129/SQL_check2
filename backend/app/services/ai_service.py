@@ -1264,6 +1264,12 @@ async def _request_ai(
                 )
                 return None, "prompt_truncated", False
             except llm_provider.LLMOutputTruncatedError as exc:
+                if exc.thinking_chars:
+                    logger.info(
+                        "ai_service: truncated while thinking (thinking_chars=%d) — "
+                        "disable provider thinking for schema-constrained JSON output",
+                        exc.thinking_chars,
+                    )
                 if retry_payload is None or remaining() < _MIN_RETRY_BUDGET_SECONDS:
                     logger.info(
                         "ai_service: provider output truncated (output_tokens=%s) — "

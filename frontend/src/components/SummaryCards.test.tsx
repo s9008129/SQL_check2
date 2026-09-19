@@ -9,8 +9,8 @@ describe("SummaryCards — improvement colour states", () => {
     const { container } = render(<SummaryCards result={result} />);
     expect(screen.getByText("68 / 100")).toBeTruthy();
     expect(screen.getByTestId("improvement-level").textContent).toBe("建議改善");
-    expect(screen.getByText("改善指數")).toBeTruthy();
-    expect(screen.queryByText("改善優先指數")).toBeNull();
+    expect(screen.getByText("改善優先指數")).toBeTruthy();
+    expect(screen.queryByText("改善指數")).toBeNull();
     expect(screen.queryByText("67")).toBeNull();
     expect(container.querySelector(".tone-yellow")).toBeTruthy();
   });
@@ -43,6 +43,30 @@ describe("SummaryCards — improvement colour states", () => {
     expect(list.textContent).toContain("目前 COST 68,888 約為規範門檻 100,000 的 69%");
     expect(list.textContent).toContain("至少 80 分");
     expect(list.textContent).not.toContain("佔規範門檻");
+  });
+
+  it("shows structure score floors as minimums, not additive points", () => {
+    const result = makeResult({
+      improvement: {
+        score: 60,
+        level: "IMPROVE",
+        label: "建議改善",
+        color: "yellow",
+        breakdown: [
+          {
+            component: "structure_floor",
+            label: "需優先確認的 SQL 結構",
+            score: 60,
+            detail: "缺少資料表關聯條件，改善優先指數至少為 60。",
+          },
+        ],
+      },
+    });
+    render(<SummaryCards result={result} />);
+    fireEvent.click(screen.getByRole("button", { name: /指數組成/ }));
+    const list = screen.getByTestId("breakdown-list");
+    expect(list.textContent).toContain("至少 60 分");
+    expect(list.textContent).not.toContain("+60 分");
   });
 
   it("renders the green 目前良好 state", () => {

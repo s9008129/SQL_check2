@@ -140,7 +140,8 @@ class AdviceItem(BaseModel):
     # 2026-09-17: what the server could prove about before→example.
     #   verified   — the model's fragment matches a rule-derived equivalent
     #   corrected  — it did not; `example` now holds the system's equivalent
-    #   unverified — no rule covers this change; shown as a sketch only
+    #   unverified — no rule covers this change; concrete example/before are
+    #                stripped before the API response, so the UI shows prose only
     #   None       — no fragment
     verification: Literal["verified", "corrected", "unverified"] | None = None
     # Caveat under which the rule's equivalence holds (e.g. bind is a date

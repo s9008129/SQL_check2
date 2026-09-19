@@ -730,8 +730,9 @@ patterns:
   - id: LEADING_WILDCARD_LIKE
     name_zh_tw: LIKE 前置萬用字元
     model_guidance_zh_tw: >
-      R004 已確認為前置萬用字元。可提醒業務是否能改成較窄的比對方式，
-      但沒有可保證等價的自動改寫，也不可宣稱索引或執行計畫行為。
+      R004 已確認為前置萬用字元。只能用白話提醒業務確認是否能縮小比對範圍；
+      不要輸出替代 LIKE 片段或其他可直接貼上的 SQL。此 pattern 沒有可保證等價的
+      自動改寫，也不可宣稱索引或執行計畫行為。
     category: predicate
     classification: ADVICE_ONLY
     oracle_applicable: true
@@ -755,7 +756,7 @@ patterns:
       - execution_plan
       - create_index_recommendation
     verification:
-      required_for_rewrite: false
+      required_for_rewrite: true
       mechanism: none
     sources:
       - type: internal

@@ -282,8 +282,9 @@ def verify_fragment(before: str, example: str) -> FragmentVerification:
     - `before` parses and a rule applies: the model's `example` is compared
       against the accepted forms → "verified" (as written) or "corrected"
       (replaced by the canonical form; the model's text was NOT equivalent).
-    - Otherwise → "unverified": the fragment is shown, but labelled as a
-      sketch the system could not prove equivalent.
+    - Otherwise → "unverified": this verifier returns the model fragment for
+      diagnostics, but ai_service strips it before the API response. Unverified
+      SQL is prose-only in the user interface.
     Multi-conjunct `before` is handled conjunct by conjunct: every conjunct
     must either be unchanged in `example` or rewritten by a rule."""
     before_expr = parse_predicate(before)

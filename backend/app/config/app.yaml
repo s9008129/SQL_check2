@@ -40,7 +40,7 @@ ai_gate:
   #
   # 2026-09-17 新增「長度」守門：完整改寫要把整段 SQL 再輸出一次，估算
   # sql_tokens × rewrite_token_ratio + rewrite_reply_overhead_tokens（summary 與最多
-  # 3 條建議的固定開銷）若超過 ollama.num_predict，就不允許改寫（decline_code
+  # 3 條建議的固定開銷）若超過目前 LLM provider 的 max_output_tokens，就不允許改寫（decline_code
   # too_long_for_rewrite），只提供方向與片段。正式主機實測：約 6,000 字的三層巢狀
   # SQL 讓模型嘗試改寫時撞到 3072 token 上限，JSON 被截斷、整份回覆作廢。
   rewrite_token_ratio: 1.2

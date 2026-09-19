@@ -128,3 +128,91 @@ it("never renders copyable SQL for an unverified advice item", () => {
   expect(screen.getByText("需先確認再改")).toBeTruthy();
   expect(screen.queryByText("A.NAME LIKE '明%'")).toBeNull();
 });
+
+it("shows verified evidence and AI confidence as separate badges", () => {
+  render(
+    <ImprovementAdvice
+      ai={makeAi({
+        advice: [
+          {
+            title: "可確認改寫",
+            explanation: "同欄位條件可整理。",
+            example: "A.STATUS IN ('A', 'B')",
+            impact: "high",
+            verification: "verified",
+            confidence_score: 92,
+          },
+        ],
+      })}
+    />,
+  );
+
+  expect(screen.getByText("可使用此改寫")).toBeTruthy();
+  expect(screen.getByText("AI 信心：高 92/100")).toBeTruthy();
+});
+
+it("keeps high AI confidence separate from an unverified evidence badge", () => {
+  render(
+    <ImprovementAdvice
+      ai={makeAi({
+        advice: [
+          {
+            title: "需要確認",
+            explanation: "改法需要額外前提。",
+            example: null,
+            impact: "high",
+            verification: "unverified",
+            confidence_score: 96,
+          },
+        ],
+      })}
+    />,
+  );
+
+  expect(screen.getByText("需先確認再改")).toBeTruthy();
+  expect(screen.getByText("AI 信心：高 96/100")).toBeTruthy();
+  expect(screen.queryByText("可使用此改寫")).toBeNull();
+});
+
+it.each([
+  ["AI 信心：中 73/100", 73],
+  ["AI 信心：低 41/100", 41],
+])("renders %s inline", (text, score) => {
+  render(
+    <ImprovementAdvice
+      ai={makeAi({
+        advice: [
+          {
+            title: "方向提醒",
+            explanation: "請先確認業務條件。",
+            example: null,
+            impact: "low",
+            confidence_score: score,
+          },
+        ],
+      })}
+    />,
+  );
+
+  expect(screen.getByText(text)).toBeTruthy();
+});
+
+it.each([null, undefined])("does not render a badge for %s confidence", (score) => {
+  render(
+    <ImprovementAdvice
+      ai={makeAi({
+        advice: [
+          {
+            title: "方向提醒",
+            explanation: "請先確認業務條件。",
+            example: null,
+            impact: "low",
+            confidence_score: score,
+          },
+        ],
+      })}
+    />,
+  );
+
+  expect(screen.queryByTestId("confidence-badge")).toBeNull();
+});

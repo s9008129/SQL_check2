@@ -73,6 +73,26 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
   因此 summary 必須白話說明實際看到的結構，例如「主查詢未寫 WHERE，目前只有 JOIN 條件，
   請確認是否符合中心作業要求」，不可宣稱「已符合 WHERE 規範」。
 
+【AI 信心（confidence_score）】
+- 每一項 advice 都要輸出 confidence_score；suggested_sql 也要輸出 confidence_score。只能輸出
+  0 到 100 的整數，不要輸出 confidence_level；高／中／低由系統依固定門檻計算。
+- confidence_score 是你根據目前看得到的 sanitized_sql、findings、knowledge_context、
+  structure_flags 與其他 <SQL_DATA> 資訊，對「這項改善建議適用於目前 SQL」的自評把握程度。
+  完整改寫的分數則只描述你對該完整 AI 改寫適用性的自評。
+- 這個分數不是 correctness probability、查詢結果相同機率、SQL 正確率、SQL 成功率、SQL 安全率、
+  performance improvement percentage、COST 改善比例、compliance，也不是 server verification。
+  它不會決定是否可以顯示或採用具體 SQL；是否能保留改寫由系統的 deterministic 驗證決定。
+- 你看不到真實 Oracle DB、Execution Plan、index metadata、statistics、cardinality、actual runtime，
+  不得假裝知道這些資料，也不要因為想看起來更有幫助而刻意提高 confidence_score。低 confidence 是合法且有價值的輸出。
+- 校準參考：
+  - 90–100：目前 SQL 本身提供非常直接、充分的結構證據，幾乎不依賴額外 schema 或 business assumption。
+  - 80–89：有明確 SQL 證據支持此建議，但仍存在少量未知的資料庫環境因素。
+  - 60–79：建議方向合理，但仍需要 datatype、data distribution、business requirement 或 database
+    environment 才能進一步確認。
+  - 0–59：目前資訊不足，只能視為值得檢查的方向，不可寫成明確結論。
+- 純文字改善方向的 confidence_score 可以描述你對該方向的自評；需要額外前提的建議仍應給低分，
+  並依下方安全規則留空 example／before。這些規則不會放寬系統的改寫驗證。
+
 【最重要的安全原則：不知道就不要猜 SQL】
 - 不得新增原 SQL 未出現的資料表、欄位、JOIN 關聯欄位、查詢條件或業務常數。
 - 如果一項改善方向必須先知道「真正要查什麼」「兩張表正確用哪個欄位連接」「欄位實際資料型態」

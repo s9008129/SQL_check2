@@ -58,22 +58,98 @@ FAKE_MODEL_NAME = "gemma4:31b"
 SLOW_MODE_DELAY_SECONDS = 5
 
 
-def _advice_payload() -> dict:
+def _advice_payload(profile: str = "high") -> dict:
     """A valid response matching ai_service.RESPONSE_SCHEMA / _AiRawResponse."""
+    if profile == "medium":
+        return {
+            "summary": "（假資料）這段 SQL 有一項可參考的改善方向。",
+            "advice": [
+                {
+                    "title": "（假資料）確認業務條件",
+                    "explanation": "這個改善方向需要先確認業務條件。",
+                    "example": "",
+                    "confidence_score": 73,
+                }
+            ],
+            "suggested_sql": {
+                "available": False,
+                "reason": "需要先確認業務條件。",
+                "confidence_score": 73,
+                "rewrite_outcome": "advice_only",
+            },
+        }
+    if profile == "low":
+        return {
+            "summary": "（假資料）目前資訊不足，先保留檢查方向。",
+            "advice": [
+                {
+                    "title": "（假資料）先確認查詢需求",
+                    "explanation": "目前資訊不足，建議先確認實際查詢需求。",
+                    "example": "",
+                    "confidence_score": 41,
+                }
+            ],
+            "suggested_sql": {
+                "available": False,
+                "reason": "目前資訊不足。",
+                "confidence_score": 41,
+                "rewrite_outcome": "advice_only",
+            },
+        }
+    if profile == "none":
+        return {
+            "summary": "（假資料）目前資訊不足，先保留檢查方向。",
+            "advice": [
+                {
+                    "title": "（假資料）先確認查詢需求",
+                    "explanation": "目前資訊不足，建議先確認實際查詢需求。",
+                    "example": "",
+                    "confidence_score": "not-a-score",
+                }
+            ],
+            "suggested_sql": {
+                "available": False,
+                "reason": "目前資訊不足。",
+                "confidence_score": "not-a-score",
+                "rewrite_outcome": "advice_only",
+            },
+        }
+    if profile == "typed_safety":
+        return {
+            "summary": "（假資料）這段日期條件需要先確認型態前提。",
+            "advice": [
+                {
+                    "title": "評估日期條件",
+                    "explanation": "將日期條件改寫為不含型別的文字比較。",
+                    "before": "A.UPDATE_TIME = DATE :STR_001",
+                    "example": "A.UPDATE_TIME = :STR_001",
+                    "confidence_score": 99,
+                }
+            ],
+            "suggested_sql": {
+                "available": False,
+                "reason": "需要先確認日期條件的型態前提。",
+                "confidence_score": 99,
+                "rewrite_outcome": "advice_only",
+            },
+        }
     return {
         "summary": "（假資料）這段 SQL 條件欄位使用了函數，另有 1 項改善建議。",
         "advice": [
             {
                 "title": "（假資料）調整條件寫法",
                 "explanation": "此為 fake_ollama.py 產生的固定假資料，僅供本機手動測試前端顯示使用。",
-                "example": "A.COL = :STR_001",
+                "before": "A.COL = :STR_001 OR A.COL = :STR_002",
+                "example": "A.COL IN (:STR_001, :STR_002)",
                 "impact": "medium",
+                "confidence_score": 92,
             }
         ],
         "suggested_sql": {
             "available": True,
             "reason": "（假資料）僅示範用途，可提供簡單改寫供參考。",
-            "sql": "SELECT * FROM T A WHERE A.COL = :STR_001",
+            "sql": "SELECT A.X FROM T A WHERE A.COL IN (:STR_001, :STR_002)",
+            "confidence_score": 91,
             "rewrite_outcome": "provided",
         },
         "estimated_improvement_pct": 25,
@@ -109,13 +185,14 @@ class _FakeOllamaHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def _drain_request_body(self) -> None:
+    def _drain_request_body(self) -> str:
         # This fake server ignores the actual prompt/schema and always
         # answers from its own fixed --mode; still drain the body so the
         # client's connection behaves normally.
         length = int(self.headers.get("Content-Length") or 0)
         if length:
-            self.rfile.read(length)
+            return self.rfile.read(length).decode("utf-8", errors="replace")
+        return ""
 
     def do_GET(self):
         if self.path.rstrip("/") == "/api/tags":
@@ -128,20 +205,30 @@ class _FakeOllamaHandler(BaseHTTPRequestHandler):
             self._write_json(404, {"error": "not found"})
             return
 
-        self._drain_request_body()
+        request_text = self._drain_request_body()
 
         if self.mode == "slow":
             time.sleep(SLOW_MODE_DELAY_SECONDS)
-            self._write_json(200, self._chat_envelope_for_mode())
+            self._write_json(200, self._chat_envelope_for_mode(request_text))
         else:
-            self._write_json(200, self._chat_envelope_for_mode())
+            self._write_json(200, self._chat_envelope_for_mode(request_text))
 
-    def _chat_envelope_for_mode(self) -> dict:
+    def _chat_envelope_for_mode(self, request_text: str) -> dict:
         if self.mode == "bad-json":
             return _chat_envelope("this is not valid JSON {{{ oops")
         if self.mode == "truncated":
             return _chat_envelope('{"summary": "這段 SQL 條件欄位使用了函', done_reason="length")
-        return _chat_envelope(json.dumps(_advice_payload(), ensure_ascii=False))
+        if "CONF_MEDIUM" in request_text:
+            profile = "medium"
+        elif "CONF_LOW" in request_text:
+            profile = "low"
+        elif "CONF_NONE" in request_text:
+            profile = "none"
+        elif "CONF_TYPED_SAFETY" in request_text:
+            profile = "typed_safety"
+        else:
+            profile = "high"
+        return _chat_envelope(json.dumps(_advice_payload(profile), ensure_ascii=False))
 
     def log_message(self, log_format: str, *args) -> None:
         sys.stderr.write(f"[fake_ollama] {self.address_string()} - {log_format % args}\n")

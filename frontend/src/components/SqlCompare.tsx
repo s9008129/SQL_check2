@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { AdviceItem, AiResult, VerifiedRewrite } from "../types/api";
+import { ConfidenceBadge } from "./ImprovementAdvice";
 import { FragmentDiff, FullSqlDiff } from "./SqlDiffView";
 import { locateOriginalFragment, looksLikeSqlFragment } from "../lib/sqlDiff";
 import { REWRITE_COMPARE_EXPLANATION } from "../lib/copy";
@@ -70,8 +71,11 @@ export default function SqlCompare({ originalSql, ai, verifiedRewrites }: SqlCom
   const [copied, setCopied] = useState(false);
   const suggestedSql =
     ai.status === "ok" && ai.suggested_sql?.available && ai.suggested_sql.sql
-      ? ai.suggested_sql.sql
+      ? ai.suggested_sql
       : null;
+  const suggestedSqlText = suggestedSql?.sql ?? null;
+  const fullRewriteConfidence =
+    suggestedSql?.outcome === "provided" ? suggestedSql.confidence_score : null;
 
   const segments = useMemo(
     () => {
@@ -85,7 +89,7 @@ export default function SqlCompare({ originalSql, ai, verifiedRewrites }: SqlCom
     [ai.status, ai.advice, originalSql, verifiedRewrites],
   );
 
-  if (suggestedSql === null && segments.length === 0) {
+  if (suggestedSqlText === null && segments.length === 0) {
     return null;
   }
 
@@ -93,9 +97,9 @@ export default function SqlCompare({ originalSql, ai, verifiedRewrites }: SqlCom
   const statusText = "查詢結果不變";
 
   async function copySuggestedSql() {
-    if (!suggestedSql || !navigator.clipboard?.writeText) return;
+    if (!suggestedSqlText || !navigator.clipboard?.writeText) return;
     try {
-      await navigator.clipboard.writeText(suggestedSql);
+      await navigator.clipboard.writeText(suggestedSqlText);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1800);
     } catch {
@@ -110,7 +114,10 @@ export default function SqlCompare({ originalSql, ai, verifiedRewrites }: SqlCom
           <div className="card-title">改寫對照</div>
           <div className="card-desc">{REWRITE_COMPARE_EXPLANATION}</div>
         </div>
-        <span className={`badge ${statusTone}`}>{statusText}</span>
+        <div className="compare-head-badges">
+          <span className={`badge ${statusTone}`}>{statusText}</span>
+          <ConfidenceBadge score={fullRewriteConfidence} />
+        </div>
       </div>
       <div className="card-body">
         {segments.length > 0 && (
@@ -129,7 +136,7 @@ export default function SqlCompare({ originalSql, ai, verifiedRewrites }: SqlCom
           </div>
         )}
 
-        {suggestedSql !== null && (
+        {suggestedSqlText !== null && (
           <details className="full-sql-details">
             <summary>完整 SQL</summary>
             <div className="sql-box sql-box-light">
@@ -141,7 +148,7 @@ export default function SqlCompare({ originalSql, ai, verifiedRewrites }: SqlCom
                   {copied ? "已複製" : "複製改後 SQL"}
                 </button>
               </div>
-              <FullSqlDiff original={originalSql} suggested={suggestedSql} />
+              <FullSqlDiff original={originalSql} suggested={suggestedSqlText} />
             </div>
           </details>
         )}

@@ -269,8 +269,11 @@ mark.legend{margin:0 3px}
 .a-info{border-left-color:#9aa4b2}
 .advice-title-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:7px}
 .advice-title-row h4{margin:0}
-.evidence-badge{flex:0 0 auto}
+.advice-badges,.compare-head-badges{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:7px}
+.evidence-badge,.confidence-badge{flex:0 0 auto}
+.confidence-badge{background:#f3efff;color:#5f4bc8}
 .evidence-explanation{margin:-1px 0 8px;color:#16784a;font-size:13px;font-weight:750;line-height:1.5}
+.confidence-disclaimer{display:block;margin-top:4px;font-weight:650}
 .ai-note{font-size:13px;color:var(--muted)}
 .card-estimate .ai-note,.card-compare .ai-note{font-size:14px}
 .label{font-size:13px;color:#4b5565}

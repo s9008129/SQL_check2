@@ -117,6 +117,8 @@ export interface AdviceItem {
   explanation: string;
   example: string | null;
   impact: ImpactLevel | null;
+  /** Model self-assessment of whether this advice applies to the current SQL. */
+  confidence_score?: number | null;
   // Original fragment that `example` replaces (verbatim); optional on the
   // wire for backward compatibility with an older backend.
   before?: string | null;
@@ -132,6 +134,8 @@ export interface SuggestedSql {
   available: boolean;
   reason: string;
   sql: string | null;
+  /** Model self-assessment for the complete rewrite; only meaningful when provided. */
+  confidence_score?: number | null;
   // Why there is / isn't a rewrite (mirrors backend RewriteOutcome). Optional
   // on the wire for backward compatibility with a not-yet-redeployed backend.
   outcome?: RewriteOutcome;

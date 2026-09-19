@@ -43,7 +43,7 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 from sqlglot import exp, parse_one
 
-from app.schemas import AdviceItem, AiResult, Finding, SuggestedSql
+from app.schemas import AdviceItem, AiResult, Finding, SuggestedSql, normalize_confidence_score
 from app.services import context_adapter, llm_provider, pattern_selector, rewrite_rules, rule_engine
 from app.services.masking import mask_sql, scrub_invented_placeholders, unmask_sql
 from app.services.rule_engine import GLOBAL_STATEMENT_INDEX
@@ -169,12 +169,13 @@ RESPONSE_SCHEMA: dict[str, Any] = {
                     # for a precise per-advice before/after diff in the UI.
                     "before": {"type": "string"},
                     "impact": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
                 },
                 # `example` is required (empty string for prose-only advice):
                 # once `before` was added, the model started returning
                 # `before` *instead of* `example` (confirmed live), leaving
                 # nothing to diff against.
-                "required": ["title", "explanation", "example"],
+                "required": ["title", "explanation", "example", "confidence_score"],
             },
         },
         "suggested_sql": {
@@ -183,12 +184,13 @@ RESPONSE_SCHEMA: dict[str, Any] = {
                 "available": {"type": "boolean"},
                 "reason": {"type": "string"},
                 "sql": {"type": "string"},
+                "confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
                 # 2026-09-17: the model must say *which kind* of "no rewrite"
                 # this is, so the UI never shows the same fixed sentence for
                 # "SQL is already fine" and "needs a business assumption".
                 "rewrite_outcome": {"type": "string", "enum": ["provided", "not_needed", "advice_only"]},
             },
-            "required": ["available", "reason", "rewrite_outcome"],
+            "required": ["available", "reason", "rewrite_outcome", "confidence_score"],
         },
     },
     "required": ["summary", "advice", "suggested_sql"],
@@ -205,6 +207,9 @@ class _RawSuggestedSql(BaseModel):
     reason: str
     sql: str | None = None
     rewrite_outcome: str | None = None
+    # Keep this raw so malformed provider values cannot invalidate the rest of
+    # the response; `_finalize_suggested_sql` applies the shared normalizer.
+    confidence_score: Any = None
 
 
 class _AiRawResponse(BaseModel):
@@ -778,6 +783,12 @@ def _filter_advice(
             continue
         title = _sanitize_user_prose(raw_title, {}, literal_hints)
         explanation = _sanitize_user_prose(raw_explanation, {}, literal_hints)
+        confidence_score = normalize_confidence_score(item.confidence_score)
+        # A confidence score describes the model's own advice. If the server
+        # had to alter the prose while sanitizing it, the final wording is no
+        # longer the exact advice the model scored.
+        if title != item.title or explanation != item.explanation:
+            confidence_score = None
         # Keep the sanitized model wording for pattern classification even if
         # a lower safety layer later replaces the user-facing text.
         guard_title = title
@@ -792,6 +803,7 @@ def _filter_advice(
         assumption: str | None = None
         safety_issue = _advice_example_safety_issue(source_sql, before, example) if example else None
         if safety_issue is not None:
+            confidence_score = None
             logger.info("ai_service: advice SQL example hidden by deterministic safety guard: %s", safety_issue)
             example = None
             before = None
@@ -827,19 +839,23 @@ def _filter_advice(
                 v = rewrite_rules.verify_fragment(before, example)
                 verification, assumption = v.status, v.assumption
                 if v.status == "corrected":
+                    confidence_score = None
                     logger.info("ai_service: advice fragment corrected by rule %s", v.rule)
                     example = v.example
                 elif v.status == "unverified":
+                    confidence_score = None
                     logger.info("ai_service: unverified advice SQL hidden; prose-only guidance kept")
                     example = None
                     before = None
                     assumption = None
             else:
+                confidence_score = None
                 logger.info("ai_service: advice SQL without original fragment hidden; cannot verify safely")
                 example = None
                 verification = "unverified"
 
         if before and not example:
+            confidence_score = None
             before = None
 
         if verification not in _VERIFIED:
@@ -849,6 +865,7 @@ def _filter_advice(
                 guard_explanation,
             )
             if prose_guard is not None:
+                confidence_score = None
                 explanation = guarded_explanation
                 verification = "unverified"
                 logger.info("ai_service: advice-only prose normalized by guard: %s", prose_guard)
@@ -858,6 +875,7 @@ def _filter_advice(
                 explanation=explanation,
                 example=example,
                 impact=item.impact,
+                confidence_score=confidence_score,
                 before=before,
                 verification=verification,
                 assumption=assumption,
@@ -1032,6 +1050,8 @@ def _finalize_suggested_sql(
     literal_hints: dict[str, dict[str, Any]] | None = None,
 ) -> SuggestedSql:
     reason = _sanitize_user_prose(raw.reason, vocab, literal_hints)
+    raw_confidence_score = normalize_confidence_score(raw.confidence_score)
+    confidence_score: int | None = None
     # Server-side override (never trust the model on this): candidate_allowed
     # is computed deterministically and wins regardless of what the model
     # claims.
@@ -1075,6 +1095,10 @@ def _finalize_suggested_sql(
             if ok:
                 sql = unmasked
                 outcome = "provided"
+                # Confidence belongs to the exact full rewrite that passed
+                # deterministic re-validation. Every other outcome remains
+                # confidence-free, regardless of the model's score.
+                confidence_score = raw_confidence_score
                 logger.info("ai_service: revalidation ok")
             else:
                 # Rejection reasons are all fixed, structure-only Chinese
@@ -1104,7 +1128,13 @@ def _finalize_suggested_sql(
         reason = _tidy_advice_only_reason(reason)
 
     logger.info("ai_service: rewrite outcome=%s", outcome)
-    return SuggestedSql(available=available, reason=reason, sql=sql, outcome=outcome)
+    return SuggestedSql(
+        available=available,
+        reason=reason,
+        sql=sql,
+        confidence_score=confidence_score,
+        outcome=outcome,
+    )
 
 
 # 2026-09-17 user feedback: the advice_only reason must state the business
@@ -1182,17 +1212,39 @@ def _finalize(
 
     # 2026-09-17: a `:STR_001` the model made up (not in the reverse map, not
     # in the user's SQL) must not reach the reviewer — see masking.py.
-    advice = [
-        item.model_copy(
+    scrubbed_advice: list[AdviceItem] = []
+    for item in advice:
+        scrubbed_example = scrub_invented_placeholders(item.example, original_sql)
+        scrubbed_before = scrub_invented_placeholders(item.before, original_sql)
+        scrubbed_advice.append(
+            item.model_copy(
+                update={
+                    "example": scrubbed_example,
+                    "before": scrubbed_before,
+                    # A confidence score is about the model's exact advice;
+                    # do not keep it when the final server-owned scrub changes
+                    # either fragment.
+                    "confidence_score": (
+                        item.confidence_score
+                        if scrubbed_example == item.example and scrubbed_before == item.before
+                        else None
+                    ),
+                }
+            )
+        )
+    advice = scrubbed_advice
+    if suggested_sql.sql:
+        scrubbed_sql = scrub_invented_placeholders(suggested_sql.sql, original_sql)
+        suggested_sql = suggested_sql.model_copy(
             update={
-                "example": scrub_invented_placeholders(item.example, original_sql),
-                "before": scrub_invented_placeholders(item.before, original_sql),
+                "sql": scrubbed_sql,
+                "confidence_score": (
+                    suggested_sql.confidence_score
+                    if scrubbed_sql == suggested_sql.sql
+                    else None
+                ),
             }
         )
-        for item in advice
-    ]
-    if suggested_sql.sql:
-        suggested_sql = suggested_sql.model_copy(update={"sql": scrub_invented_placeholders(suggested_sql.sql, original_sql)})
 
     logger.info(
         "ai_service: model available=%s advice=%d pct=%s",

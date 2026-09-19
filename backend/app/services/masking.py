@@ -177,13 +177,26 @@ def _literal_wildcard(inner: str) -> str:
     return "none"
 
 
-def _literal_hint(kind: str, inner: str) -> dict[str, Any]:
-    return {
+def _literal_hint(kind: str, inner: str, oracle_literal_type: str | None = None) -> dict[str, Any]:
+    hint: dict[str, Any] = {
         "kind": kind,
         "length": len(inner),
         "wildcard": _literal_wildcard(inner) if kind == "string" else "none",
         "shape": _literal_shape(inner),
     }
+    if oracle_literal_type is not None:
+        hint["oracle_literal_type"] = oracle_literal_type
+    return hint
+
+
+def _oracle_typed_literal(raw_sql: str, literal_start: int) -> str | None:
+    """Return DATE/TIMESTAMP when a string token is an Oracle typed literal.
+
+    This preserves type context without revealing the literal value itself.
+    """
+    prefix = raw_sql[max(0, literal_start - 24) : literal_start]
+    match = re.search(r"\b(DATE|TIMESTAMP)\s*$", prefix, re.IGNORECASE)
+    return match.group(1).lower() if match else None
 
 
 def _is_keepable_short_ascii(inner: str, max_len: int) -> bool:
@@ -215,7 +228,9 @@ def _mask_via_tokens(raw_sql: str, keep_short_ascii_max_len: int) -> MaskResult:
                 continue  # left as-is in the output; no placeholder, no counter increment
             str_n += 1
             placeholder = f":{_STR_PREFIX}_{str_n:03d}"
-            literal_hints[placeholder] = _literal_hint("string", tok.text)
+            literal_hints[placeholder] = _literal_hint(
+                "string", tok.text, _oracle_typed_literal(raw_sql, tok.start)
+            )
         elif tok.token_type == TokenType.NUMBER:
             if _digit_count(tok.text) < MIN_MASKED_DIGITS:
                 continue
@@ -267,7 +282,9 @@ def _mask_fallback_regex(raw_sql: str, keep_short_ascii_max_len: int) -> MaskRes
         counters["str"] += 1
         placeholder = f":{_STR_PREFIX}_{counters['str']:03d}"
         reverse_map[placeholder] = full
-        literal_hints[placeholder] = _literal_hint("string", inner)
+        literal_hints[placeholder] = _literal_hint(
+            "string", inner, _oracle_typed_literal(raw_sql, m.start())
+        )
         return placeholder
 
     # Mask strings first so any digits *inside* a string literal are removed

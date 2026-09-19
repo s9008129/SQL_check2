@@ -6,10 +6,49 @@ import { makeAi } from "../test/fixtures";
 describe("ImprovementAdvice", () => {
   it("renders advice cards when ai.status is ok", () => {
     render(<ImprovementAdvice ai={makeAi()} />);
+    expect(screen.getByText("建議先看這些")).toBeTruthy();
     expect(screen.getByText("日期條件可再簡化")).toBeTruthy();
     expect(
       screen.getByText("目前使用 TRUNC() 比對日期，可評估改成日期範圍。"),
     ).toBeTruthy();
+  });
+
+  it("shows evidence labels instead of the model's subjective impact level", () => {
+    render(
+      <ImprovementAdvice
+        ai={makeAi({
+          advice: [
+            {
+              title: "可確認改寫",
+              explanation: "系統已有確定性規則。",
+              before: "A.STATUS = 'A' OR A.STATUS = 'B'",
+              example: "A.STATUS IN ('A', 'B')",
+              impact: "high",
+              verification: "verified",
+            },
+            {
+              title: "需要確認",
+              explanation: "改法需要額外前提。",
+              before: "TRUNC(A.DT) = :D",
+              example: "A.DT >= :D AND A.DT < :D + 1",
+              impact: "low",
+              verification: "unverified",
+            },
+            {
+              title: "治理提醒",
+              explanation: "請確認查詢範圍。",
+              example: null,
+              impact: "high",
+            },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText("系統可確認")).toBeTruthy();
+    expect(screen.getByText("需人工確認")).toBeTruthy();
+    expect(screen.getByText("觀念提醒")).toBeTruthy();
+    expect(screen.queryByText("影響：高")).toBeNull();
+    expect(screen.queryByText("影響：低")).toBeNull();
   });
 
   it("shows the pending copy while ai.status is pending", () => {

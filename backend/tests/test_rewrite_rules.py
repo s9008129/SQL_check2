@@ -359,3 +359,73 @@ def test_or_to_in_fragment_with_where_wrapper_is_verified():
 def test_or_to_in_fragment_with_on_wrapper_is_verified():
     v = _v("ON A.C = '1' OR A.C = '2'", "ON A.C IN ('1', '2')")
     assert v.status == "verified"
+
+
+def test_find_verified_rewrites_discovers_same_column_or_to_in():
+    sql = "SELECT A.CASE_ID FROM TAX_CASE A WHERE A.STATUS_CD = 'A' OR A.STATUS_CD = 'B'"
+    candidates = rr.find_verified_rewrites(sql)
+    assert [(c.rule, c.before, c.after) for c in candidates] == [
+        (
+            "or_eq_to_in",
+            "A.STATUS_CD = 'A' OR A.STATUS_CD = 'B'",
+            "A.STATUS_CD IN ('A', 'B')",
+        )
+    ]
+
+
+def test_find_verified_rewrites_discovers_substr_eq_to_like():
+    sql = """SELECT A.CASE_ID, A.MANAGE_CD, A.STATUS_CD
+              FROM TAX_CASE A
+              WHERE SUBSTR(A.MANAGE_CD, 6, 3) = '551'
+                AND A.STATUS_CD = '1'"""
+    candidates = rr.find_verified_rewrites(sql)
+    assert [(c.rule, c.before, c.after) for c in candidates] == [
+        (
+            "substr_eq_to_like",
+            "SUBSTR(A.MANAGE_CD, 6, 3) = '551'",
+            "A.MANAGE_CD LIKE '_____551%'",
+        )
+    ]
+
+
+def test_find_verified_rewrites_inspects_having_and_join_on():
+    sql = """SELECT A.C, COUNT(*)
+              FROM T A
+              JOIN U B ON SUBSTR(B.CODE, 1, 2) = 'AB'
+              WHERE A.C = '1' OR A.C = '2'
+              GROUP BY A.C
+              HAVING A.C = '3' OR A.C = '4'"""
+    candidates = rr.find_verified_rewrites(sql)
+    assert sorted(c.rule for c in candidates) == ["or_eq_to_in", "or_eq_to_in", "substr_eq_to_like"]
+    assert {c.after for c in candidates} == {
+        "A.C IN ('1', '2')",
+        "A.C IN ('3', '4')",
+        "B.CODE LIKE 'AB%'",
+    }
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT A.X FROM T A WHERE A.C = 1 OR A.D = 2",
+        "SELECT A.X FROM T A WHERE TRUNC(A.D) = :D",
+        "SELECT A.X FROM T A WHERE NVL(A.S, 'N') = 'N'",
+        "SELECT A.X FROM T A WHERE TO_CHAR(A.D, 'YYYY') = '2024'",
+        "SELECT A.X FROM T A WHERE A.NAME LIKE '%x'",
+    ],
+)
+def test_find_verified_rewrites_keeps_unsupported_shapes_empty(sql):
+    assert rr.find_verified_rewrites(sql) == []
+
+
+def test_find_verified_rewrites_refuses_or_chain_over_oracle_limit():
+    assert rr.find_verified_rewrites(f"SELECT A.X FROM T A WHERE {_or_chain(1001)}") == []
+
+
+def test_find_verified_rewrites_never_raises_on_unsupported_sql():
+    assert rr.find_verified_rewrites("SELEKT * FRM T") == []
+
+
+def test_cross_column_or_detector_does_not_flag_same_column_or():
+    assert rr.has_cross_column_or("SELECT A.X FROM T A WHERE A.C = 1 OR A.C = 2") is False
+    assert rr.has_cross_column_or("SELECT A.X FROM T A WHERE A.C = 1 OR A.D = 2") is True

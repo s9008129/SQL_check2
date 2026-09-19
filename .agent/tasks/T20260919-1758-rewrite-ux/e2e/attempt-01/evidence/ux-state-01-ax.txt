@@ -1,0 +1,29 @@
+# CUA browser evidence — UX-STATE-01
+
+Observed after submitting the case in Chrome at `http://127.0.0.1:5174/` on
+2026-09-19. The frontend was the current worktree Vite build and `/api` was
+proxied to the current worktree backend on port 8000.
+
+Relevant accessibility-tree output:
+
+- `先看中心規範結果，再看改善建議與改寫對照。 ✓ 符合`
+- `1 項建議`
+- `同欄位 OR 改為 IN`
+- `可使用此改寫`
+- `系統已確認：這個改法不會改變查詢結果。`
+- `改寫對照`
+- `系統已確認這個改法不會改變查詢結果。`
+- `查詢結果不變`
+- `重點改寫`
+- `1. 同欄位 OR 改為 IN`
+- `原寫法`
+- `改後寫法`
+- `中心規範檢核`
+- `OR 條件` followed by `建議`
+- all other displayed rule rows used `符合`
+
+The deterministic rewrite title occurred once in the visible `重點改寫`
+fragment list. The AI item had intentionally different newline formatting in
+its `before` value, so this also exercises the duplicate-prevention contract.
+No old `可採用`, `結果相同`, or `改後寫法（結果相同）` text was present in
+the observed result tree.

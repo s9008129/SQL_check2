@@ -457,6 +457,17 @@ def test_system_prompt_keeps_not_needed_observable_and_plain():
     assert "重新推導每一個條件改寫" in ai_service.SYSTEM_PROMPT
 
 
+def test_system_prompt_keeps_verified_rewrite_explanation_separate_from_ui_verification_copy():
+    prompt = ai_service.SYSTEM_PROMPT
+    assert "VERIFIED_REWRITE" in prompt
+    assert "為什麼這樣比較容易閱讀" in prompt
+    assert "結果相同" in prompt
+    assert "查詢結果相同" in prompt
+    assert "可使用此改寫" in prompt
+    assert "由畫面負責" in prompt
+    assert "不要因此放寬任何 SQL 安全規則" in prompt
+
+
 @pytest.mark.parametrize(
     "overclaim",
     [
@@ -517,6 +528,78 @@ def test_system_prompt_tells_model_how_to_word_advice_only_reason():
     # no 「故不自動產生建議寫法」 closing clause (the UI already says that).
     assert "advice_only 的 reason 寫法" in ai_service.SYSTEM_PROMPT
     assert "故不自動產生建議寫法" in ai_service.SYSTEM_PROMPT
+
+
+def test_cross_column_or_advice_is_normalized_without_union_or_performance_claim():
+    from app.schemas import AdviceItem
+
+    source = "SELECT A.X FROM T A WHERE A.C = 1 OR A.D = 2"
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="確認 OR 條件需求",
+                explanation="或可評估是否能拆分為 UNION ALL 以提升查詢效率。",
+                example="",
+                impact="medium",
+            )
+        ],
+        [],
+        {},
+        source_sql=source,
+    )
+    explanation = result[0].explanation
+    assert explanation == ai_service._CROSS_COLUMN_OR_SAFE_COPY
+    assert all(word not in explanation for word in ("UNION ALL", "UNION", "提升查詢效率", "更快", "較有效率"))
+
+
+def test_no_main_where_advice_does_not_invent_date_or_status_fields():
+    from app.schemas import AdviceItem
+
+    source = "SELECT A.X FROM LND_CASE A JOIN LND_OWNER B ON A.ID = B.ID"
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="確認查詢範圍",
+                explanation="建議確認是否需要增加日期或狀態等限制條件以縮小範圍。",
+                example="",
+                impact="low",
+            )
+        ],
+        [],
+        {},
+        source_sql=source,
+    )
+    assert result[0].explanation == ai_service._NO_MAIN_WHERE_SAFE_COPY
+    assert "日期" not in result[0].explanation
+    assert "狀態" not in result[0].explanation
+
+
+def test_important_table_scope_advice_is_not_misclassified_as_trunc_advice():
+    from app.schemas import AdviceItem
+
+    source = "SELECT A.X FROM HOUT120 A WHERE TRUNC(A.TXN_DATE) = :D"
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="確認查詢範圍",
+                explanation="此 SQL 查詢 HOUT120，建議確認目前查詢條件與範圍是否符合業務需求。",
+                example="",
+                impact="low",
+            ),
+            AdviceItem(
+                title="評估日期比對寫法",
+                explanation="目前條件先用 TRUNC() 處理欄位再比對。",
+                example="",
+                impact="medium",
+            ),
+        ],
+        [],
+        {},
+        source_sql=source,
+    )
+    assert result[0].explanation == "此 SQL 查詢 HOUT120，建議確認目前查詢條件與範圍是否符合業務需求。"
+    assert result[1].explanation == "目前條件先用 TRUNC() 處理欄位再比對。若確認是日期欄位，可評估改用日期範圍；調整前請先確認欄位型態與比對值是否包含時間。"
+    assert result[0].explanation != result[1].explanation
 
 
 @pytest.mark.parametrize(
@@ -1464,6 +1547,41 @@ def test_typed_date_wrapper_loss_blocks_executable_looking_example():
         before,
         example,
     ) is False
+
+
+def test_typed_literal_safety_fallback_hides_example_and_uses_safe_copy():
+    from app.schemas import AdviceItem
+
+    source = "SELECT A.ID FROM TEST_DATA A WHERE A.UPDATE_TIME = DATE '2026-09-18'"
+    before = "A.UPDATE_TIME = DATE '2026-09-18'"
+    example = "A.UPDATE_TIME = '2026-09-18'"
+    assert ai_service._advice_example_safety_issue(source, before, example) == "typed_literal"
+
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="評估日期條件",
+                explanation="將日期條件改寫為不含型別的文字比較。",
+                before=before,
+                example=example,
+                impact="medium",
+            )
+        ],
+        [],
+        {},
+        {},
+        source_sql=source,
+    )
+
+    item = result[0]
+    assert item.verification == "unverified"
+    assert item.example is None
+    assert item.before is None
+    assert "可採用" not in item.explanation
+    assert item.explanation == (
+        "這個改善方向涉及日期／時間常數的型態前提。"
+        "系統目前無法確認這個改法，因此只保留方向提醒。"
+    )
 
 
 def test_internal_masking_placeholders_become_plain_privacy_safe_prose():

@@ -6,7 +6,7 @@ import { makeAi, makeResult } from "../test/fixtures";
 describe("ResultOverview", () => {
   it("summarizes a compliant case with advice in plain language", () => {
     render(<ResultOverview result={makeResult()} />);
-    expect(screen.getByText("符合中心規範，另有 2 項建議")).toBeTruthy();
+    expect(screen.getByText("1 項建議")).toBeTruthy();
     expect(screen.getByText("先看下方重點，再決定是否需要調整。")).toBeTruthy();
   });
 
@@ -15,10 +15,14 @@ describe("ResultOverview", () => {
       <ResultOverview
         result={makeResult({
           compliance: { status: "BLOCK", label: "不符合中心規範", notice_count: 0, block_count: 2 },
+          rules: [
+            { rule_id: "R001", name: "COST", status: "BLOCK", evidence: "125,000", note: "超過門檻" },
+            { rule_id: "R002", name: "WHERE 查詢條件", status: "BLOCK", evidence: "未提供", note: "缺少條件" },
+          ],
         })}
       />,
     );
-    expect(screen.getByText("有 2 項中心規範需要修正")).toBeTruthy();
+    expect(screen.getByText("2 項不符合")).toBeTruthy();
   });
 
   it("does not translate REVIEW into compliant", () => {
@@ -33,7 +37,7 @@ describe("ResultOverview", () => {
         })}
       />,
     );
-    expect(screen.getByText("有 1 項需要人工確認")).toBeTruthy();
+    expect(screen.getByText("1 項建議")).toBeTruthy();
     expect(screen.queryByText(/^符合中心規範/)).toBeNull();
   });
 });

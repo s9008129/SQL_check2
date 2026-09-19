@@ -1,5 +1,5 @@
 import type { AdviceItem, AiResult } from "../types/api";
-import { AI_PENDING_MESSAGE, AI_UNAVAILABLE_MESSAGE } from "../lib/copy";
+import { AI_PENDING_MESSAGE, AI_UNAVAILABLE_MESSAGE, VERIFIED_REWRITE_EXPLANATION } from "../lib/copy";
 import { looksLikeSqlFragment } from "../lib/sqlDiff";
 
 export interface ImprovementAdviceProps {
@@ -8,24 +8,27 @@ export interface ImprovementAdviceProps {
 
 type EvidenceLevel = "confirmed" | "review" | "info";
 
-const EVIDENCE_META: Record<EvidenceLevel, { label: string; tone: string; badge: string; title: string }> = {
+const EVIDENCE_META: Record<EvidenceLevel, { label: string; tone: string; badge: string; title: string; explanation: string | null }> = {
   confirmed: {
-    label: "已確認",
+    label: "可使用此改寫",
     tone: "a-confirmed",
     badge: "green",
-    title: "此建議的 SQL 改寫已通過系統的確定性驗證。",
+    title: `${VERIFIED_REWRITE_EXPLANATION}正式使用前仍請測試。`,
+    explanation: VERIFIED_REWRITE_EXPLANATION,
   },
   review: {
-    label: "需確認",
+    label: "需先確認再改",
     tone: "a-review",
     badge: "yellow",
-    title: "改善方向具參考價值，但系統無法只靠 SQL 文字確認查詢結果完全相同。",
+    title: "改善方向具參考價值，但系統無法只靠 SQL 文字確認查詢結果是否一致。",
+    explanation: null,
   },
   info: {
-    label: "提醒",
+    label: "僅供參考",
     tone: "a-info",
     badge: "purple",
     title: "這是撰寫或治理上的提醒，不代表本案已證明存在效能問題。",
+    explanation: null,
   },
 };
 
@@ -80,6 +83,7 @@ export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
                           {evidence.label}
                         </span>
                       </div>
+                      {evidence.explanation && <div className="evidence-explanation">{evidence.explanation}</div>}
                       <p>{item.explanation}</p>
                       {item.example && canShowConcreteExample(item) && <code>{item.example}</code>}
                     </div>
@@ -87,7 +91,7 @@ export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
                 })}
               </div>
             )}
-            {ai.advice.length > 0 && <div className="ai-disclaimer">AI 建議僅供參考，採用前請先測試。</div>}
+            {ai.advice.length > 0 && <div className="ai-disclaimer">AI 建議僅供參考，不代表實際效能提升；採用前請先測試。</div>}
           </>
         )}
       </div>

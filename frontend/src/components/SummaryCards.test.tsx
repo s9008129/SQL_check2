@@ -93,7 +93,8 @@ describe("SummaryCards — compliance colour states", () => {
     const result = makeResult();
     const { container } = render(<SummaryCards result={result} />);
     // 2026-09-17: COST under the threshold reads 「符合中心規範」 instead of the number.
-    expect(screen.getAllByText("符合中心規範")).toHaveLength(2);
+    expect(screen.getByText("1 項建議")).toBeTruthy();
+    expect(screen.getAllByText("符合中心規範")).toHaveLength(1);
     expect(screen.queryByText("68,420")).toBeNull();
     expect(container.querySelectorAll(".metric.tone-green")).toHaveLength(2);
   });
@@ -101,11 +102,11 @@ describe("SummaryCards — compliance colour states", () => {
   it("renders the red 不符合 state", () => {
     const result = makeResult({
       compliance: { status: "BLOCK", label: "不符合中心規範", notice_count: 0, block_count: 1 },
+      rules: [{ rule_id: "R001", name: "COST", status: "BLOCK", evidence: "125,000", note: "超過門檻" }],
     });
     render(<SummaryCards result={result} />);
-    expect(screen.getByText("不符合中心規範")).toBeTruthy();
     expect(screen.getByText("1 項不符合")).toBeTruthy();
-    expect(screen.getByText("不符合中心規範").className).toContain("m-value-bad");
+    expect(screen.getByText("1 項不符合").className).toContain("m-value-bad");
   });
 
   it("renders COST in red with ✕ when the COST rule is BLOCK, green ✓ otherwise", () => {
@@ -129,7 +130,7 @@ describe("SummaryCards — compliance colour states", () => {
     });
     render(<SummaryCards result={blocked} />);
     expect(screen.getByText("350,000")).toBeTruthy();
-    expect(screen.getAllByText("符合中心規範")).toHaveLength(1); // compliance card only
+    expect(screen.getByText("1 項不符合")).toBeTruthy();
   });
 
   it("no longer renders a 建議寫法 card (the compare card shows the diff)", () => {
@@ -177,8 +178,8 @@ describe("SummaryCards — REVIEW wording", () => {
         })}
       />,
     );
-    expect(screen.getByText("1 項需確認")).toBeTruthy();
-    expect(screen.queryByText("目前無提醒事項")).toBeNull();
+    expect(screen.getByText("1 項建議")).toBeTruthy();
+    expect(screen.queryByText(/提醒/)).toBeNull();
   });
 });
 
@@ -199,7 +200,33 @@ describe("SummaryCards — deterministic reminders and AI advice counts stay sep
         })}
       />,
     );
-    expect(screen.getByText("2 項提醒")).toBeTruthy();
+    expect(screen.getByText("2 項建議")).toBeTruthy();
     expect(screen.getByText("1 項")).toBeTruthy();
   });
+});
+
+it("uses the requested summary vocabulary for all-pass and block-plus-suggestions cases", () => {
+  const { unmount } = render(
+    <SummaryCards
+      result={makeResult({
+        compliance: { status: "PASS", label: "符合中心規範", notice_count: 0, block_count: 0 },
+        rules: [{ rule_id: "R001", name: "COST", status: "PASS", evidence: "42,000", note: "符合" }],
+      })}
+    />,
+  );
+  expect(screen.getByText("全部符合")).toBeTruthy();
+  unmount();
+
+  render(
+    <SummaryCards
+      result={makeResult({
+        compliance: { status: "BLOCK", label: "不符合中心規範", notice_count: 1, block_count: 1 },
+        rules: [
+          { rule_id: "R001", name: "COST", status: "BLOCK", evidence: "125,000", note: "超過門檻" },
+          { rule_id: "R006", name: "OR 條件", status: "REVIEW", evidence: "同欄位 OR", note: "請確認" },
+        ],
+      })}
+    />,
+  );
+  expect(screen.getByText("1 項不符合 · 1 項建議")).toBeTruthy();
 });

@@ -10,7 +10,7 @@ import { analyze, ApiError } from "./api/client";
 import type { AiResult, AnalyzeResponse } from "./types/api";
 import { formatCostInputOnBlur } from "./lib/cost";
 import { validateAnalyzeInput } from "./lib/validate";
-import { complianceIcon, complianceTone } from "./lib/status";
+import { complianceIcon, complianceStateLabel, complianceTone } from "./lib/status";
 import { AI_UNAVAILABLE_MESSAGE, GENERIC_NETWORK_ERROR } from "./lib/copy";
 
 type Phase = "idle" | "loading-initial" | "loading-ai" | "done" | "error";
@@ -191,17 +191,21 @@ export default function App() {
                     申請單號 <span>{result.application_no}</span>
                   </div>
                   <h1>SQL 效能檢核結果</h1>
-                  <p>先看中心規範結果，再看可採用的改善建議。</p>
+                  <p>先看中心規範結果，再看改善建議與改寫對照。</p>
                 </div>
                 <span className={`status-pill status-pill-${complianceTone(result.compliance.status)}`}>
-                  {complianceIcon(result.compliance.status)} {result.compliance.label}
+                  {complianceIcon(result.compliance.status)} {complianceStateLabel(result.compliance.status)}
                 </span>
               </div>
 
               <ResultOverview result={result} />
               <SummaryCards result={result} />
               <ImprovementAdvice ai={result.ai} />
-              <SqlCompare originalSql={submittedSql} ai={result.ai} />
+              <SqlCompare
+                originalSql={submittedSql}
+                ai={result.ai}
+                verifiedRewrites={result.verified_rewrites}
+              />
               <ComplianceTable
                 rules={result.rules}
                 compliance={result.compliance}

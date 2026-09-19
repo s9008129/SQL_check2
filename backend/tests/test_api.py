@@ -84,6 +84,50 @@ async def test_analyze_clean_sql_passes_without_ai(client):
     assert data["ai"]["status"] == "pending"
 
 
+async def test_analyze_without_ai_returns_deterministic_verified_rewrites(client):
+    resp = await client.post(
+        "/api/analyze",
+        json={
+            "application_no": "A1",
+            "cost": 1000,
+            "sql": "SELECT A.X FROM T A WHERE A.C = '1' OR A.C = '2'",
+            "include_ai": False,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ai"]["status"] == "pending"
+    assert data["verified_rewrites"] == [
+        {
+            "statement_index": 0,
+            "rule": "or_eq_to_in",
+            "source_rule_id": "R006",
+            "title": "同欄位 OR 改為 IN",
+            "before": "A.C = '1' OR A.C = '2'",
+            "after": "A.C IN ('1', '2')",
+        }
+    ]
+
+
+async def test_analyze_verified_rewrites_are_identical_with_or_without_ai(client, monkeypatch):
+    async def _unavailable(**_kwargs):
+        return AiResult(status="unavailable", message="暫時無法使用")
+
+    monkeypatch.setattr(api_module.ai_service, "get_ai_result", _unavailable)
+    body = {
+        "application_no": "A1",
+        "cost": 1000,
+        "sql": "SELECT A.X FROM T A WHERE SUBSTR(A.CODE, 6, 3) = '551'",
+    }
+    without_ai = await client.post("/api/analyze", json={**body, "include_ai": False})
+    with_ai = await client.post("/api/analyze", json={**body, "include_ai": True})
+    assert without_ai.status_code == 200
+    assert with_ai.status_code == 200
+    assert without_ai.json()["verified_rewrites"] == with_ai.json()["verified_rewrites"]
+    assert with_ai.json()["ai"]["status"] == "unavailable"
+    assert with_ai.json()["verified_rewrites"][0]["source_rule_id"] == "R005"
+
+
 async def test_analyze_cost_accepts_comma_string(client):
     resp = await client.post(
         "/api/analyze",
@@ -180,7 +224,12 @@ async def test_analyze_degrades_gracefully_when_ai_service_raises(client, monkey
     monkeypatch.setattr(api_module.ai_service, "get_ai_result", _raise)
     resp = await client.post(
         "/api/analyze",
-        json={"application_no": "A1", "cost": 1000, "sql": "SELECT 1 FROM DUAL", "include_ai": True},
+        json={
+            "application_no": "A1",
+            "cost": 1000,
+            "sql": "SELECT A.X FROM T A WHERE A.C = '1' OR A.C = '2'",
+            "include_ai": True,
+        },
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -189,6 +238,7 @@ async def test_analyze_degrades_gracefully_when_ai_service_raises(client, monkey
     # deterministic rule checking must still be intact (PRD §51: AI is never
     # a single point of failure for the rest of the system).
     assert data["compliance"]["status"] == "PASS"
+    assert data["verified_rewrites"][0]["source_rule_id"] == "R006"
 
 
 # ---------------------------------------------------------------------------

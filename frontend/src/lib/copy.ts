@@ -18,7 +18,7 @@ export const AI_UNAVAILABLE_MESSAGE =
 
 // 2026-09-17 — red warning under the SQL compare card title (user request:
 // suggestions are AI output and must be tried on a test DB first).
-export const SUGGESTED_SQL_WARNING = "AI 建議僅供參考，採用前請先測試。";
+export const SUGGESTED_SQL_WARNING = "AI 建議僅供參考，不代表實際效能提升；採用前請先測試。";
 
 // 2026-09-17 — the three genuinely different "no rewrite" situations get
 // their own copy, so "SQL is already fine" never reads like a refusal.
@@ -27,6 +27,9 @@ export const SUGGESTED_SQL_NOT_NEEDED_MESSAGE = "目前未發現需要調整的�
 // `reason` (rendered right under it) states the concrete point to confirm.
 export const SUGGESTED_SQL_ADVICE_ONLY_MESSAGE = "有可參考的寫法，請先確認業務條件。";
 
+export const VERIFIED_REWRITE_EXPLANATION = "系統已確認：這個改法不會改變查詢結果。";
+export const REWRITE_COMPARE_EXPLANATION = "系統已確認這個改法不會改變查詢結果。";
+
 // Shown when nothing to improve was found (level null / outcome not_needed).
 export const ESTIMATE_NOT_NEEDED_MESSAGE = "目前未發現需要調整的地方。";
 
@@ -34,12 +37,12 @@ export const ESTIMATE_NOT_NEEDED_MESSAGE = "目前未發現需要調整的地方
 // R007 …) are a "please look at this", not a confirmed SQL writing problem.
 // This copy must never read like 「目前寫法良好」.
 export const ESTIMATE_NOTICE_ONLY_MESSAGE =
-  "有提醒事項，請確認實際查詢需求後再決定是否調整。";
+  "有改善建議，請確認實際查詢需求後再決定是否調整。";
 
 // The adoption-status card explains trust/actionability, not measured
 // performance improvement.
 export const POTENTIAL_CAVEAT =
-  "此處說明建議目前可採用的程度，不代表實際效能提升幅度；效能仍需於測試環境確認。";
+  "此處說明建議的確認狀態，不代表實際效能提升幅度；效能仍需於測試環境確認。";
 // Lightweight loading copy while ai.status === "pending" (PRD §51's spirit:
 // AI is never a single point of failure, so the rest of the page is fully
 // usable while this is showing).

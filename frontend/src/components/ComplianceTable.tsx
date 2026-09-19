@@ -1,5 +1,5 @@
 import type { ComplianceResult, RuleRow } from "../types/api";
-import { complianceTone, ruleStatusIcon, ruleStatusTone } from "../lib/status";
+import { complianceSummaryText, complianceTone, ruleStatusIcon, ruleStatusLabel, ruleStatusTone } from "../lib/status";
 
 export interface ComplianceTableProps {
   rules: RuleRow[];
@@ -7,23 +7,10 @@ export interface ComplianceTableProps {
   parseMessage: string | null;
 }
 
-function summarize(rules: RuleRow[]) {
-  const pass = rules.filter((r) => r.status === "PASS").length;
-  const notice = rules.filter((r) => r.status === "NOTICE").length;
-  const review = rules.filter((r) => r.status === "REVIEW").length;
-  const block = rules.filter((r) => r.status === "BLOCK").length;
-  return { pass, notice, review, block };
-}
-
-/** 中心規則比對區 (PRD §30): 只呈現規則事實 — 狀態、檢核項目、本次內容、簡短說明。 */
+/** 中心規範檢核：只呈現檢核項目與三態結果，完整 evidence/note 仍由 API 保留。 */
 export default function ComplianceTable({ rules, compliance, parseMessage }: ComplianceTableProps) {
-  const { pass, notice, review, block } = summarize(rules);
-  const parts = [
-    block > 0 ? `${block} 項不符合` : null,
-    review > 0 ? `${review} 項需確認` : null,
-    notice > 0 ? `${notice} 項提醒` : null,
-  ].filter((x): x is string => x !== null);
-  const badgeText = parts.length > 0 ? parts.join(" · ") : `${pass} 項全部符合`;
+  const visibleRules = rules.filter((rule) => rule.status !== "NA");
+  const badgeText = complianceSummaryText(rules);
 
   return (
     <section className="card">
@@ -37,16 +24,26 @@ export default function ComplianceTable({ rules, compliance, parseMessage }: Com
       <div className="card-body">
         {parseMessage && <div className="ai-note">{parseMessage}</div>}
         <div className="rule-list">
-          {rules.map((rule) => (
-            <div className="rule" key={rule.rule_id}>
-              <div className={`r-icon ${ruleStatusTone(rule.status) === "green" ? "pass" : ruleStatusTone(rule.status) === "yellow" ? "warn" : ruleStatusTone(rule.status) === "red" ? "fail" : "neutral"}`}>
-                {ruleStatusIcon(rule.status)}
+          <div className="rule rule-header" aria-hidden="true">
+            <div className="r-name">檢核項目</div>
+            <div className="r-result">結果</div>
+          </div>
+          {visibleRules.map((rule) => {
+            const tone = ruleStatusTone(rule.status);
+            const label = ruleStatusLabel(rule.status);
+            if (!label) return null;
+            return (
+              <div className="rule" key={rule.rule_id}>
+                <div className="r-name">{rule.name}</div>
+                <div className={`r-result r-result-${tone}`}>
+                  <span className={`r-icon ${tone === "green" ? "pass" : tone === "yellow" ? "warn" : "fail"}`} aria-hidden="true">
+                    {ruleStatusIcon(rule.status)}
+                  </span>
+                  <span>{label}</span>
+                </div>
               </div>
-              <div className="r-name">{rule.name}</div>
-              <div className="r-evidence">{rule.evidence}</div>
-              <div className="r-note">{rule.note}</div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </section>

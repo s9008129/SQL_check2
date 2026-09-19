@@ -103,6 +103,15 @@ export interface StatementSummary {
   tables: string[];
 }
 
+export interface VerifiedRewrite {
+  statement_index: number;
+  rule: string;
+  source_rule_id: string;
+  title: string;
+  before: string;
+  after: string;
+}
+
 export interface AdviceItem {
   title: string;
   explanation: string;
@@ -159,6 +168,12 @@ export interface AnalyzeResponse {
   rules: RuleRow[];
   findings: Finding[];
   statements: StatementSummary[];
+  /**
+   * Deterministic rewrite candidates; optional for older backend responses.
+   * Present (including []) means the new backend checked deterministically;
+   * undefined means legacy payload fallback is allowed.
+   */
+  verified_rewrites?: VerifiedRewrite[];
   parse_message: string | null;
   ai: AiResult;
 }

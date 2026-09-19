@@ -17,6 +17,11 @@
     display: none !important;
   }
 
+  .full-sql-details,
+  .copy-sql-btn {
+    display: none !important;
+  }
+
   .layout {
     display: block;
     max-width: none;
@@ -101,6 +106,11 @@
   /* 2026-09-17: matches app.css — the 「僅供參考」 note is amber, not red. */
   .card-warning {
     color: #8a5a00 !important;
+  }
+  .evidence-explanation,
+  .card-compare .card-desc {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
   .diff-row,
   .fragment-diff {

@@ -13,7 +13,7 @@ export interface EstimateCardProps {
 }
 
 /**
- * 建議採用狀態。
+ * 改善建議狀態。
  *
  * 這一區回答的是「上面的建議目前可以怎麼用」，不是預測 Oracle 會快多少。
  * 效能提升幅度需要真實執行計畫、統計資訊與測試，SQLCheck 目前不宣稱擁有這些資料。
@@ -43,7 +43,7 @@ export default function EstimateCard({ ai, compliance }: EstimateCardProps) {
   } else if (hasConfirmed) {
     body = (
       <div className="ai-note ai-note-good" data-testid="adoption-confirmed">
-        <strong>已有建議寫法由系統確認</strong>
+        <strong>已有建議寫法經系統確認</strong>
         <p>系統已確認相關改寫不會改變查詢結果；實際執行效率仍請於測試環境確認。</p>
         {basisList}
       </div>
@@ -73,7 +73,7 @@ export default function EstimateCard({ ai, compliance }: EstimateCardProps) {
     body = (
       <div className="ai-note ai-note-notice" data-testid="adoption-confirm-first">
         <strong>有改善方向，但請先確認再調整</strong>
-        <p>目前沒有足夠資訊讓系統確認一段可直接套用的改寫；請依上方建議先確認業務條件。</p>
+        <p>目前沒有足夠資訊讓系統確認一段改寫；請依上方建議先確認業務條件。</p>
         {basisList}
       </div>
     );
@@ -83,8 +83,8 @@ export default function EstimateCard({ ai, compliance }: EstimateCardProps) {
     <section className="card card-estimate">
       <div className="card-head">
         <div>
-          <div className="card-title">建議採用狀態</div>
-          <div className="card-desc">告訴你哪些建議可直接參考，哪些需要先確認業務條件</div>
+          <div className="card-title">改善建議狀態</div>
+          <div className="card-desc">說明哪些建議已由系統確認，哪些需要先確認業務條件</div>
         </div>
       </div>
       <div className="card-body">

@@ -492,7 +492,10 @@ _ADVICE_ONLY_PROSE_GUARDS: tuple[tuple[str, re.Pattern[str], re.Pattern[str], st
     (
         "trunc_condition",
         re.compile(r"\bTRUNC\s*\(", re.IGNORECASE),
-        re.compile(r"\bTRUNC\b|日期|時間|範圍|大於|小於|>=|<=", re.IGNORECASE),
+        re.compile(
+            r"\bTRUNC\b|日期欄位|日期比對|日期範圍|時間成分|包含時間|大於|小於|>=|<=",
+            re.IGNORECASE,
+        ),
         "目前條件先用 TRUNC() 處理欄位再比對。若確認是日期欄位，可評估改用日期範圍；調整前請先確認欄位型態與比對值是否包含時間。",
     ),
     (
@@ -521,6 +524,38 @@ _COPYABLE_SQL_IN_PROSE_RE = re.compile(
     re.IGNORECASE,
 )
 _DATE_LITERAL_IN_PROSE_RE = re.compile(r"\b(?:19|20)\d{2}[-/]\d{1,2}[-/]\d{1,2}\b")
+_CROSS_COLUMN_OR_ADVICE_RE = re.compile(
+    r"\bOR\b|跨欄位|不同欄位|拆分|拆開|分支|UNION|重複列|重複資料|條件是否",
+    re.IGNORECASE,
+)
+_NO_MAIN_WHERE_INVENTED_FIELD_RE = re.compile(
+    r"(?:增加|新增|加入|補上|限制條件)[^。；，,]{0,30}"
+    r"(?:日期|狀態|年度|年份|類別|date|status|year|category)|"
+    r"(?:日期|狀態|年度|年份|類別|date|status|year|category)[^。；，,]{0,30}"
+    r"(?:增加|新增|加入|補上|限制條件)",
+    re.IGNORECASE,
+)
+
+_CROSS_COLUMN_OR_SAFE_COPY = (
+    "這段 OR 連接不同欄位。若要拆開查詢，請先確認兩個條件是否可能同時成立，以及重複資料要如何處理；"
+    "未確認前不建議改寫。"
+)
+_NO_MAIN_WHERE_SAFE_COPY = "建議確認是否需要增加限制條件，以縮小查詢範圍。"
+
+
+def _source_has_no_main_where(source_sql: str) -> bool:
+    """Detect the parsed main SELECT without treating JOIN ON as WHERE."""
+    try:
+        parsed = parse_sql_text(source_sql)
+        statement = next((s for s in parsed.statements if s.parse_status == "ok"), None)
+        return bool(
+            statement
+            and statement.statement_type == "SELECT"
+            and statement.where_applicable
+            and statement.has_where is False
+        )
+    except Exception:
+        return False
 
 
 def _guard_unverified_advice_prose(source_sql: str, title: str, explanation: str) -> tuple[str, str | None]:
@@ -535,6 +570,12 @@ def _guard_unverified_advice_prose(source_sql: str, title: str, explanation: str
         return explanation, None
 
     combined = f"{title}\n{explanation}"
+    if rewrite_rules.has_cross_column_or(source_sql) and _CROSS_COLUMN_OR_ADVICE_RE.search(combined):
+        return _CROSS_COLUMN_OR_SAFE_COPY, "cross_column_or"
+
+    if _source_has_no_main_where(source_sql) and _NO_MAIN_WHERE_INVENTED_FIELD_RE.search(combined):
+        return _NO_MAIN_WHERE_SAFE_COPY, "no_main_where_invented_field"
+
     for guard_id, source_re, advice_re, safe_copy in _ADVICE_ONLY_PROSE_GUARDS:
         if source_re.search(source_sql) and advice_re.search(combined):
             return safe_copy, guard_id
@@ -776,7 +817,7 @@ def _filter_advice(
                 title = "請先確認日期或時間條件"
                 explanation = (
                     "這個改善方向涉及日期／時間常數的型態前提。"
-                    "系統目前無法確認可直接套用的改寫，因此只保留方向提醒。"
+                    "系統目前無法確認這個改法，因此只保留方向提醒。"
                 )
         elif example:
             if before:

@@ -45,9 +45,10 @@ class LLMConfigurationError(RuntimeError):
 class LLMOutputTruncatedError(RuntimeError):
     """Provider stopped because the configured output-token budget was reached."""
 
-    def __init__(self, output_tokens: int | None = None):
+    def __init__(self, output_tokens: int | None = None, thinking_chars: int = 0):
         super().__init__("output truncated")
         self.output_tokens = output_tokens
+        self.thinking_chars = thinking_chars
 
 
 class LLMPromptTruncatedError(RuntimeError):
@@ -117,7 +118,11 @@ async def _generate_ollama(
 
     output_tokens = data.get("eval_count")
     if data.get("done_reason") == "length":
-        raise LLMOutputTruncatedError(output_tokens if isinstance(output_tokens, int) else None)
+        thinking_chars = len((data.get("message") or {}).get("thinking") or "")
+        raise LLMOutputTruncatedError(
+            output_tokens if isinstance(output_tokens, int) else None,
+            thinking_chars=thinking_chars,
+        )
 
     message = data.get("message") or {}
     content = message.get("content")

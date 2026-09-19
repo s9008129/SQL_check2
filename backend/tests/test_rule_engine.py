@@ -93,11 +93,10 @@ def test_parallel_hint_block(cfg):
 
 
 # ---------------------------------------------------------------------------
-# R002 restriction evidence (2026-09-16 業務決定): a SELECT with no top-level
-# WHERE keyword but real restriction evidence (JOIN ON with a constant, JOIN
-# key equality, or a filtered subquery/CTE source) must not be a dead BLOCK
-# under the default rules.yaml config — it PASSes with an explanatory note
-# instead of the misleading "缺少 WHERE 條件".
+# R002 restriction evidence: do not reduce the rule to a keyword check, but
+# also do not overclaim that JOIN ON is the same as the center's explicit
+# WHERE requirement. A real WHERE inside a subquery/CTE may PASS; JOIN-only
+# evidence defaults to REVIEW so a human can confirm the operational rule.
 # ---------------------------------------------------------------------------
 def test_where_missing_with_no_restriction_evidence_still_blocks(cfg):
     rules_cfg, tables_cfg = cfg
@@ -108,35 +107,42 @@ def test_where_missing_with_no_restriction_evidence_still_blocks(cfg):
     assert any(f.rule_id == "R002" and f.status == "BLOCK" for f in findings)
 
 
-def test_where_via_inner_join_on_constant_passes_with_explanation(cfg):
+def test_where_via_inner_join_on_constant_requires_review(cfg):
     rules_cfg, tables_cfg = cfg
     parsed = parse_sql_text("SELECT A.X FROM T A JOIN U B ON A.K = B.K AND B.YR = '114'")
     compliance, rows, findings = rule_engine.evaluate(parsed, 1000, rules_cfg, tables_cfg)
     r002 = _row(rows, "R002")
-    assert r002.status == "PASS"
-    assert compliance.status == "PASS"
+    assert r002.status == "REVIEW"
+    assert compliance.status == "REVIEW"
     assert "JOIN ON" in r002.evidence
-    assert not any(f.rule_id == "R002" for f in findings)
+    assert "主查詢未使用 WHERE" in r002.note
+    assert "中心作業要求" in r002.note
+    assert any(f.rule_id == "R002" and f.status == "REVIEW" for f in findings)
 
 
-def test_where_via_left_join_on_constant_notes_it_only_restricts_outer_side(cfg):
+def test_where_via_left_join_on_constant_requires_review_and_explains_outer_side(cfg):
     rules_cfg, tables_cfg = cfg
     parsed = parse_sql_text("SELECT A.X FROM T A LEFT JOIN U B ON A.K = B.K AND B.YR = '114'")
-    _compliance, rows, _findings = rule_engine.evaluate(parsed, 1000, rules_cfg, tables_cfg)
+    compliance, rows, findings = rule_engine.evaluate(parsed, 1000, rules_cfg, tables_cfg)
     r002 = _row(rows, "R002")
-    assert r002.status == "PASS"
+    assert r002.status == "REVIEW"
+    assert compliance.status == "REVIEW"
     # Must not overclaim: an outer-joined ON constant restricts only the
     # joined (副) table, never the driving (主) table's row count.
     assert "不會縮小主表查詢範圍" in r002.note
+    assert any(f.rule_id == "R002" and f.status == "REVIEW" for f in findings)
 
 
-def test_where_via_join_key_equality_only_passes_with_explanation(cfg):
+def test_where_via_join_key_equality_only_requires_review(cfg):
     rules_cfg, tables_cfg = cfg
     parsed = parse_sql_text("SELECT A.X FROM T A JOIN U B ON A.K = B.K")
-    _compliance, rows, _findings = rule_engine.evaluate(parsed, 1000, rules_cfg, tables_cfg)
+    compliance, rows, findings = rule_engine.evaluate(parsed, 1000, rules_cfg, tables_cfg)
     r002 = _row(rows, "R002")
-    assert r002.status == "PASS"
+    assert r002.status == "REVIEW"
+    assert compliance.status == "REVIEW"
     assert "JOIN" in r002.evidence
+    assert "主查詢未使用 WHERE" in r002.note
+    assert any(f.rule_id == "R002" and f.status == "REVIEW" for f in findings)
 
 
 def test_where_via_cte_source_passes_with_explanation(cfg):

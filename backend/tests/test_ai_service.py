@@ -19,12 +19,12 @@ def settings():
 
 @pytest.fixture
 def chat_url(settings):
-    return f"{settings.ollama.base_url}/api/chat"
+    return f"{settings.llm.base_url}/api/chat"
 
 
 @pytest.fixture
 def tags_url(settings):
-    return f"{settings.ollama.base_url}/api/tags"
+    return f"{settings.llm.base_url}/api/tags"
 
 
 def _ollama_envelope(content_str: str) -> dict:
@@ -543,7 +543,7 @@ def test_chat_request_disables_thinking_by_default(settings):
 
 
 def test_chat_request_thinking_follows_settings(settings):
-    on = dataclasses.replace(settings, ollama=dataclasses.replace(settings.ollama, think=True))
+    on = dataclasses.replace(settings, llm=dataclasses.replace(settings.llm, think=True))
     assert ai_service._chat_request_body(on, {})["think"] is True
 
 
@@ -783,7 +783,7 @@ async def test_deprecated_percentage_is_ignored_when_rewrite_is_gated(settings, 
 @respx.mock
 async def test_check_ollama_available_true_when_model_listed(settings, tags_url):
     respx.get(tags_url).mock(
-        return_value=httpx.Response(200, json={"models": [{"name": settings.ollama.model}]})
+        return_value=httpx.Response(200, json={"models": [{"name": settings.llm.model}]})
     )
     assert await ai_service.check_ollama_available(settings) is True
 
@@ -1118,7 +1118,7 @@ async def test_prompt_truncated_by_ollama_degrades_without_retry(settings, chat_
     result = await _call(settings, _clean_select_statement())
     assert result.status == "unavailable"
     assert route.call_count == 1
-    assert "prompt truncated by ollama" in "\n".join(r.getMessage() for r in caplog.records)
+    assert "prompt truncated by provider" in "\n".join(r.getMessage() for r in caplog.records)
 
 
 @respx.mock
@@ -1131,15 +1131,15 @@ async def test_num_ctx_grows_with_long_sql_up_to_the_configured_max(settings, ch
     statements = parse_sql_text(long_sql).statements
     await _call(settings, statements, sql_text=long_sql)
     sent_long = json.loads(route.calls[0].request.content)["options"]["num_ctx"]
-    assert sent_long > settings.ollama.num_ctx
-    assert sent_long <= settings.ollama.num_ctx_max
+    assert sent_long > settings.llm.context_window
+    assert sent_long <= settings.llm.context_window_max
     assert sent_long % 1024 == 0
 
     await _call(settings, _clean_select_statement())
     sent_short = json.loads(route.calls[-1].request.content)["options"]["num_ctx"]
     # A short query never gets less than the configured default and always
     # less than the long one (prompt + full num_predict reply must fit).
-    assert settings.ollama.num_ctx <= sent_short < sent_long
+    assert settings.llm.context_window <= sent_short < sent_long
 
 
 @respx.mock
@@ -1194,7 +1194,7 @@ async def test_output_truncation_twice_degrades_with_specific_message(settings, 
 async def test_output_truncation_without_time_budget_does_not_retry(settings, chat_url):
     # Deadline is OLLAMA_TIMEOUT_SECONDS from the start; with only 30s in
     # total there is no room for a second attempt (< 60s budget rule).
-    short = dataclasses.replace(settings, ollama=dataclasses.replace(settings.ollama, timeout_seconds=30))
+    short = dataclasses.replace(settings, llm=dataclasses.replace(settings.llm, timeout_seconds=30))
     route = respx.post(chat_url).mock(return_value=httpx.Response(200, json=_truncated_envelope()))
     result = await _call(short, _clean_select_statement())
     assert result.status == "unavailable"
@@ -1273,12 +1273,12 @@ async def test_num_ctx_uses_doubling_tiers(settings, chat_url):
     )
     await _call(settings, _clean_select_statement())
     short = json.loads(route.calls[-1].request.content)["options"]["num_ctx"]
-    assert short == settings.ollama.num_ctx
+    assert short == settings.llm.context_window
     long_sql = "SELECT " + ", ".join(f"A.C{i} AS 稅種{i}稅額_減因C" for i in range(1200)) + " FROM T A WHERE A.Y = 1"
     await _call(settings, parse_sql_text(long_sql).statements, sql_text=long_sql)
     long = json.loads(route.calls[-1].request.content)["options"]["num_ctx"]
-    assert long == settings.ollama.num_ctx * 2
-    assert long <= settings.ollama.num_ctx_max
+    assert long == settings.llm.context_window * 2
+    assert long <= settings.llm.context_window_max
 
 
 @respx.mock
@@ -1371,9 +1371,9 @@ async def test_last_call_stats_records_diagnostics_only(settings, chat_url):
     assert result.status == "ok"
 
     stats = ai_service.LAST_CALL_STATS
-    assert stats["model"] == settings.ollama.model
-    assert stats["num_ctx"] >= settings.ollama.num_ctx
-    assert stats["num_predict"] == settings.ollama.num_predict
+    assert stats["model"] == settings.llm.model
+    assert stats["num_ctx"] >= settings.llm.context_window
+    assert stats["num_predict"] == settings.llm.max_output_tokens
     assert stats["think"] is False
     assert stats["done_reason"] == "stop"
     assert stats["eval_count"] == 321

@@ -136,7 +136,7 @@ def test_unverified_advice_stays_low_even_with_governance_notice():
 def test_one_verified_fragment_is_medium():
     level, basis = improvement_potential(_ok([_advice("high", "verified")], outcome="advice_only"), [])
     assert level == "medium"
-    assert basis == ["系統已驗證 1 項建議片段可保留原查詢結果"]
+    assert basis == ["1 項建議片段的查詢結果已由系統確認不變"]
 
 
 def test_one_corrected_fragment_is_medium():
@@ -157,7 +157,7 @@ def test_full_rewrite_plus_verified_fragment_is_high():
     assert level == "high"
     assert basis == [
         "已提供整段建議寫法，系統已確認查詢結果不變",
-        "系統已驗證 1 項建議片段可保留原查詢結果",
+        "1 項建議片段的查詢結果已由系統確認不變",
     ]
 
 
@@ -231,5 +231,5 @@ def test_basis_lists_rules_rewrite_and_verified_evidence_in_order():
     assert basis == [
         "規則檢核：1 項不符合、2 項提醒",
         "已提供整段建議寫法，系統已確認查詢結果不變",
-        "系統已驗證 1 項建議片段可保留原查詢結果",
+        "1 項建議片段的查詢結果已由系統確認不變",
     ]

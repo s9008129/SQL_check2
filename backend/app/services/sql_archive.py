@@ -69,13 +69,21 @@ def build_record(
     improvement: ImprovementResult,
     ai_result: AiResult,
     cost: int,
+    sql_text: str | None = None,
 ) -> dict[str, Any]:
     """Pure function (no I/O) that builds one JSON-serializable archive
     record from the same objects api.py already has in scope after calling
     sql_parser/rule_engine/improvement_score/ai_service. Never raises on
     reasonable input; the caller (`record_analysis`) still wraps this in a
     try/except as defense in depth."""
-    original_sql_text = "\n".join(s.raw_sql for s in parsed.statements) if parsed.statements else ""
+    # Prefer the submitted text so even parser-failed / zero-statement inputs
+    # are still represented in the future-learning archive. The raw value is
+    # held only in memory and is de-identified before any write.
+    original_sql_text = (
+        sql_text
+        if sql_text is not None
+        else ("\n".join(s.raw_sql for s in parsed.statements) if parsed.statements else "")
+    )
     sql_deidentified = deidentify_sql(original_sql_text)
 
     statements = [
@@ -161,6 +169,7 @@ def record_analysis(
     ai_result: AiResult,
     cost: int,
     settings: Settings,
+    sql_text: str | None = None,
 ) -> None:
     """The one entrypoint api.py calls: build + append, both fully guarded.
     Never raises, regardless of `settings.archive.enabled`."""
@@ -175,6 +184,7 @@ def record_analysis(
             improvement=improvement,
             ai_result=ai_result,
             cost=cost,
+            sql_text=sql_text,
         )
     except Exception as exc:
         logger.error("sql_archive.record_analysis: failed to build archive record: %s", type(exc).__name__)

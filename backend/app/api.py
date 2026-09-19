@@ -169,6 +169,7 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
                 ai_result=ai_result,
                 cost=payload.cost,
                 settings=settings,
+                sql_text=payload.sql,
             )
         except Exception as exc:  # noqa: BLE001 - archive must never affect the response
             _log_exception_type_only("sql_archive.record_analysis raised unexpectedly", exc)

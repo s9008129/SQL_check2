@@ -21,13 +21,13 @@ def _gemini_settings(base_llm):
         provider_type="gemini",
         remote=True,
         base_url="https://generativelanguage.googleapis.com/v1beta",
-        model="gemini-3.8-flash",
+        model="gemma-4-31b-it",
         api_key_env="GEMINI_API_KEY",
         api_key="test-key",
         timeout_seconds=30,
         max_output_tokens=2048,
-        temperature=None,
-        thinking_level="low",
+        temperature=0.2,
+        thinking_level="minimal",
         allow_short_ascii_literals=False,
     )
 
@@ -81,7 +81,7 @@ async def test_ollama_adapter_keeps_existing_chat_shape(base_llm):
 async def test_gemini_adapter_uses_generate_content_and_json_schema(base_llm):
     settings = _gemini_settings(base_llm)
     route = respx.post(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
+        "https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent"
     ).mock(
         return_value=httpx.Response(
             200,
@@ -120,21 +120,21 @@ async def test_gemini_adapter_uses_generate_content_and_json_schema(base_llm):
     assert body["generationConfig"]["responseMimeType"] == "application/json"
     assert body["generationConfig"]["responseJsonSchema"] == schema
     assert body["generationConfig"]["maxOutputTokens"] == 2048
-    assert "temperature" not in body["generationConfig"]
-    assert body["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}
+    assert body["generationConfig"]["temperature"] == 0.2
+    assert body["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "minimal"}
     assert reply.content == '{"summary":"ok"}'
     assert reply.prompt_tokens == 321
     assert reply.output_tokens == 87
     assert reply.total_tokens == 408
     assert reply.context_window is None
-    assert reply.thinking_level == "low"
+    assert reply.thinking_level == "minimal"
 
 
 @respx.mock
 async def test_gemini_max_tokens_maps_to_output_truncated(base_llm):
     settings = _gemini_settings(base_llm)
     respx.post(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
+        "https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent"
     ).mock(
         return_value=httpx.Response(
             200,
@@ -176,8 +176,8 @@ async def test_gemini_missing_api_key_fails_as_configuration(base_llm):
 async def test_gemini_health_uses_non_generating_models_get(base_llm):
     settings = _gemini_settings(base_llm)
     route = respx.get(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash"
-    ).mock(return_value=httpx.Response(200, json={"name": "models/gemini-3.8-flash"}))
+        "https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it"
+    ).mock(return_value=httpx.Response(200, json={"name": "models/gemma-4-31b-it"}))
 
     assert await llm_provider.check_available(settings) is True
     assert route.call_count == 1

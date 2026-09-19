@@ -3,8 +3,10 @@
 # 核心原則：
 # 1. 程式邏輯只看「目前啟用哪個 provider」，不把 Ollama / Gemini 寫死在 ai_service。
 # 2. API Key 永遠只從環境變數讀取，不寫進 YAML / Git。
-# 3. 正式機預設仍使用 Ollama + Gemma 4 31B；Mac 開發機可切成 Gemini，不需要 Docker / Ollama。
-# 4. 雲端 provider 預設採較嚴格遮罩：短 ASCII 常數也不送出，避免把業務代碼帶到外部 API。
+# 3. 正式機預設使用 Ollama + Gemma 4 31B；Mac 透過 Gemini API 代管「同一個 Gemma 4 31B IT」
+#    做驗證，不改用 Gemini 3.x，避免測試模型不同而失去比較意義。
+# 4. Parity 驗證刻意讓模型參數與 SQL masking 盡量對齊地端；因此雲端測試只允許
+#    synthetic / 已去識別化 SQL，不可直接送 production 原始 SQL。
 #
 # 切換方式：
 #   SQLCHECK_LLM_PROVIDER=ollama   # 正式機 / 地端
@@ -42,26 +44,27 @@ providers:
     base_url_env: GEMINI_BASE_URL
     base_url_default: "https://generativelanguage.googleapis.com/v1beta"
     model_env: GEMINI_MODEL
-    # 2026-09 官方模型清單中的 Stable Flash；可隨時以 GEMINI_MODEL 覆寫。
-    model_default: "gemini-3.8-flash"
+    # Gemini API 是「傳輸服務」；實際模型固定比照正式機 Gemma 4 31B instruction-tuned。
+    # Google Gemini API 的官方 model id 為 gemma-4-31b-it。
+    model_default: "gemma-4-31b-it"
     api_key_env: GEMINI_API_KEY
     timeout_seconds_env: GEMINI_TIMEOUT_SECONDS
-    timeout_seconds_default: 120
+    timeout_seconds_default: 180
     max_output_tokens_env: GEMINI_MAX_OUTPUT_TOKENS
     max_output_tokens_default: 3072
-    # Gemini 的輸入 context 由服務端模型能力管理，不送 Ollama 的 num_ctx 參數；
-    # 這兩個值只保留給 SQLCheck 的本地長度估算／統一介面，不直接傳給 Gemini。
-    context_window_default: 131072
-    context_window_max_default: 1048576
-    # null = 不覆寫模型預設 temperature。Gemini 3 系列官方建議維持預設值。
-    temperature_default: null
-    # SQLCheck 是結構化、單次的 SQL 建議任務，開發驗證預設 low 可降低延遲與 token 成本。
-    # Gemini 3.8 Flash 支援 low / medium / high；可用環境變數覆寫。
+    # Hosted Gemma 實際可用更長 context，但 SQLCheck 的 parity profile 保留與地端相同的
+    # 16384 / 32768 長度級距，避免本地 gate 與雲端 gate 因設定不同而產生測試偏差。
+    # generateContent 本身不會收到 Ollama 的 num_ctx；這兩個值用於 SQLCheck 自己的估算。
+    context_window_default: 16384
+    context_window_max_default: 32768
+    # 與正式 Ollama profile 對齊。
+    temperature_default: 0.2
+    # 地端 OLLAMA_THINK=false；Gemma 4 API 僅支援 high / minimal，因此 parity 使用 minimal。
     thinking_level_env: GEMINI_THINKING_LEVEL
-    thinking_level_default: low
+    thinking_level_default: minimal
     keep_alive: null
     max_retries_on_invalid_json: 1
     think_default: false
-    # 雲端開發驗證預設連 4 字元以下代碼也遮罩；需要研究值形狀時仍會送 literal_hints，
-    # 但不會送真實值。若日後機關政策允許，可再新增獨立 provider profile 放寬。
-    allow_short_ascii_literals: false
+    # 與地端 mask 規則一致，才能做 apples-to-apples 模型比較。
+    # 因此雲端 parity 測試只能使用 synthetic / 已去識別化 SQL。
+    allow_short_ascii_literals: true

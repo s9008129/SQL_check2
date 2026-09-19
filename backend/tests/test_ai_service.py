@@ -1493,21 +1493,21 @@ def test_not_needed_cannot_surface_no_implicit_conversion_claim():
     assert "無隱含型別轉換" not in text
 
 @respx.mock
-async def test_remote_gemini_profile_masks_short_ascii_literals_too(settings):
+async def test_remote_gemma_parity_profile_keeps_same_short_ascii_literals_as_local(settings):
     cloud_llm = dataclasses.replace(
         settings.llm,
         provider="gemini",
         provider_type="gemini",
         remote=True,
         base_url="https://generativelanguage.googleapis.com/v1beta",
-        model="gemini-3.8-flash",
+        model="gemma-4-31b-it",
         api_key_env="GEMINI_API_KEY",
         api_key="test-key",
-        allow_short_ascii_literals=False,
+        allow_short_ascii_literals=True,
     )
     cloud = dataclasses.replace(settings, llm=cloud_llm)
     route = respx.post(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
+        "https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent"
     ).mock(
         return_value=httpx.Response(
             200,
@@ -1558,7 +1558,6 @@ async def test_remote_gemini_profile_masks_short_ascii_literals_too(settings):
     body = json.loads(route.calls[0].request.content)
     user_content = body["contents"][0]["parts"][0]["text"]
     payload = json.loads(user_content.removeprefix("<SQL_DATA>\n").removesuffix("\n</SQL_DATA>"))
-    assert "'55'" not in payload["sanitized_sql"]
-    assert ":STR_001" in payload["sanitized_sql"]
-    assert payload["literal_hints"][":STR_001"]["length"] == 2
+    assert "'55'" in payload["sanitized_sql"]
+    assert ":STR_001" not in payload["sanitized_sql"]
 

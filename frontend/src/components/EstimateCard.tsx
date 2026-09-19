@@ -73,7 +73,7 @@ export default function EstimateCard({ ai, compliance }: EstimateCardProps) {
     body = (
       <div className="ai-note ai-note-notice" data-testid="adoption-confirm-first">
         <strong>有改善方向，但請先確認再調整</strong>
-        <p>目前沒有足夠資訊讓系統確認一段可直接套用的改寫；請依上方建議先確認業務條件。</p>
+        <p>目前沒有足夠資訊讓系統確認一段可採用的改寫；請依上方建議先確認業務條件。</p>
         {basisList}
       </div>
     );
@@ -84,7 +84,7 @@ export default function EstimateCard({ ai, compliance }: EstimateCardProps) {
       <div className="card-head">
         <div>
           <div className="card-title">建議採用狀態</div>
-          <div className="card-desc">告訴你哪些建議可直接參考，哪些需要先確認業務條件</div>
+          <div className="card-desc">告訴你哪些建議可採用，哪些需要先確認業務條件</div>
         </div>
       </div>
       <div className="card-body">

@@ -439,3 +439,19 @@ curl -sk https://10.97.15.58/api/health
 - 不要讓模型宣稱它無法驗證的事（欄位型別、索引、執行計畫）。
 - 不要以為本機沒走到的分支（Docker 專用路徑）已被測過；為每個候選路徑寫獨立測試。
 - 不要因為「規則引擎判 BLOCK」就相信輸入沒被上游截斷（先對照擷取結果與原檔）。
+
+## 2026-09-19：確定性改寫對照獨立於 AI
+
+- `backend/app/services/rewrite_rules.py::find_verified_rewrites()` 直接從每個可解析的 SELECT
+  之 WHERE／HAVING／JOIN ON 發現現有兩種 `_RULES` 改寫；它只使用既有 `derive()` 與 canonical
+  結果，不增加第三種 VERIFIED_REWRITE。
+- `/api/analyze` 由伺服器以 `verified_rewrites` 回傳 R006「同欄位 OR 改為 IN」與 R005
+  「SUBSTR 比對改為 LIKE」的固定 metadata。這個清單先於 AI 計算，`include_ai=false`、AI pending、
+  timeout 或 unavailable 都必須相同；AI 不得改變 compliance、rule rows 或 improvement score。
+- 前端 `SqlCompare` 以 `verified_rewrites` 作為 fragment diff source of truth；既有 AI verified/
+  corrected fragment 僅作 fallback 並去重。主畫面標題為「改寫對照」、片段區為「重點改寫」、右欄
+  為「改後寫法（結果相同）」；validated full SQL 收在預設關閉的「完整 SQL」details 內。
+- 列印只印主要片段，收合完整 SQL 與複製按鈕不列印。R005/R006 的原始 NOTICE 保留，ComplianceTable
+  只附「已提供結果相同的改寫，可參考上方『改寫對照』。」呈現註記。
+- cross-column OR 的 advice 由 AST 偵測後統一成重疊／重複資料確認文案；no-main-WHERE advice 不得
+  自行舉日期或狀態欄位；TRUNC prose guard 不再以泛用「查詢範圍」分類。

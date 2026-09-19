@@ -20,11 +20,13 @@ from app.schemas import (
     ExtractSqlResponse,
     HealthResponse,
     StatementSummary,
+    VerifiedRewrite,
 )
 from app.services import (
     ai_service,
     file_extract,
     improvement_score,
+    rewrite_rules,
     rule_engine,
     sql_archive,
     sql_detect,
@@ -39,6 +41,11 @@ router = APIRouter()
 _AI_UNAVAILABLE_MESSAGE = "智慧改善建議目前暫時無法使用，仍可依上方規則檢核結果進行確認。"
 _ANALYZE_FAILED_MESSAGE = "系統暫時無法完成檢核，請稍後再試一次。"
 _EXTRACT_FAILED_MESSAGE = "附件內容無法辨識，請確認檔案內容，或直接貼上 SQL。"
+
+_VERIFIED_REWRITE_METADATA = {
+    "or_eq_to_in": ("R006", "同欄位 OR 改為 IN"),
+    "substr_eq_to_like": ("R005", "SUBSTR 比對改為 LIKE"),
+}
 
 
 def _log_exception_type_only(message: str, exc: Exception) -> None:
@@ -56,6 +63,30 @@ def _log_exception_type_only(message: str, exc: Exception) -> None:
 def _ext_of(filename: str) -> str:
     idx = filename.rfind(".")
     return filename[idx:].lower() if idx >= 0 else ""
+
+
+def _find_verified_rewrites(parsed) -> list[VerifiedRewrite]:
+    """Build the response-owned deterministic rewrite contract."""
+    rewrites: list[VerifiedRewrite] = []
+    for statement in parsed.statements:
+        if statement.parse_status != "ok" or statement.statement_type != "SELECT":
+            continue
+        for candidate in rewrite_rules.find_verified_rewrites(statement.raw_sql):
+            metadata = _VERIFIED_REWRITE_METADATA.get(candidate.rule)
+            if metadata is None:
+                continue
+            source_rule_id, title = metadata
+            rewrites.append(
+                VerifiedRewrite(
+                    statement_index=statement.index,
+                    rule=candidate.rule,
+                    source_rule_id=source_rule_id,
+                    title=title,
+                    before=candidate.before,
+                    after=candidate.after,
+                )
+            )
+    return rewrites
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -116,6 +147,8 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
         # never silently return a fabricated PASS (PRD §15).
         _log_exception_type_only("sql_parser/rule_engine raised unexpectedly", exc)
         raise HTTPException(status_code=500, detail=_ANALYZE_FAILED_MESSAGE) from None
+
+    verified_rewrites = _find_verified_rewrites(parsed)
 
     if payload.include_ai:
         try:
@@ -182,6 +215,7 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
         rules=rule_rows,
         findings=findings,
         statements=statements_summary,
+        verified_rewrites=verified_rewrites,
         parse_message=parsed.parse_message,
         ai=ai_result,
     )

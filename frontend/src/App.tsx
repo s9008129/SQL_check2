@@ -201,11 +201,16 @@ export default function App() {
               <ResultOverview result={result} />
               <SummaryCards result={result} />
               <ImprovementAdvice ai={result.ai} />
-              <SqlCompare originalSql={submittedSql} ai={result.ai} />
+              <SqlCompare
+                originalSql={submittedSql}
+                ai={result.ai}
+                verifiedRewrites={result.verified_rewrites ?? []}
+              />
               <ComplianceTable
                 rules={result.rules}
                 compliance={result.compliance}
                 parseMessage={result.parse_message}
+                verifiedRewrites={result.verified_rewrites ?? []}
               />
               <PrintFooter applicationNo={result.application_no} onScrollToInput={scrollToInput} />
             </>

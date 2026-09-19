@@ -34,6 +34,8 @@ from dataclasses import dataclass
 from sqlglot import exp, parse_one
 from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
 
+from app.services.sql_parser import _condition_scope_roots, _select_has_real_from
+
 DIALECT = "oracle"
 
 _WILDCARD_RE = re.compile(r"[%_]")
@@ -68,6 +70,15 @@ class FragmentVerification:
     example: str  # what to show as the suggested fragment
     rule: str | None = None
     assumption: str | None = None
+
+
+@dataclass(frozen=True)
+class VerifiedRewriteCandidate:
+    """One deterministic rewrite discovered directly from a SQL statement."""
+
+    rule: str
+    before: str
+    after: str
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +282,86 @@ def derive(atom: exp.Expression) -> Rewrite | None:
         if r is not None:
             return r
     return None
+
+
+def _select_nodes(tree: exp.Expression) -> list[exp.Select]:
+    """Return each SELECT node once, including set-operation branches."""
+    nodes: list[exp.Select] = []
+    seen: set[int] = set()
+    candidates = [tree] if isinstance(tree, exp.Select) else []
+    candidates.extend(tree.find_all(exp.Select))
+    for node in candidates:
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        nodes.append(node)
+    return nodes
+
+
+def _condition_atoms(tree: exp.Expression) -> list[exp.Expression]:
+    """Collect top-level conjuncts from WHERE/HAVING/JOIN ON scopes.
+
+    The parser already owns the definition of these scopes. This helper only
+    unwraps the parser's Where/Having nodes and feeds each predicate through
+    the existing ``_conjuncts`` traversal, so rewrite derivation stays in one
+    place.
+    """
+    atoms: list[exp.Expression] = []
+    for select in _select_nodes(tree):
+        if not _select_has_real_from(select):
+            continue
+        for root in _condition_scope_roots(select, "SELECT"):
+            condition = root.this if isinstance(root, (exp.Where, exp.Having)) else root
+            atoms.extend(_conjuncts(condition))
+    return atoms
+
+
+def find_verified_rewrites(sql: str) -> list[VerifiedRewriteCandidate]:
+    """Discover the existing verified rewrites without consulting the LLM.
+
+    Unsupported, malformed, non-SELECT, and otherwise unhandled SQL is a
+    normal empty result. Each candidate's ``after`` is the canonical text
+    produced by the existing ``Rewrite`` returned from ``derive``.
+    """
+    if not sql or not sql.strip():
+        return []
+    try:
+        tree = parse_one(sql, read=DIALECT)
+        if not _select_nodes(tree):
+            return []
+        candidates: list[VerifiedRewriteCandidate] = []
+        seen: set[tuple[str, str, str]] = set()
+        for atom in _condition_atoms(tree):
+            rewrite = derive(atom)
+            if rewrite is None:
+                continue
+            before = atom.sql(dialect=DIALECT)
+            key = (rewrite.rule, normalize(atom), normalize_text(rewrite.canonical) or rewrite.canonical)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(VerifiedRewriteCandidate(rule=rewrite.rule, before=before, after=rewrite.canonical))
+        return candidates
+    except Exception:
+        # Ordinary unsupported SQL must never become an API failure.
+        return []
+
+
+def has_cross_column_or(sql: str) -> bool:
+    """Return whether a condition OR combines more than one column."""
+    if not sql or not sql.strip():
+        return False
+    try:
+        tree = parse_one(sql, read=DIALECT)
+        for atom in _condition_atoms(tree):
+            or_nodes = [atom] if isinstance(atom, exp.Or) else list(atom.find_all(exp.Or))
+            for or_node in or_nodes:
+                columns = {normalize(column) for column in or_node.find_all(exp.Column)}
+                if len(columns) > 1:
+                    return True
+        return False
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------

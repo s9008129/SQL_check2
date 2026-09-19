@@ -86,6 +86,17 @@ class Finding(BaseModel):
     table: str | None = None
 
 
+class VerifiedRewrite(BaseModel):
+    """A server-derived, result-preserving predicate rewrite."""
+
+    statement_index: int
+    rule: str
+    source_rule_id: str
+    title: str
+    before: str
+    after: str
+
+
 class RuleRow(BaseModel):
     """One row of the 中心規則比對 table — aggregated across all statements."""
 
@@ -205,5 +216,6 @@ class AnalyzeResponse(BaseModel):
     rules: list[RuleRow]
     findings: list[Finding]
     statements: list[StatementSummary]
+    verified_rewrites: list[VerifiedRewrite] = Field(default_factory=list)
     parse_message: str | None = None
     ai: AiResult

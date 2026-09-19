@@ -213,3 +213,10 @@ React Dashboard（忠實還原網頁雛形，含所有 PRD 規定文案與狀態
 - [x] Gemini adapter 保留為 fallback，不刪除。
 - [ ] 使用 Pro 帳號 API Key 做 Mac live health + 5 案人工驗收。
 
+## 2026-09-19：Deterministic rewrite diff v2
+
+- [x] `verified_rewrites` API contract 與 R005/R006 deterministic discovery；不依賴 AI availability。
+- [x] 改寫對照改為「重點改寫」預設顯示，完整 SQL 收在預設關閉 details，列印隱藏完整 SQL／複製按鈕。
+- [x] 保留 NOTICE／compliance／improvement score 原語意，僅對已提供 R005/R006 改寫加 presentation annotation。
+- [x] AST cross-column OR、no-main-WHERE 欄位捏造與 TRUNC guard 分類防線及 regression tests。
+- [x] 未部署正式主機、未修改 Ollama/Ollama Cloud 設定、未 merge main；完整測試結果以本次提交報告為準。

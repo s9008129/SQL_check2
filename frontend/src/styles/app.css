@@ -192,6 +192,10 @@ mark.legend{margin:0 3px}
 .diff-row-removed .diff-cell:first-child{background:#ffe1e1}
 .segment-list{margin-top:16px;display:flex;flex-direction:column;gap:12px}
 .segment-list-title{font-size:13px;font-weight:760;color:#2b3445}
+.full-sql-details{margin-top:16px;border:1px solid #e6eaf0;border-radius:14px;background:#fbfcfe;padding:0 14px 14px}
+.full-sql-details summary{cursor:pointer;padding:13px 0;font-size:14px;font-weight:760;color:#2b3445}
+.full-sql-details .sql-box{margin-top:2px}
+.r-annotation{margin-top:5px;color:#16784a;font-weight:700}
 .fragment-diff{border:1px solid #e6eaf0;border-radius:14px;padding:12px 14px;background:#fbfcfe}
 .fragment-title{font-size:13px;font-weight:760;margin-bottom:8px;color:#1f2937}
 .fragment-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}

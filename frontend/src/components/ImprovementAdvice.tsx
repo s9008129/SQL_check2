@@ -1,5 +1,6 @@
 import type { AdviceItem, AiResult } from "../types/api";
 import { AI_PENDING_MESSAGE, AI_UNAVAILABLE_MESSAGE, VERIFIED_REWRITE_EXPLANATION } from "../lib/copy";
+import { confidenceBadgeText } from "../lib/confidence";
 import { looksLikeSqlFragment } from "../lib/sqlDiff";
 
 export interface ImprovementAdviceProps {
@@ -36,6 +37,16 @@ function canShowConcreteExample(item: AdviceItem): boolean {
   return item.verification === "verified" || item.verification === "corrected";
 }
 
+export function ConfidenceBadge({ score }: { score: unknown }) {
+  const text = confidenceBadgeText(score);
+  if (!text) return null;
+  return (
+    <span className="badge purple confidence-badge" data-testid="confidence-badge">
+      {text}
+    </span>
+  );
+}
+
 export function adviceEvidenceLevel(item: AdviceItem): EvidenceLevel {
   if (item.verification === "verified" || item.verification === "corrected") return "confirmed";
   if (item.verification === "unverified") return "review";
@@ -52,6 +63,13 @@ export function adviceEvidenceLevel(item: AdviceItem): EvidenceLevel {
  * 「系統可確認／需人工確認／觀念提醒」呈現可信度與採用方式。
  */
 export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
+  const hasConfidence =
+    ai.status === "ok" &&
+    (ai.advice.some((item) => confidenceBadgeText(item.confidence_score) !== null) ||
+      (ai.suggested_sql?.available === true &&
+        ai.suggested_sql.outcome === "provided" &&
+        confidenceBadgeText(ai.suggested_sql.confidence_score) !== null));
+
   return (
     <section className="card card-ai">
       <div className="card-head">
@@ -79,9 +97,12 @@ export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
                     <div className={`advice-box ${evidence.tone}`} key={`${item.title}-${index}`}>
                       <div className="advice-title-row">
                         <h4>{item.title}</h4>
-                        <span className={`badge ${evidence.badge} evidence-badge`} title={evidence.title}>
-                          {evidence.label}
-                        </span>
+                        <div className="advice-badges">
+                          <span className={`badge ${evidence.badge} evidence-badge`} title={evidence.title}>
+                            {evidence.label}
+                          </span>
+                          <ConfidenceBadge score={item.confidence_score} />
+                        </div>
                       </div>
                       {evidence.explanation && <div className="evidence-explanation">{evidence.explanation}</div>}
                       <p>{item.explanation}</p>
@@ -91,7 +112,16 @@ export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
                 })}
               </div>
             )}
-            {ai.advice.length > 0 && <div className="ai-disclaimer">AI 建議僅供參考，不代表實際效能提升；採用前請先測試。</div>}
+            {(ai.advice.length > 0 || hasConfidence) && (
+              <div className="ai-disclaimer">
+                <span>AI 建議僅供參考，不代表實際效能提升；採用前請先測試。</span>
+                {hasConfidence && (
+                  <span className="confidence-disclaimer">
+                    AI 信心為模型自評，僅供參考，不代表正確率或系統驗證結果。
+                  </span>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>

@@ -22,6 +22,19 @@ AiStatus = Literal["ok", "pending", "unavailable"]
 ImpactLevel = Literal["low", "medium", "high"]
 
 
+def normalize_confidence_score(value: object) -> int | None:
+    """Keep only a genuine, bounded integer confidence score.
+
+    Pydantic normally coerces values such as ``True``, ``95.0`` and ``"95"``
+    into integers. Confidence is model metadata, so silently coercing malformed
+    output would make bad provider data look authoritative. Invalid values are
+    therefore discarded instead of clamped or converted.
+    """
+    if type(value) is int and 0 <= value <= 100:
+        return value
+    return None
+
+
 # ---------------------------------------------------------------------------
 # /api/health
 # ---------------------------------------------------------------------------
@@ -143,6 +156,13 @@ class AdviceItem(BaseModel):
     explanation: str
     example: str | None = None
     impact: ImpactLevel | None = None
+    confidence_score: int | None = None
+
+    @field_validator("confidence_score", mode="before")
+    @classmethod
+    def _normalize_confidence_score(cls, value: object) -> int | None:
+        return normalize_confidence_score(value)
+
     # 2026-09-17: the exact original fragment `example` replaces (verbatim
     # from the SQL), so the UI can render a precise before/after diff per
     # advice item instead of only a free-floating snippet. Placeholders are
@@ -167,6 +187,13 @@ class SuggestedSql(BaseModel):
     available: bool
     reason: str
     sql: str | None = None
+    confidence_score: int | None = None
+
+    @field_validator("confidence_score", mode="before")
+    @classmethod
+    def _normalize_confidence_score(cls, value: object) -> int | None:
+        return normalize_confidence_score(value)
+
     # 2026-09-17: *why* there is (or isn't) a rewrite, so the UI can say
     # different things for genuinely different situations instead of one
     # fixed "declined" sentence:

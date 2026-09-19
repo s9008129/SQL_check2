@@ -108,7 +108,8 @@
     color: #8a5a00 !important;
   }
   .evidence-explanation,
-  .card-compare .card-desc {
+  .card-compare .card-desc,
+  .confidence-badge {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }

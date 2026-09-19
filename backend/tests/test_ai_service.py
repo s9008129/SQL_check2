@@ -1868,3 +1868,360 @@ def test_prompt_requires_advice_only_to_be_prose_only():
     assert "example／before 一律留空" in prompt
     assert "替代 LIKE 片段" in prompt
     assert "未驗證片段不會顯示成可複製 SQL" in prompt
+
+
+# ---------------------------------------------------------------------------
+# AI confidence contract
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (95, 95),
+        (80, 80),
+        (79, 79),
+        (60, 60),
+        (59, 59),
+        (100, 100),
+        (0, 0),
+        (None, None),
+        (-1, None),
+        (101, None),
+        (True, None),
+        (False, None),
+        (95.5, None),
+        ("95", None),
+        ("garbage", None),
+        (float("nan"), None),
+    ],
+)
+def test_confidence_normalization_is_strict(value, expected):
+    from app.schemas import normalize_confidence_score
+
+    assert normalize_confidence_score(value) == expected
+
+
+def test_confidence_missing_fields_default_to_none():
+    from app.schemas import AdviceItem, SuggestedSql
+
+    assert AdviceItem(title="t", explanation="e").confidence_score is None
+    assert SuggestedSql(available=False, reason="r").confidence_score is None
+
+
+def test_response_schema_defines_bounded_integer_confidence():
+    advice_props = ai_service.RESPONSE_SCHEMA["properties"]["advice"]["items"]["properties"]
+    suggested_props = ai_service.RESPONSE_SCHEMA["properties"]["suggested_sql"]["properties"]
+    for props in (advice_props, suggested_props):
+        assert props["confidence_score"] == {"type": "integer", "minimum": 0, "maximum": 100}
+
+
+def test_system_prompt_calibrates_confidence_without_turning_it_into_permission():
+    prompt = ai_service.SYSTEM_PROMPT
+    for phrase in (
+        "confidence_score",
+        "不是 correctness probability",
+        "performance improvement percentage",
+        "不是 server verification",
+        "90–100",
+        "80–89",
+        "60–79",
+        "0–59",
+        "低 confidence 是合法且有價值的輸出",
+    ):
+        assert phrase in prompt
+
+
+@respx.mock
+async def test_malformed_confidence_does_not_make_ai_unavailable(settings, chat_url):
+    inner = _good_inner()
+    inner["advice"][0]["confidence_score"] = "95"
+    inner["suggested_sql"]["confidence_score"] = True
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+
+    result = await _call(settings, _clean_select_statement())
+
+    assert result.status == "ok"
+    assert result.advice[0].title == "合併同欄位 OR 條件"
+    assert result.advice[0].confidence_score is None
+    assert result.suggested_sql is not None
+    assert result.suggested_sql.available is True
+    assert result.suggested_sql.confidence_score is None
+
+
+def test_prose_only_advice_keeps_confidence_when_server_does_not_change_it():
+    from app.schemas import AdviceItem
+
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="確認業務條件",
+                explanation="這個改善方向需要先確認業務條件。",
+                example=None,
+                confidence_score=72,
+            )
+        ],
+        [],
+        {},
+        {},
+        source_sql="SELECT A.ID FROM T A WHERE A.STATUS = 'A'",
+    )
+
+    assert result[0].confidence_score == 72
+
+
+def test_prose_safety_replacement_clears_confidence():
+    from app.schemas import AdviceItem
+
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="評估日期條件",
+                explanation="可改成日期範圍。",
+                example=None,
+                confidence_score=72,
+            )
+        ],
+        [],
+        {},
+        {},
+        source_sql="SELECT A.ID FROM T A WHERE TRUNC(A.D) = DATE '2026-09-18'",
+    )
+
+    assert result[0].confidence_score is None
+    assert "可評估改用日期範圍" in result[0].explanation
+
+
+@pytest.mark.parametrize(
+    ("source", "before", "example", "issue"),
+    [
+        (
+            "SELECT A.ID FROM T A WHERE A.STATUS = 'A'",
+            "A.STATUS = 'A'",
+            "A.UNKNOWN = 'A'",
+            "unknown_identifier",
+        ),
+        (
+            "SELECT A.ID FROM T A WHERE A.STATUS = 'A'",
+            "A.STATUS = 'A'",
+            "A.STATUS = 'B'",
+            "unknown_literal",
+        ),
+        (
+            "SELECT A.ID FROM T A WHERE A.UPDATE_TIME = DATE '2026-09-18'",
+            "A.UPDATE_TIME = DATE '2026-09-18'",
+            "A.UPDATE_TIME = '2026-09-18'",
+            "typed_literal",
+        ),
+    ],
+)
+def test_safety_replacement_clears_confidence(source, before, example, issue):
+    from app.schemas import AdviceItem
+
+    assert ai_service._advice_example_safety_issue(source, before, example) == issue
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="改善方向",
+                explanation="請先確認實際條件。",
+                before=before,
+                example=example,
+                confidence_score=99,
+            )
+        ],
+        [],
+        {},
+        {},
+        source_sql=source,
+    )
+
+    assert result[0].example is None
+    assert result[0].before is None
+    assert result[0].confidence_score is None
+
+
+def test_unverified_concrete_fragment_clears_confidence():
+    from app.schemas import AdviceItem
+
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="調整條件",
+                explanation="可改成其他比較方式。",
+                before="A.STATUS = 'A'",
+                example="A.STATUS <> 'A'",
+                confidence_score=100,
+            )
+        ],
+        [],
+        {},
+        {},
+        source_sql="SELECT A.ID FROM T A WHERE A.STATUS = 'A'",
+    )
+
+    assert result[0].verification == "unverified"
+    assert result[0].example is None
+    assert result[0].confidence_score is None
+
+
+def test_corrected_fragment_clears_confidence():
+    from app.schemas import AdviceItem
+
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="合併相同欄位條件",
+                explanation="可改成 IN。",
+                before="A.STATUS = 'A' OR A.STATUS = 'B'",
+                example="A.STATUS IN ('A')",
+                confidence_score=99,
+            )
+        ],
+        [],
+        {},
+        {},
+        source_sql="SELECT A.ID FROM T A WHERE A.STATUS = 'A' OR A.STATUS = 'B'",
+    )
+
+    assert result[0].verification == "corrected"
+    assert result[0].confidence_score is None
+
+
+@respx.mock
+async def test_final_advice_placeholder_scrub_clears_confidence(settings, chat_url, monkeypatch):
+    inner = _good_inner(
+        advice=[
+            {
+                "title": "合併同欄位 OR 條件",
+                "explanation": "同一欄位的多個等於條件可改成較精簡的 IN 寫法。",
+                "before": "A.Y = :STR_001 OR A.Y = :STR_002",
+                "example": "A.Y IN (:STR_001, :STR_999)",
+                "confidence_score": 92,
+            }
+        ]
+    )
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+    real_scrub = ai_service.scrub_invented_placeholders
+
+    def scrub_with_server_replacement(text, original_sql):
+        scrubbed = real_scrub(text, original_sql)
+        if scrubbed == "A.Y IN ('A123456789', 'B987654321')":
+            return "A.Y IN (:VALUE, 'B987654321')"
+        return scrubbed
+
+    monkeypatch.setattr(ai_service, "scrub_invented_placeholders", scrub_with_server_replacement)
+
+    result = await _call(settings, _clean_select_statement())
+
+    assert result.advice[0].example == "A.Y IN (:VALUE, 'B987654321')"
+    assert result.advice[0].confidence_score is None
+
+
+@respx.mock
+async def test_verified_fragment_keeps_confidence(settings, chat_url):
+    inner = _good_inner(
+        advice=[
+            {
+                "title": "合併同欄位 OR 條件",
+                "explanation": "同一欄位的多個等於條件可改成較精簡的 IN 寫法。",
+                "before": "A.Y = :STR_001 OR A.Y = :STR_002",
+                "example": "A.Y IN (:STR_001, :STR_002)",
+                "confidence_score": 92,
+            }
+        ]
+    )
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+
+    result = await _call(settings, _clean_select_statement())
+
+    assert result.advice[0].verification == "verified"
+    assert result.advice[0].confidence_score == 92
+
+
+@pytest.mark.parametrize(
+    ("inner_suggested", "statements", "sql_text", "expected_outcome"),
+    [
+        (
+            {
+                "available": True,
+                "reason": "改用 IN。",
+                "sql": "SELECT A.X FROM T A WHERE A.Y IN (:STR_001, :STR_002)",
+                "rewrite_outcome": "provided",
+                "confidence_score": 91,
+            },
+            "clean",
+            None,
+            ("provided", 91),
+        ),
+        (
+            {
+                "available": True,
+                "reason": "改寫。",
+                "sql": "SELECT A.X FROM T A",
+                "rewrite_outcome": "provided",
+                "confidence_score": 99,
+            },
+            "clean",
+            None,
+            ("rejected", None),
+        ),
+        (
+            {
+                "available": True,
+                "reason": "多段。",
+                "sql": "SELECT A.X FROM T A WHERE A.Y IN (:STR_001, :STR_002)",
+                "rewrite_outcome": "provided",
+                "confidence_score": 99,
+            },
+            "multi",
+            "SELECT * FROM T A WHERE A.X=1; SELECT * FROM T2 B WHERE B.Y=1;",
+            ("gated", None),
+        ),
+        (
+            {
+                "available": False,
+                "reason": "需要業務確認。",
+                "rewrite_outcome": "advice_only",
+                "confidence_score": 99,
+            },
+            "clean",
+            None,
+            ("advice_only", None),
+        ),
+        (
+            {
+                "available": False,
+                "reason": "目前未發現需要調整的寫法。",
+                "rewrite_outcome": "not_needed",
+                "confidence_score": 99,
+            },
+            "clean",
+            None,
+            ("not_needed", None),
+        ),
+    ],
+)
+@respx.mock
+async def test_suggested_sql_confidence_is_kept_only_for_validated_provided(
+    settings, chat_url, inner_suggested, statements, sql_text, expected_outcome
+):
+    inner = _good_inner(suggested_sql=inner_suggested)
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+    if statements == "clean":
+        parsed_statements = _clean_select_statement()
+        call_sql = sql_text or "SELECT A.X FROM T A WHERE A.Y = 'A123456789' OR A.Y = 'B987654321'"
+    else:
+        parsed_statements = _multi_statement()
+        call_sql = sql_text
+
+    result = await _call(settings, parsed_statements, sql_text=call_sql)
+
+    expected_outcome_name, expected_confidence = expected_outcome
+    assert result.suggested_sql.outcome == expected_outcome_name
+    assert result.suggested_sql.confidence_score == expected_confidence

@@ -41,6 +41,26 @@ describe("SqlCompare — deterministic rewrite diff", () => {
     expect(screen.queryByText("建議採用狀態")).toBeNull();
   });
 
+  it("shows confidence for a validated complete AI rewrite in the card header", () => {
+    render(
+      <SqlCompare
+        originalSql="SELECT A.X FROM T A WHERE A.C = '1' OR A.C = '2'"
+        ai={makeAi({
+          advice: [],
+          suggested_sql: {
+            available: true,
+            reason: "可提供改寫。",
+            sql: "SELECT A.X FROM T A WHERE A.C IN ('1','2')",
+            confidence_score: 91,
+            outcome: "provided",
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("AI 信心：高 91/100")).toBeTruthy();
+  });
+
   it("renders deterministic verified rewrites while AI is pending", () => {
     render(
       <SqlCompare
@@ -296,6 +316,28 @@ describe("SqlCompare — deterministic rewrite diff", () => {
       />,
     );
     expect(container.firstChild).toBeNull();
+  });
+
+  it("does not manufacture AI confidence for deterministic verified rewrites", () => {
+    render(
+      <SqlCompare
+        originalSql="SELECT A.X FROM T A WHERE A.C = '1' OR A.C = '2'"
+        ai={makeAi({ advice: [], suggested_sql: null })}
+        verifiedRewrites={[
+          {
+            statement_index: 0,
+            rule: "or_eq_to_in",
+            source_rule_id: "R006",
+            title: "同欄位 OR 改為 IN",
+            before: "A.C = '1' OR A.C = '2'",
+            after: "A.C IN ('1', '2')",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("改寫對照")).toBeTruthy();
+    expect(screen.queryByTestId("confidence-badge")).toBeNull();
   });
 
   it("copies the validated full SQL and shows 已複製 temporarily", async () => {

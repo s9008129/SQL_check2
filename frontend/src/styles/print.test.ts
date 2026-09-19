@@ -10,5 +10,7 @@ describe("print diff behavior", () => {
     expect(css).toContain(".fragment-diff");
     expect(css).toContain(".evidence-explanation");
     expect(css).toContain(".card-compare .card-desc");
+    expect(css).toContain(".confidence-badge");
+    expect(css).not.toMatch(/\.confidence-badge\s*\{[^}]*display:\s*none/);
   });
 });

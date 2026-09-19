@@ -393,22 +393,23 @@ async def test_outcome_rejected_when_revalidation_fails(settings, chat_url):
 
 
 @respx.mock
-async def test_advice_example_and_before_are_unmasked(settings, chat_url):
+async def test_verified_advice_example_and_before_are_unmasked(settings, chat_url):
     inner = _good_inner(
         advice=[
             {
-                "title": "改為範圍比對",
+                "title": "合併同欄位條件",
                 "explanation": "e",
-                "before": "A.Y = :STR_001",
-                "example": "A.Y >= :STR_001",
+                "before": "A.Y = :STR_001 OR A.Y = :STR_002",
+                "example": "A.Y IN (:STR_001, :STR_002)",
                 "impact": "high",
             }
         ]
     )
     respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
     result = await _call(settings, _clean_select_statement())
-    assert result.advice[0].before == "A.Y = 'A123456789'"
-    assert result.advice[0].example == "A.Y >= 'A123456789'"
+    assert result.advice[0].verification == "verified"
+    assert result.advice[0].before == "A.Y = 'A123456789' OR A.Y = 'B987654321'"
+    assert result.advice[0].example == "A.Y IN ('A123456789', 'B987654321')"
 
 
 def test_response_schema_has_advice_before_field():
@@ -480,8 +481,8 @@ def test_system_prompt_has_no_overclaiming_or_unprovable_rewrite_wording(overcla
 def test_system_prompt_keeps_r004_scope_and_derived_rewrite_list():
     prompt = ai_service.SYSTEM_PROMPT
     assert "不屬於 R004 的命中範圍" in prompt
-    assert "是否及如何改善仍需依實際資料庫環境確認" in prompt
-    assert "只有前置萬用字元" in prompt
+    assert "只有前置萬用字元才值得提醒" in prompt
+    assert "替代 LIKE 片段" in prompt
     assert "目前只有 SUBSTR 等於、同欄位 OR 串成" in prompt
     assert "超過 1000 個值不要合併成單一 IN" in prompt
     assert "不可直接合併成單一 IN" in prompt

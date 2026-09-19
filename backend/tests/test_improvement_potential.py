@@ -208,8 +208,9 @@ def test_trunc_and_nvl_rewrites_never_become_server_verified_evidence():
         _through_runtime("NVL(A.S, 'N') = 'Y'", "A.S = 'Y'"),
     ]
     assert [a.verification for a in advice] == ["unverified", "unverified", "unverified"]
-    # the system no longer substitutes its own "equivalent" text
-    assert advice[0].example == "A.TXN_DATE >= :D AND A.TXN_DATE < :D + 1"
+    # Unverified concrete SQL is now hidden; only prose guidance remains.
+    assert advice[0].example is None
+    assert advice[0].before is None
     level, basis = improvement_potential(_ok(advice, outcome="advice_only"), [_finding("NOTICE")])
     assert level == "low"
     assert not any("系統已驗證" in line for line in basis)

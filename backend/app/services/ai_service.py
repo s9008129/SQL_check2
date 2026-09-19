@@ -672,10 +672,11 @@ def _wildcard_core(value: str) -> str:
 def _introduces_unknown_literals(source_sql: str, example: str) -> bool:
     """Reject business constants invented by the model.
 
-    Exact source literals are allowed. String examples may add/move only LIKE
-    wildcard characters around the same non-empty literal core; this keeps
-    deterministic SUBSTR→LIKE and clearly-labelled LIKE direction examples
-    possible without authorizing new business values.
+    Exact source literals are allowed. String examples may add/move LIKE
+    wildcard characters around the same non-empty literal core so the
+    deterministic SUBSTR→LIKE rule can work without authorizing new business
+    values. Unverified LIKE-direction examples are removed later by
+    _filter_advice and never reach the API.
     """
     source = _literal_facts(source_sql)
     proposed = _literal_facts(example)
@@ -736,6 +737,10 @@ def _filter_advice(
             continue
         title = _sanitize_user_prose(raw_title, {}, literal_hints)
         explanation = _sanitize_user_prose(raw_explanation, {}, literal_hints)
+        # Keep the sanitized model wording for pattern classification even if
+        # a lower safety layer later replaces the user-facing text.
+        guard_title = title
+        guard_explanation = explanation
         # 2026-09-17: code fragments are shown to the reviewer who owns the
         # data, so restore masked literals there too (previously `:STR_002`
         # leaked through into the advice card — confirmed in a production
@@ -797,8 +802,13 @@ def _filter_advice(
             before = None
 
         if verification not in _VERIFIED:
-            explanation, prose_guard = _guard_unverified_advice_prose(source_sql, title, explanation)
+            guarded_explanation, prose_guard = _guard_unverified_advice_prose(
+                source_sql,
+                guard_title,
+                guard_explanation,
+            )
             if prose_guard is not None:
+                explanation = guarded_explanation
                 verification = "unverified"
                 logger.info("ai_service: advice-only prose normalized by guard: %s", prose_guard)
         kept.append(

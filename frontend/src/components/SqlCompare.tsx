@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { AdviceItem, AiResult, VerifiedRewrite } from "../types/api";
 import { FragmentDiff, FullSqlDiff } from "./SqlDiffView";
 import { locateOriginalFragment, looksLikeSqlFragment } from "../lib/sqlDiff";
+import { REWRITE_COMPARE_EXPLANATION } from "../lib/copy";
 
 export interface SqlCompareProps {
   originalSql: string;
@@ -65,17 +66,7 @@ function toVerifiedRewriteSegments(rewrites: VerifiedRewrite[]): Segment[] {
   }));
 }
 
-function mergeSegments(primary: Segment[], fallback: Segment[]): Segment[] {
-  const seen = new Set<string>();
-  return [...primary, ...fallback].filter((segment) => {
-    const key = `${segment.before?.trim() ?? ""}\u0000${segment.after.trim()}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-export default function SqlCompare({ originalSql, ai, verifiedRewrites = [] }: SqlCompareProps) {
+export default function SqlCompare({ originalSql, ai, verifiedRewrites }: SqlCompareProps) {
   const [copied, setCopied] = useState(false);
   const suggestedSql =
     ai.status === "ok" && ai.suggested_sql?.available && ai.suggested_sql.sql
@@ -83,11 +74,14 @@ export default function SqlCompare({ originalSql, ai, verifiedRewrites = [] }: S
       : null;
 
   const segments = useMemo(
-    () =>
-      mergeSegments(
-        toVerifiedRewriteSegments(verifiedRewrites),
-        ai.status === "ok" ? toSegments(originalSql, ai.advice) : [],
-      ),
+    () => {
+      // New API responses own this fragment list. An intentionally empty
+      // array means the deterministic pass ran and found no rewrite; it must
+      // not be repopulated from legacy AI advice. Only an absent field is an
+      // old-backend payload and may use the legacy fallback.
+      if (verifiedRewrites !== undefined) return toVerifiedRewriteSegments(verifiedRewrites);
+      return ai.status === "ok" ? toSegments(originalSql, ai.advice) : [];
+    },
     [ai.status, ai.advice, originalSql, verifiedRewrites],
   );
 
@@ -96,7 +90,7 @@ export default function SqlCompare({ originalSql, ai, verifiedRewrites = [] }: S
   }
 
   const statusTone = "green";
-  const statusText = "結果相同";
+  const statusText = "查詢結果不變";
 
   async function copySuggestedSql() {
     if (!suggestedSql || !navigator.clipboard?.writeText) return;
@@ -112,7 +106,10 @@ export default function SqlCompare({ originalSql, ai, verifiedRewrites = [] }: S
   return (
     <section className={`card card-compare card-compare-${statusTone}`}>
       <div className="card-head">
-        <div className="card-title">改寫對照</div>
+        <div>
+          <div className="card-title">改寫對照</div>
+          <div className="card-desc">{REWRITE_COMPARE_EXPLANATION}</div>
+        </div>
         <span className={`badge ${statusTone}`}>{statusText}</span>
       </div>
       <div className="card-body">

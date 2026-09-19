@@ -7,7 +7,7 @@
  * only decides which CSS tone class renders that judgment, it never
  * re-derives the judgment itself.
  */
-import type { ComplianceStatus, ImprovementColor, RuleStatus } from "../types/api";
+import type { ComplianceStatus, ImprovementColor, RuleRow, RuleStatus } from "../types/api";
 
 export type Tone = "green" | "yellow" | "red" | "blue" | "purple" | "gray";
 
@@ -24,6 +24,28 @@ export function complianceTone(status: ComplianceStatus): Tone {
   }
 }
 
+export function complianceStateLabel(status: ComplianceStatus): string {
+  switch (status) {
+    case "PASS":
+      return "符合";
+    case "REVIEW":
+      return "建議";
+    case "BLOCK":
+      return "不符合";
+    default:
+      return "建議";
+  }
+}
+
+export function complianceSummaryText(rules: Pick<RuleRow, "status">[]): string {
+  const suggestions = rules.filter((rule) => rule.status === "NOTICE" || rule.status === "REVIEW").length;
+  const blocks = rules.filter((rule) => rule.status === "BLOCK").length;
+  if (blocks > 0 && suggestions > 0) return `${blocks} 項不符合 · ${suggestions} 項建議`;
+  if (blocks > 0) return `${blocks} 項不符合`;
+  if (suggestions > 0) return `${suggestions} 項建議`;
+  return "全部符合";
+}
+
 export function ruleStatusTone(status: RuleStatus): Tone {
   switch (status) {
     case "PASS":
@@ -37,6 +59,22 @@ export function ruleStatusTone(status: RuleStatus): Tone {
       return "gray";
     default:
       return "gray";
+  }
+}
+
+export function ruleStatusLabel(status: RuleStatus): string | null {
+  switch (status) {
+    case "PASS":
+      return "符合";
+    case "NOTICE":
+    case "REVIEW":
+      return "建議";
+    case "BLOCK":
+      return "不符合";
+    case "NA":
+      return null;
+    default:
+      return null;
   }
 }
 

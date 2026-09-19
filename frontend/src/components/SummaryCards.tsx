@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { AnalyzeResponse, RuleRow } from "../types/api";
 import { formatCost } from "../lib/cost";
-import { complianceTone, improvementTone, type Tone } from "../lib/status";
+import { complianceSummaryText, complianceTone, improvementTone, type Tone } from "../lib/status";
 
 export interface SummaryCardsProps {
   result: AnalyzeResponse;
@@ -64,7 +64,6 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
   const aiPending = ai.status === "pending";
   const aiUnavailable = ai.status === "unavailable";
   const improvementColor = improvementTone(improvement.color);
-  const reviewCount = rules.filter((r) => r.status === "REVIEW").length;
 
   return (
     <section className="summary" aria-label="檢核摘要">
@@ -72,18 +71,10 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
         tone={complianceTone(compliance.status)}
         icon={compliance.status === "PASS" ? "✓" : compliance.status === "BLOCK" ? "✕" : "?"}
         label="中心規範"
-        value={compliance.label}
+        value={complianceSummaryText(rules)}
         valueStyle={STATUS_VALUE_STYLE}
         bad={compliance.status === "BLOCK"}
-        sub={
-          compliance.block_count > 0
-            ? `${compliance.block_count} 項不符合`
-            : compliance.status === "REVIEW"
-              ? `${reviewCount || 1} 項需確認${compliance.notice_count > 0 ? ` · ${compliance.notice_count} 項提醒` : ""}`
-              : compliance.notice_count > 0
-                ? `${compliance.notice_count} 項提醒`
-                : "目前無提醒事項"
-        }
+        sub="中心規範檢核結果"
       />
 
       <Metric

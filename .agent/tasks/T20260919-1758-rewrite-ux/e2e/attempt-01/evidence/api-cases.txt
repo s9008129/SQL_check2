@@ -1,0 +1,28 @@
+# API acceptance evidence
+
+The real backend rule/parser/rewrite path was exercised with `POST /api/analyze`
+for the two requested cases. AI was replaced only in the temporary acceptance
+process with deterministic response objects so the UI state was reproducible;
+formal rules, compliance, improvement score, and verified rewrites remained the
+current branch implementations.
+
+UX-STATE-01 (COST 28000)
+- compliance.status: PASS
+- notice_count: 1
+- block_count: 0
+- R006: NOTICE
+- verified_rewrites: one `or_eq_to_in`, title `同欄位 OR 改為 IN`
+- after: `A.STATUS_CD IN ('A', 'B', 'C')`
+- AI advice verification: verified
+
+UX-STATE-02 (COST 125000)
+- compliance.status: BLOCK
+- notice_count: 2
+- block_count: 1
+- R001: BLOCK
+- R004: NOTICE
+- R006: NOTICE
+- verified_rewrites: []
+- AI advice verification: unverified
+- suggested_sql.outcome: advice_only
+- suggested_sql.sql: null

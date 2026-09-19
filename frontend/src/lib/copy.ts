@@ -27,6 +27,9 @@ export const SUGGESTED_SQL_NOT_NEEDED_MESSAGE = "目前未發現需要調整的�
 // `reason` (rendered right under it) states the concrete point to confirm.
 export const SUGGESTED_SQL_ADVICE_ONLY_MESSAGE = "有可參考的寫法，請先確認業務條件。";
 
+export const VERIFIED_REWRITE_EXPLANATION = "系統已確認：這個改法不會改變查詢結果。";
+export const REWRITE_COMPARE_EXPLANATION = "系統已確認這個改法不會改變查詢結果。";
+
 // Shown when nothing to improve was found (level null / outcome not_needed).
 export const ESTIMATE_NOT_NEEDED_MESSAGE = "目前未發現需要調整的地方。";
 

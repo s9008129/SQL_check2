@@ -44,12 +44,14 @@ describe("ImprovementAdvice", () => {
         })}
       />,
     );
-    expect(screen.getByText("可採用")).toBeTruthy();
+    expect(screen.getByText("可使用此改寫")).toBeTruthy();
+    expect(screen.getByText("系統已確認：這個改法不會改變查詢結果。")).toBeTruthy();
     expect(
-      screen.getByTitle("系統已比對改寫前後條件，查詢結果相同；正式使用前仍請測試。"),
+      screen.getByTitle("系統已確認：這個改法不會改變查詢結果。正式使用前仍請測試。"),
     ).toBeTruthy();
-    expect(screen.getByText("請先確認")).toBeTruthy();
+    expect(screen.getByText("需先確認再改")).toBeTruthy();
     expect(screen.getByText("僅供參考")).toBeTruthy();
+    expect(screen.queryByText("可採用")).toBeNull();
     expect(screen.queryByText("影響：高")).toBeNull();
     expect(screen.queryByText("影響：低")).toBeNull();
   });
@@ -123,6 +125,6 @@ it("never renders copyable SQL for an unverified advice item", () => {
       })}
     />,
   );
-  expect(screen.getByText("請先確認")).toBeTruthy();
+  expect(screen.getByText("需先確認再改")).toBeTruthy();
   expect(screen.queryByText("A.NAME LIKE '明%'")).toBeNull();
 });

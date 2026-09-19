@@ -107,6 +107,11 @@
   .card-warning {
     color: #8a5a00 !important;
   }
+  .evidence-explanation,
+  .card-compare .card-desc {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
   .diff-row,
   .fragment-diff {
     break-inside: avoid;

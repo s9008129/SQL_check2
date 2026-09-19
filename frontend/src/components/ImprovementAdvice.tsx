@@ -1,5 +1,5 @@
 import type { AdviceItem, AiResult } from "../types/api";
-import { AI_PENDING_MESSAGE, AI_UNAVAILABLE_MESSAGE } from "../lib/copy";
+import { AI_PENDING_MESSAGE, AI_UNAVAILABLE_MESSAGE, VERIFIED_REWRITE_EXPLANATION } from "../lib/copy";
 import { looksLikeSqlFragment } from "../lib/sqlDiff";
 
 export interface ImprovementAdviceProps {
@@ -8,24 +8,27 @@ export interface ImprovementAdviceProps {
 
 type EvidenceLevel = "confirmed" | "review" | "info";
 
-const EVIDENCE_META: Record<EvidenceLevel, { label: string; tone: string; badge: string; title: string }> = {
+const EVIDENCE_META: Record<EvidenceLevel, { label: string; tone: string; badge: string; title: string; explanation: string | null }> = {
   confirmed: {
-    label: "可採用",
+    label: "可使用此改寫",
     tone: "a-confirmed",
     badge: "green",
-    title: "系統已比對改寫前後條件，查詢結果相同；正式使用前仍請測試。",
+    title: `${VERIFIED_REWRITE_EXPLANATION}正式使用前仍請測試。`,
+    explanation: VERIFIED_REWRITE_EXPLANATION,
   },
   review: {
-    label: "請先確認",
+    label: "需先確認再改",
     tone: "a-review",
     badge: "yellow",
-    title: "改善方向具參考價值，但系統無法只靠 SQL 文字確認查詢結果完全相同。",
+    title: "改善方向具參考價值，但系統無法只靠 SQL 文字確認查詢結果是否一致。",
+    explanation: null,
   },
   info: {
     label: "僅供參考",
     tone: "a-info",
     badge: "purple",
     title: "這是撰寫或治理上的提醒，不代表本案已證明存在效能問題。",
+    explanation: null,
   },
 };
 
@@ -80,6 +83,7 @@ export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
                           {evidence.label}
                         </span>
                       </div>
+                      {evidence.explanation && <div className="evidence-explanation">{evidence.explanation}</div>}
                       <p>{item.explanation}</p>
                       {item.example && canShowConcreteExample(item) && <code>{item.example}</code>}
                     </div>

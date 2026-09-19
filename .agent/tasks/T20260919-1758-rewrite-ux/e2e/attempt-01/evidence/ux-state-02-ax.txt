@@ -1,0 +1,25 @@
+# CUA browser evidence — UX-STATE-02
+
+Observed after submitting the case in Chrome at `http://127.0.0.1:5174/` on
+2026-09-19. The frontend was the current worktree Vite build and `/api` was
+proxied to the current worktree backend on port 8000.
+
+Relevant accessibility-tree output:
+
+- `先看中心規範結果，再看改善建議與改寫對照。 ✕ 不符合`
+- `1 項不符合 · 2 項建議`
+- `條件可再檢視`
+- `需先確認再改`
+- `中心規範檢核`
+- `COST` followed by `不符合`
+- `WHERE 查詢條件` followed by `符合`
+- `Parallel Hint` followed by `符合`
+- `LIKE 前置萬用字元` followed by `建議`
+- `條件欄位使用函數` followed by `符合`
+- `OR 條件` followed by `建議`
+- `重要資料表` followed by `符合`
+- `重要資料表禁止操作` followed by `符合`
+
+No concrete unsafe SQL example, UNION/UNION ALL claim, or generic evidence
+phrases (`未發現`, `已設定`, `目前無需調整`) was present in the observed
+result tree.

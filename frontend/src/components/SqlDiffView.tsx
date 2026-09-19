@@ -32,10 +32,10 @@ export interface FullSqlDiffProps {
 export function FullSqlDiff({ original, suggested }: FullSqlDiffProps) {
   const rows = useMemo(() => computeAlignedDiff(original, suggested), [original, suggested]);
   return (
-    <div className="diff-table" role="table" aria-label="原寫法與改後寫法（結果相同）逐行對照">
+    <div className="diff-table" role="table" aria-label="原寫法與改後寫法逐行對照">
       <div className="diff-col-head" role="row">
         <span>原寫法</span>
-        <span>改後寫法（結果相同）</span>
+        <span>改後寫法</span>
       </div>
       {rows.map((row, i) => (
         <div className={`diff-row diff-row-${row.kind}`} role="row" key={i}>
@@ -78,8 +78,8 @@ export interface FragmentDiffProps {
 // Only rule-derived rewrites are called 建議寫法; anything the system could
 // not prove equivalent is a sketch.
 export const FRAGMENT_LABEL: Record<NonNullable<FragmentDiffProps["verification"]>, string> = {
-  verified: "改後寫法（結果相同）",
-  corrected: "改後寫法（結果相同）",
+  verified: "改後寫法",
+  corrected: "改後寫法",
   unverified: "參考寫法（需確認）",
 };
 

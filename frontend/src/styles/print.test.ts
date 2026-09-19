@@ -8,5 +8,7 @@ describe("print diff behavior", () => {
     expect(css).toContain(".copy-sql-btn");
     expect(css).toContain("display: none !important");
     expect(css).toContain(".fragment-diff");
+    expect(css).toContain(".evidence-explanation");
+    expect(css).toContain(".card-compare .card-desc");
   });
 });

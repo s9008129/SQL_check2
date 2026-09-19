@@ -168,7 +168,11 @@ export interface AnalyzeResponse {
   rules: RuleRow[];
   findings: Finding[];
   statements: StatementSummary[];
-  /** Deterministic rewrite candidates; optional for older backend responses. */
+  /**
+   * Deterministic rewrite candidates; optional for older backend responses.
+   * Present (including []) means the new backend checked deterministically;
+   * undefined means legacy payload fallback is allowed.
+   */
   verified_rewrites?: VerifiedRewrite[];
   parse_message: string | null;
   ai: AiResult;

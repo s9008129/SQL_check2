@@ -43,9 +43,10 @@ def _good_inner(**overrides) -> dict:
         "summary": "這段 SQL 的條件欄位使用了函數，建議調整寫法。",
         "advice": [
             {
-                "title": "調整日期條件寫法",
-                "explanation": "條件欄位包了函數，可考慮改寫成範圍比較。",
-                "example": "A.TXN_DATE >= :START_DATE",
+                "title": "合併同欄位 OR 條件",
+                "explanation": "同一欄位的多個等於條件可改成較精簡的 IN 寫法。",
+                "before": "A.Y = :STR_001 OR A.Y = :STR_002",
+                "example": "A.Y IN (:STR_001, :STR_002)",
                 "impact": "high",
             }
         ],
@@ -100,10 +101,10 @@ async def test_successful_response_populates_ok_result(settings, chat_url):
     assert result.status == "ok"
     assert result.summary is not None
     assert len(result.advice) == 1
-    assert result.advice[0].title == "調整日期條件寫法"
+    assert result.advice[0].title == "合併同欄位 OR 條件"
     assert result.suggested_sql is not None
     assert result.suggested_sql.available is True
-    assert result.estimated_improvement_pct == 45  # 47 rounds to nearest 5
+    assert result.estimated_improvement_pct is None
 
 
 @respx.mock
@@ -302,21 +303,13 @@ async def test_vocabulary_replacement_applied_to_summary(settings, chat_url):
     assert "改善 SQL" in result.summary
 
 
-@pytest.mark.parametrize(("raw_pct", "expected"), [(47, 45), (101, 100), (None, None)])
+@pytest.mark.parametrize("raw_pct", [47, 101, None])
 @respx.mock
-async def test_estimated_improvement_pct_clamped_and_rounded(settings, chat_url, raw_pct, expected):
+async def test_model_improvement_percentage_is_always_ignored(settings, chat_url, raw_pct):
     inner = _good_inner(estimated_improvement_pct=raw_pct)
-    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
-    result = await _call(settings, _clean_select_statement())
-
-    assert result.estimated_improvement_pct == expected
-
-
-@respx.mock
-async def test_estimated_improvement_pct_missing_key_is_null(settings, chat_url):
-    inner = _good_inner()
-    del inner["estimated_improvement_pct"]
-    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
     result = await _call(settings, _clean_select_statement())
 
     assert result.estimated_improvement_pct is None
@@ -369,7 +362,7 @@ async def test_outcome_not_needed_keeps_model_reason(settings, chat_url):
     result = await _call(settings, _clean_select_statement())
     assert result.suggested_sql.outcome == "not_needed"
     assert result.suggested_sql.reason == "目前寫法已良好。"
-    assert result.estimated_improvement_pct == 0
+    assert result.estimated_improvement_pct is None
 
 
 @respx.mock
@@ -433,11 +426,15 @@ def test_response_schema_requires_rewrite_outcome():
     assert set(props["properties"]["rewrite_outcome"]["enum"]) == {"provided", "not_needed", "advice_only"}
 
 
+def test_response_schema_no_longer_asks_gemma_for_improvement_percentage():
+    assert "estimated_improvement_pct" not in ai_service.RESPONSE_SCHEMA["properties"]
+
+
 def test_system_prompt_explains_rewrite_outcome_and_examples():
     assert "rewrite_outcome" in ai_service.SYSTEM_PROMPT
     assert "not_needed" in ai_service.SYSTEM_PROMPT
     assert "advice_only" in ai_service.SYSTEM_PROMPT
-    assert "example 就必須填寫" in ai_service.SYSTEM_PROMPT
+    assert "example 必須填空字串" in ai_service.SYSTEM_PROMPT
 
 
 def test_system_prompt_defines_knowledge_context_authority_and_class_semantics():
@@ -451,11 +448,11 @@ def test_system_prompt_defines_knowledge_context_authority_and_class_semantics()
     assert "family_signal 或 OUT_OF_SCOPE" in prompt
 
 
-def test_system_prompt_requires_checklist_before_not_needed():
-    # 2026-09-17: "already good" must be an evidence-backed claim.
+def test_system_prompt_keeps_not_needed_observable_and_plain():
     assert "structure_flags" in ai_service.SYSTEM_PROMPT
-    assert "not_needed 的 reason 必須列出你實際檢查過的項目" in ai_service.SYSTEM_PROMPT
-    assert "隱含型別轉換" in ai_service.SYSTEM_PROMPT
+    assert "目前未發現需要調整的寫法" in ai_service.SYSTEM_PROMPT
+    assert "不可宣稱" in ai_service.SYSTEM_PROMPT
+    assert "無隱含型別轉換" in ai_service.SYSTEM_PROMPT
     assert "重新推導每一個條件改寫" in ai_service.SYSTEM_PROMPT
 
 
@@ -495,17 +492,14 @@ def test_system_prompt_keeps_r004_scope_and_derived_rewrite_list():
     assert "系統能確認的對應 LIKE 寫法" in prompt
 
 
-def test_system_prompt_provided_example_is_derivable_and_advice_only_example_is_not():
-    # The prompt's "provided" example must pass the runtime's own predicate
-    # check, and its "advice_only" TRUNC/NVL example must not — otherwise the
-    # prompt steers the model into rewrites the server rejects.
+def test_system_prompt_provided_example_is_derivable_and_advice_only_is_prose_first():
     from sqlglot import parse_one
 
     from app.services import rewrite_rules
 
-    provided_orig = "WHERE SUBSTR(A.MANAGE_CD,6,3) = '551' AND A.STATUS = :STR_001"
-    provided_sugg = "WHERE A.MANAGE_CD LIKE '_____551%' AND A.STATUS = :STR_001"
-    advice_orig = "WHERE TRUNC(A.TXN_DATE) = :STR_001 AND NVL(A.S,'N') = 'N'"
+    provided_orig = "WHERE SUBSTR(A.CODE_COL,6,3) = '551' AND A.STATUS = :STR_001"
+    provided_sugg = "WHERE A.CODE_COL LIKE '_____551%' AND A.STATUS = :STR_001"
+    advice_orig = "WHERE TRUNC(A.DATE_COL) = :STR_001 AND NVL(A.S,'N') = 'N'"
     for fragment in (provided_orig, provided_sugg, advice_orig):
         assert fragment in ai_service.SYSTEM_PROMPT
 
@@ -513,8 +507,8 @@ def test_system_prompt_provided_example_is_derivable_and_advice_only_example_is_
         return parse_one(f"SELECT A.X FROM T A {where}", read="oracle")
 
     assert rewrite_rules.verify_predicate_changes(tree(provided_orig), tree(provided_sugg)) == (True, None)
-    advice_sugg = "WHERE A.TXN_DATE >= :STR_001 AND A.TXN_DATE < :STR_001 + 1 AND (A.S = 'N' OR A.S IS NULL)"
-    assert rewrite_rules.verify_predicate_changes(tree(advice_orig), tree(advice_sugg))[0] is False
+    assert "example 留空" in ai_service.SYSTEM_PROMPT
+    assert "不知道就不要猜 SQL" in ai_service.SYSTEM_PROMPT
 
 
 def test_system_prompt_tells_model_how_to_word_advice_only_reason():
@@ -731,7 +725,7 @@ async def test_suggested_sql_that_would_newly_block_is_rejected(settings, chat_u
 
     assert result.suggested_sql.available is False
     assert "未通過系統安全複核" in result.suggested_sql.reason
-    assert "不符合中心規範" in result.suggested_sql.reason
+    assert "新增或移除了 WHERE 查詢條件" in result.suggested_sql.reason
 
 
 @respx.mock
@@ -769,73 +763,18 @@ async def test_suggested_sql_that_is_unparseable_is_rejected(settings, chat_url)
 
 
 @respx.mock
-async def test_candidate_not_allowed_also_nulls_estimated_pct_when_estimate_requires_candidate(settings, chat_url):
-    # When estimate_requires_candidate is true, a non-candidate-allowed input
-    # also forces the pct to null server-side. app.yaml's own default was
-    # relaxed to false on 2026-09-16 (see app.yaml's comment), so this test
-    # builds its own settings override to exercise the true branch directly
-    # rather than depending on the shipped default.
-    strict_settings = dataclasses.replace(
-        settings,
-        ai_gate={**settings.ai_gate, "estimate_requires_candidate": True, "estimate_allowed_with_advice_fragments": False},
-    )
+async def test_deprecated_percentage_is_ignored_when_rewrite_is_gated(settings, chat_url):
     inner = _good_inner(estimated_improvement_pct=80)
-    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
-
-    result = await _call(
-        strict_settings, _multi_statement(), sql_text="SELECT * FROM T A WHERE A.X=1;\nSELECT * FROM T2 B WHERE B.Y=1;"
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
     )
-
-    assert result.estimated_improvement_pct is None
-
-
-@respx.mock
-async def test_estimate_kept_when_no_findings_but_advice_has_fragments(settings, chat_url):
-    # 2026-09-17: rules all pass, rewrite gated by length, but the model gave
-    # concrete fragments (example) — that is a basis for an estimate.
-    inner = _good_inner(estimated_improvement_pct=35)
-    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
-    long_sql = "SELECT " + ", ".join(f"A.C{i} AS 稅種{i}稅額_減因C" for i in range(400)) + " FROM T A WHERE A.Y = 1"
-    result = await _call(settings, parse_sql_text(long_sql).statements, sql_text=long_sql)
-    assert result.suggested_sql.outcome == "gated"
-    assert any(a.example for a in result.advice)
-    assert result.estimated_improvement_pct == 35
-
-
-@respx.mock
-async def test_estimate_dropped_when_no_findings_no_rewrite_and_no_fragments(settings, chat_url):
-    inner = _good_inner(estimated_improvement_pct=35)
-    for item in inner["advice"]:
-        item["example"] = None
-        item["before"] = None
-    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
-    long_sql = "SELECT " + ", ".join(f"A.C{i} AS 稅種{i}稅額_減因C" for i in range(400)) + " FROM T A WHERE A.Y = 1"
-    result = await _call(settings, parse_sql_text(long_sql).statements, sql_text=long_sql)
-    assert result.estimated_improvement_pct is None
-    # No findings, no rewrite, no fragments — only prose advice → level 低.
-    assert result.improvement_potential == "low"
-
-
-@respx.mock
-async def test_candidate_not_allowed_but_estimate_allowed_when_finding_exists_and_not_required(
-    settings, chat_url
-):
-    # 2026-09-16 default: estimate_requires_candidate is false, so a
-    # non-candidate-allowed input (multi-statement here) still gets a pct
-    # as long as there is at least one finding.
-    assert settings.ai_gate.get("estimate_requires_candidate") is False
-    inner = _good_inner(estimated_improvement_pct=47)
-    respx.post(chat_url).mock(return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False))))
-
-    finding = Finding(rule_id="R004", status="NOTICE", fact="A.Y LIKE '%X'", statement_index=0)
     result = await _call(
         settings,
         _multi_statement(),
-        findings=[finding],
         sql_text="SELECT * FROM T A WHERE A.X=1;\nSELECT * FROM T2 B WHERE B.Y=1;",
     )
 
-    assert result.estimated_improvement_pct == 45
+    assert result.estimated_improvement_pct is None
 
 
 # ---------------------------------------------------------------------------
@@ -885,7 +824,7 @@ def test_representative_statement_picks_worst_for_multi_statement(settings):
 
 def test_candidate_allowed_false_for_non_select():
     statements = parse_sql_text("UPDATE T SET X = 1 WHERE Y = 2").statements
-    allowed, _, decline_code = ai_service._compute_gates(statements, [], {"candidate_forbidden_complexity_flags": []})
+    allowed, decline_code = ai_service._compute_gates(statements, {"candidate_forbidden_complexity_flags": []})
     assert allowed is False
     assert decline_code == "not_select"
 
@@ -893,8 +832,8 @@ def test_candidate_allowed_false_for_non_select():
 def test_candidate_allowed_false_when_complexity_flag_forbidden():
     statements = parse_sql_text("SELECT COUNT(*) FROM T A WHERE A.X = 1 GROUP BY A.X").statements
     assert "group_by_aggregate" in statements[0].complexity_flags
-    allowed, _, decline_code = ai_service._compute_gates(
-        statements, [], {"candidate_forbidden_complexity_flags": ["group_by_aggregate"]}
+    allowed, decline_code = ai_service._compute_gates(
+        statements, {"candidate_forbidden_complexity_flags": ["group_by_aggregate"]}
     )
     assert allowed is False
     assert decline_code == "complexity:group_by_aggregate"
@@ -911,9 +850,8 @@ def test_candidate_allowed_true_for_outer_join_group_by_distinct_after_2026_09_1
         "SELECT DISTINCT A.X FROM T A WHERE A.Y = 1",
     ):
         statements = parse_sql_text(sql).statements
-        allowed, _, decline_code = ai_service._compute_gates(
+        allowed, decline_code = ai_service._compute_gates(
             statements,
-            [],
             {"candidate_forbidden_complexity_flags": ["window_function", "connect_by", "set_operation", "rownum", "correlated_subquery"]},
         )
         assert allowed is True, sql
@@ -922,19 +860,10 @@ def test_candidate_allowed_true_for_outer_join_group_by_distinct_after_2026_09_1
 
 def test_candidate_allowed_false_multi_statement_decline_code():
     statements = parse_sql_text("SELECT A.X FROM T A WHERE A.Y=1;\nSELECT B.X FROM U B WHERE B.Y=1;").statements
-    allowed, _, decline_code = ai_service._compute_gates(statements, [], {})
+    allowed, decline_code = ai_service._compute_gates(statements, {})
     assert allowed is False
     assert decline_code == "multi_statement"
 
-
-def test_estimate_allowed_without_candidate_when_not_requiring_candidate():
-    statements = parse_sql_text("UPDATE T SET X = 1 WHERE Y = 2").statements
-    findings = [Finding(rule_id="R002", status="BLOCK", fact="x", statement_index=0)]
-    candidate_allowed, estimate_allowed, _decline_code = ai_service._compute_gates(
-        statements, findings, {"candidate_forbidden_complexity_flags": [], "estimate_requires_candidate": False}
-    )
-    assert candidate_allowed is False
-    assert estimate_allowed is True  # allowed because at least one finding exists
 
 
 def test_decline_reason_text_is_specific_per_code():
@@ -1130,6 +1059,33 @@ async def test_rewrite_changing_column_count_is_rejected(settings, chat_url):
     result = await _call_rewrite(settings, chat_url, original, rewrite)
     assert result.suggested_sql.available is False
     assert "查詢欄位數" in result.suggested_sql.reason
+
+
+@respx.mock
+async def test_rewrite_changing_select_expression_with_same_count_is_rejected(settings, chat_url):
+    original = "SELECT A.X FROM T A WHERE A.Y = 'A' OR A.Y = 'B'"
+    rewrite = "SELECT A.Z FROM T A WHERE A.Y IN ('A', 'B')"
+    result = await _call_rewrite(settings, chat_url, original, rewrite)
+    assert result.suggested_sql.available is False
+    assert "非條件結構" in result.suggested_sql.reason
+
+
+@respx.mock
+async def test_rewrite_changing_group_by_expression_with_same_count_is_rejected(settings, chat_url):
+    original = "SELECT A.X, COUNT(*) FROM T A WHERE A.Y = 'A' OR A.Y = 'B' GROUP BY A.X"
+    rewrite = "SELECT A.X, COUNT(*) FROM T A WHERE A.Y IN ('A', 'B') GROUP BY A.Z"
+    result = await _call_rewrite(settings, chat_url, original, rewrite)
+    assert result.suggested_sql.available is False
+    assert "非條件結構" in result.suggested_sql.reason
+
+
+@respx.mock
+async def test_rewrite_changing_order_by_expression_is_rejected(settings, chat_url):
+    original = "SELECT A.X, A.Z FROM T A WHERE A.Y = 'A' OR A.Y = 'B' ORDER BY A.X"
+    rewrite = "SELECT A.X, A.Z FROM T A WHERE A.Y IN ('A', 'B') ORDER BY A.Z"
+    result = await _call_rewrite(settings, chat_url, original, rewrite)
+    assert result.suggested_sql.available is False
+    assert "非條件結構" in result.suggested_sql.reason
 
 
 # ---------------------------------------------------------------------------
@@ -1427,3 +1383,111 @@ async def test_last_call_stats_records_diagnostics_only(settings, chat_url):
     blob = json.dumps(stats, ensure_ascii=False, default=str)
     for forbidden in ("SELECT", "A.Y", "TRUNC", "這段 SQL"):
         assert forbidden not in blob
+
+
+
+# ---------------------------------------------------------------------------
+# Business-readable safety guard regressions (production diagnostic Round 1)
+# ---------------------------------------------------------------------------
+def test_invented_where_identifier_is_hidden_instead_of_shown():
+    from app.schemas import AdviceItem
+
+    advice = [
+        AdviceItem(
+            title="增加查詢條件",
+            explanation="請依實際需求補上查詢條件。",
+            example="WHERE WIIT001.COLL_YR = '113'",
+            impact="high",
+        )
+    ]
+    result = ai_service._filter_advice(advice, [], {}, {}, source_sql="SELECT * FROM WIIT001")
+    assert len(result) == 1
+    assert result[0].example is None
+    assert result[0].before is None
+    assert result[0].title == "請先確認查詢條件或資料表關聯"
+    assert "系統不會自行猜測" in result[0].explanation
+    assert "COLL_YR" not in result[0].explanation
+
+
+def test_invented_join_key_is_hidden_instead_of_shown():
+    from app.schemas import AdviceItem
+
+    source = "SELECT A.ID, B.TYPE FROM TEST_DATA A, TEST_ADDRESS B WHERE A.STATUS = 'A'"
+    advice = [
+        AdviceItem(
+            title="確認兩張表的關聯條件",
+            explanation="請先確認兩張表應以哪個欄位關聯。",
+            before="WHERE A.STATUS = 'A'",
+            example="WHERE A.STATUS = 'A' AND A.ID = B.ID",
+            impact="high",
+        )
+    ]
+    result = ai_service._filter_advice(advice, [], {}, {}, source_sql=source)
+    assert result[0].example is None
+    assert result[0].before is None
+
+
+def test_known_identifiers_are_allowed_through_example_guard():
+    source = "SELECT A.ID FROM TEST_DATA A WHERE A.STATUS = 'A' OR A.STATUS = 'B'"
+    assert ai_service._introduces_unknown_identifiers(source, "WHERE A.STATUS IN ('A','B')") is False
+
+
+def test_invented_business_literal_is_blocked_even_when_column_is_known():
+    source = "SELECT A.ID FROM TEST_DATA A WHERE A.STATUS = 'A'"
+    assert ai_service._introduces_unknown_literals(source, "WHERE A.STATUS = 'B'") is True
+
+
+def test_like_wildcard_reposition_keeps_same_literal_core():
+    source = "SELECT A.ID FROM TEST_DATA A WHERE A.NAME LIKE '%ACME'"
+    assert ai_service._introduces_unknown_literals(source, "WHERE A.NAME LIKE 'ACME%'") is False
+
+
+def test_substr_to_like_derived_wildcards_are_not_treated_as_new_business_value():
+    source = "SELECT A.ID FROM TEST_DATA A WHERE SUBSTR(A.CODE_COL,6,3) = '551'"
+    assert ai_service._introduces_unknown_literals(source, "WHERE A.CODE_COL LIKE '_____551%'") is False
+
+
+def test_splitting_unknown_business_constant_is_blocked():
+    source = "SELECT A.ID FROM TEST_DATA A WHERE A.COL_A || A.COL_B = '551'"
+    assert ai_service._introduces_unknown_literals(
+        source, "WHERE A.COL_A = '55' AND A.COL_B = '1'"
+    ) is True
+
+
+def test_typed_date_wrapper_loss_blocks_executable_looking_example():
+    before = "TRUNC(A.UPDATE_TIME) = DATE '2026-09-18'"
+    example = "A.UPDATE_TIME >= '2026-09-18' AND A.UPDATE_TIME < '2026-09-18' + 1"
+    assert ai_service._loses_typed_literal_wrapper(before, example) is True
+    assert ai_service._advice_example_is_safe(
+        "SELECT A.ID FROM TEST_DATA A WHERE TRUNC(A.UPDATE_TIME) = DATE '2026-09-18'",
+        before,
+        example,
+    ) is False
+
+
+def test_internal_masking_placeholders_become_plain_privacy_safe_prose():
+    text = ai_service._sanitize_user_prose(
+        "請確認 :STR_001 與 :NUM_002 的實際格式。",
+        {},
+    )
+    assert ":STR_" not in text
+    assert ":NUM_" not in text
+    assert "原查詢中的文字值" in text
+    assert "原查詢中的數值" in text
+
+
+def test_unobservable_index_claim_sentence_is_removed_but_useful_advice_survives():
+    text = ai_service._sanitize_user_prose(
+        "這會導致資料庫無法直接利用該欄位的索引。請確認是否能改用更明確的查詢條件。",
+        {},
+    )
+    assert "索引" not in text
+    assert "請確認是否能改用更明確的查詢條件" in text
+
+
+def test_not_needed_cannot_surface_no_implicit_conversion_claim():
+    text = ai_service._sanitize_user_prose(
+        "已檢查條件寫法，無隱含型別轉換。",
+        {},
+    )
+    assert "無隱含型別轉換" not in text

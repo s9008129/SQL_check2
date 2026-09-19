@@ -17,12 +17,12 @@ here because every function below exists to defend one of these):
   bug in this module) degrades to `AiResult(status="unavailable", ...)`
   with the PRD-mandated frontend message — this module's public functions
   never raise.
-- `candidate_allowed` / `estimate_improvement_allowed` are computed here,
-  deterministically, from rule_engine/sql_parser facts and `app.yaml`'s
-  `ai_gate` config — never from anything the model says. Even if the model
-  ignores its instructions and returns `suggested_sql.available=true` while
-  `candidate_allowed` is false, the server-side override in `_finalize_*`
-  forces it back to false before it ever reaches the API response.
+- `candidate_allowed` is computed here, deterministically, from
+  rule_engine/sql_parser facts and `app.yaml`'s `ai_gate` config — never
+  from anything the model says. Even if the model ignores its instructions
+  and returns `suggested_sql.available=true` while `candidate_allowed` is
+  false, the server-side override in `_finalize_*` forces it back to false
+  before it ever reaches the API response.
 - Real literal values (string/date/large-numeric) never reach the model —
   `masking.mask_sql()` runs on the representative statement's SQL text
   before it is ever placed in the prompt, regardless of whether a candidate
@@ -41,6 +41,7 @@ from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
+from sqlglot import exp, parse_one
 
 from app.schemas import AdviceItem, AiResult, Finding, SuggestedSql
 from app.services import context_adapter, pattern_selector, rewrite_rules, rule_engine
@@ -95,7 +96,7 @@ def improvement_potential(result: AiResult, findings: list[Finding]) -> tuple[st
                       a human look, but no concrete SQL-writing improvement
                       point was confirmed. The UI must NOT render this as
                       「目前寫法良好」;
-      None          — nothing was found at all (UI says 「目前寫法良好」).
+      None          — nothing was found at all (UI says 「目前未發現需要調整的地方」).
 
     A "server-verified improvement evidence" is one of:
       * an advice fragment whose before→example change the system re-validated
@@ -192,7 +193,6 @@ RESPONSE_SCHEMA: dict[str, Any] = {
             },
             "required": ["available", "reason", "rewrite_outcome"],
         },
-        "estimated_improvement_pct": {"type": ["integer", "null"]},
     },
     "required": ["summary", "advice", "suggested_sql"],
 }
@@ -216,7 +216,6 @@ class _AiRawResponse(BaseModel):
     summary: str
     advice: list[AdviceItem] = Field(default_factory=list)
     suggested_sql: _RawSuggestedSql
-    estimated_improvement_pct: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -224,17 +223,13 @@ class _AiRawResponse(BaseModel):
 # ---------------------------------------------------------------------------
 def _compute_gates(
     statements: list[ParsedStatement],
-    findings: list[Finding],
     ai_gate_cfg: dict[str, Any],
     *,
     sql_tokens: int = 0,
     num_predict: int = 0,
-) -> tuple[bool, bool, str | None]:
+) -> tuple[bool, str | None]:
     """candidate_allowed: exactly one statement, SELECT, parsed ok, and none
     of its complexity_flags intersect the configured forbidden set.
-    estimate_improvement_allowed: equals candidate_allowed unless
-    `ai_gate.estimate_requires_candidate` is false, in which case it is also
-    allowed whenever there is at least one finding (both branches per spec).
     decline_code: None when candidate_allowed is True; otherwise the specific
     reason candidate_allowed is False (`multi_statement` / `not_select` /
     `parse_failed` / `complexity:<flag>`) so the reviewer-facing decline
@@ -265,13 +260,7 @@ def _compute_gates(
             decline_code = "too_long_for_rewrite"
 
     candidate_allowed = decline_code is None
-
-    if ai_gate_cfg.get("estimate_requires_candidate", True):
-        estimate_allowed = candidate_allowed
-    else:
-        estimate_allowed = candidate_allowed or bool(findings)
-
-    return candidate_allowed, estimate_allowed, decline_code
+    return candidate_allowed, decline_code
 
 
 def _rewrite_would_not_fit(sql_tokens: int, num_predict: int, ai_gate_cfg: dict[str, Any]) -> bool:
@@ -368,7 +357,6 @@ def _build_payload(
     compliance_status: str,
     findings: list[Finding],
     candidate_allowed: bool,
-    estimate_improvement_allowed: bool,
     literal_hints: dict[str, dict[str, Any]] | None = None,
     where_evidence: dict[str, str] | None = None,
     structure_flags: list[str] | None = None,
@@ -393,7 +381,6 @@ def _build_payload(
         "findings": [{"rule_id": f.rule_id, "level": f.status, "fact": f.fact} for f in findings],
         "important_table_notices": important_table_notices,
         "candidate_allowed": candidate_allowed,
-        "estimate_improvement_allowed": estimate_improvement_allowed,
         "literal_hints": literal_hints or {},
         # Deterministic structural facts from sql_parser (2026-09-17): the
         # model kept declaring a NOT IN subquery "already good" because
@@ -432,26 +419,280 @@ def _contains_forbidden(text: str, forbidden: list[str]) -> bool:
     return any(phrase in text for phrase in forbidden)
 
 
+_INTERNAL_PLACEHOLDER_RE = re.compile(r":(?P<kind>STR|NUM)_\d+", re.IGNORECASE)
+_UNOBSERVABLE_DB_CLAIM_RE = re.compile(
+    r"(?:Full\s+Table\s+Scan|全(?:資料)?表掃描|Execution\s+Plan|執行計畫(?:顯示)?|"
+    r"排序特性|(?:使用|利用|採用|走|命中|失效|建立|新增|調整).{0,12}(?:索引|\bindex\b)|"
+    r"(?:索引|\bindex\b).{0,12}(?:使用|利用|採用|走|命中|失效|建立|新增|調整)|無隱含型別轉換)",
+    re.IGNORECASE,
+)
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[。！？!?])")
+_TYPED_LITERAL_RE = re.compile(
+    r"\b(?P<kind>DATE|TIMESTAMP)\s*(?P<literal>'(?:[^']|'')*')",
+    re.IGNORECASE,
+)
+
+
+def _humanize_internal_placeholders(text: str) -> str:
+    """Masking tokens are implementation details, never user vocabulary.
+
+    Prose deliberately does *not* unmask to the original literal because
+    summaries/reasons may be printed or archived. SQL code fields keep using
+    the existing reversible mask/unmask path.
+    """
+
+    def repl(match: re.Match[str]) -> str:
+        return "原查詢中的文字值" if match.group("kind").upper() == "STR" else "原查詢中的數值"
+
+    return _INTERNAL_PLACEHOLDER_RE.sub(repl, text)
+
+
+def _sanitize_unobservable_db_claims(text: str) -> str:
+    """Remove sentences that claim database behavior SQLCheck cannot observe.
+
+    SQLCheck has no Oracle plan/index/statistics metadata. Keeping useful
+    neighboring sentences is better than dropping the whole advice item when
+    Gemma adds one unsupported index/plan assertion.
+    """
+    if not text:
+        return text
+    pieces = [p for p in _SENTENCE_SPLIT_RE.split(text) if p]
+    kept = [p for p in pieces if not _UNOBSERVABLE_DB_CLAIM_RE.search(p)]
+    if kept:
+        return "".join(kept).strip()
+    return "這項建議是依 SQL 寫法本身提出，實際效能仍需於測試環境確認。"
+
+
+def _sanitize_user_prose(text: str, vocab: dict[str, str]) -> str:
+    text = _apply_vocabulary(text, vocab)
+    text = _humanize_internal_placeholders(text)
+    return _sanitize_unobservable_db_claims(text)
+
+
+def _parse_sql_or_fragment(text: str) -> exp.Expression | None:
+    if not text or not text.strip():
+        return None
+    stripped = text.strip().rstrip(";")
+
+    # A leading WHERE/ON is a fragment wrapper, not a standalone Oracle
+    # statement. sqlglot may still accept some such text into a partial AST,
+    # which would silently hide its literals/columns from provenance checks.
+    # Normalize the wrapper *before* trying a standalone parse.
+    if re.match(r"^\s*(?:WHERE|ON)\b", stripped, flags=re.IGNORECASE):
+        predicate = re.sub(r"^\s*(?:WHERE|ON)\b", "", stripped, flags=re.IGNORECASE).strip()
+        if not predicate:
+            return None
+        try:
+            return parse_one(f"SELECT NULL FROM DUAL WHERE {predicate}", read="oracle")
+        except Exception:
+            return None
+
+    try:
+        return parse_one(stripped, read="oracle")
+    except Exception:
+        # Bare predicate fragments (without WHERE/ON) get one conservative
+        # wrapper so identifier/literal provenance can still be inspected.
+        try:
+            return parse_one(f"SELECT NULL FROM DUAL WHERE {stripped}", read="oracle")
+        except Exception:
+            return None
+
+
+def _identifier_facts(text: str) -> tuple[set[tuple[str | None, str]], set[str], set[str]] | None:
+    """Return (qualified columns, tables, aliases) for SQL or a predicate.
+
+    The guard intentionally reasons only from identifiers actually visible in
+    the original SQL. It never consults schema metadata.
+    """
+    tree = _parse_sql_or_fragment(text)
+    if tree is None:
+        return None
+
+    columns: set[tuple[str | None, str]] = set()
+    for col in tree.find_all(exp.Column):
+        name = (col.name or "").upper()
+        if not name:
+            continue
+        qualifier = (col.table or "").upper() or None
+        columns.add((qualifier, name))
+
+    tables: set[str] = set()
+    aliases: set[str] = set()
+    for table in tree.find_all(exp.Table):
+        name = (table.name or "").upper()
+        if name and name != "DUAL":
+            tables.add(name)
+        alias = (table.alias or "").upper()
+        if alias:
+            aliases.add(alias)
+
+    return columns, tables, aliases
+
+
+def _introduces_unknown_identifiers(source_sql: str, example: str) -> bool:
+    source = _identifier_facts(source_sql)
+    proposed = _identifier_facts(example)
+    if source is None or proposed is None:
+        return True
+
+    source_columns, source_tables, source_aliases = source
+    proposed_columns, proposed_tables, _ = proposed
+    if not proposed_tables.issubset(source_tables):
+        return True
+
+    source_names = {name for _, name in source_columns}
+    for qualifier, name in proposed_columns:
+        if qualifier is None:
+            if name not in source_names:
+                return True
+            continue
+        if (qualifier, name) in source_columns:
+            continue
+        # Allow qualification of an originally-unqualified column only when
+        # the qualifier itself is an alias/table already present in source.
+        if (None, name) in source_columns and (qualifier in source_aliases or qualifier in source_tables):
+            continue
+        return True
+    return False
+
+
+def _loses_typed_literal_wrapper(before: str | None, example: str) -> bool:
+    if not before:
+        return False
+    for match in _TYPED_LITERAL_RE.finditer(before):
+        kind = match.group("kind")
+        literal = match.group("literal")
+        if literal not in example:
+            continue
+        required = re.compile(rf"\b{re.escape(kind)}\s*{re.escape(literal)}", re.IGNORECASE)
+        if required.search(example) is None:
+            return True
+    return False
+
+
+def _literal_facts(text: str) -> tuple[set[str], set[str]] | None:
+    """Return (string literal contents, numeric literal contents).
+
+    This is a provenance check only; it does not try to infer datatypes.
+    """
+    tree = _parse_sql_or_fragment(text)
+    if tree is None:
+        return None
+    strings: set[str] = set()
+    numbers: set[str] = set()
+    for literal in tree.find_all(exp.Literal):
+        value = str(literal.this)
+        if literal.is_string:
+            strings.add(value)
+        else:
+            numbers.add(value)
+    return strings, numbers
+
+
+def _wildcard_core(value: str) -> str:
+    return value.strip("%_")
+
+
+def _introduces_unknown_literals(source_sql: str, example: str) -> bool:
+    """Reject business constants invented by the model.
+
+    Exact source literals are allowed. String examples may add/move only LIKE
+    wildcard characters around the same non-empty literal core; this keeps
+    deterministic SUBSTR→LIKE and clearly-labelled LIKE direction examples
+    possible without authorizing new business values.
+    """
+    source = _literal_facts(source_sql)
+    proposed = _literal_facts(example)
+    if source is None or proposed is None:
+        return True
+    source_strings, source_numbers = source
+    proposed_strings, proposed_numbers = proposed
+
+    source_cores = {_wildcard_core(v) for v in source_strings if _wildcard_core(v)}
+    for value in proposed_strings:
+        if value in source_strings:
+            continue
+        core = _wildcard_core(value)
+        if core and core in source_cores:
+            continue
+        return True
+
+    return not proposed_numbers.issubset(source_numbers)
+
+
+def _advice_example_safety_issue(source_sql: str, before: str | None, example: str) -> str | None:
+    # Production supplies the representative SQL. Existing unit-level
+    # rewrite-evidence helpers may intentionally call _filter_advice without
+    # a whole statement, so provenance enforcement is conditional here.
+    if source_sql:
+        if _introduces_unknown_identifiers(source_sql, example):
+            return "unknown_identifier"
+        if _introduces_unknown_literals(source_sql, example):
+            return "unknown_literal"
+    if _loses_typed_literal_wrapper(before, example):
+        return "typed_literal"
+    return None
+
+
+def _advice_example_is_safe(source_sql: str, before: str | None, example: str) -> bool:
+    return _advice_example_safety_issue(source_sql, before, example) is None
+
+
 def _filter_advice(
     advice: list[AdviceItem],
     forbidden: list[str],
     vocab: dict[str, str],
     reverse_map: dict[str, str] | None = None,
+    *,
+    source_sql: str = "",
 ) -> list[AdviceItem]:
     kept: list[AdviceItem] = []
     dropped = 0
     for item in advice[:3]:  # RESPONSE_SCHEMA already caps at 3; defensive
-        title = _apply_vocabulary(item.title, vocab)
-        explanation = _apply_vocabulary(item.explanation, vocab)
-        if _contains_forbidden(title, forbidden) or _contains_forbidden(explanation, forbidden):
+        # Keep the established hard-drop behavior for explicit forbidden
+        # phrases before the sentence-level sanitizer removes softer
+        # unsupported database-behavior claims.
+        raw_title = _apply_vocabulary(item.title, vocab)
+        raw_explanation = _apply_vocabulary(item.explanation, vocab)
+        if _contains_forbidden(raw_title, forbidden) or _contains_forbidden(raw_explanation, forbidden):
             dropped += 1
             continue
+        title = _sanitize_user_prose(raw_title, {})
+        explanation = _sanitize_user_prose(raw_explanation, {})
         # 2026-09-17: code fragments are shown to the reviewer who owns the
         # data, so restore masked literals there too (previously `:STR_002`
         # leaked through into the advice card — confirmed in a production
         # printout). Prose fields are never un-masked.
         example = unmask_sql(item.example, reverse_map or {}) if item.example else None
         before = unmask_sql(item.before, reverse_map or {}) if item.before else None
+        safety_issue = _advice_example_safety_issue(source_sql, before, example) if example else None
+        if safety_issue is not None:
+            logger.info("ai_service: advice SQL example hidden by deterministic safety guard: %s", safety_issue)
+            example = None
+            before = None
+            # Once the model has demonstrated that this advice depends on an
+            # invented identifier/value or lost typed-literal context, do not
+            # keep its accompanying prose: the same hallucinated detail may
+            # be repeated there. Replace it with a server-owned, useful
+            # business instruction instead of merely appending a warning.
+            if safety_issue == "unknown_identifier":
+                title = "請先確認查詢條件或資料表關聯"
+                explanation = (
+                    "這個改善方向需要原 SQL 未提供的欄位或關聯資訊。"
+                    "請先確認實際查詢範圍或正確的資料表關聯欄位，系統不會自行猜測。"
+                )
+            elif safety_issue == "unknown_literal":
+                title = "請先確認業務條件"
+                explanation = (
+                    "這個改善方向需要原 SQL 未提供的業務值或切分規則。"
+                    "請先確認實際條件，系統不會自行編造可直接套用的值。"
+                )
+            else:
+                title = "請先確認日期或時間條件"
+                explanation = (
+                    "這個改善方向涉及日期／時間常數的型態前提。"
+                    "系統目前無法確認可直接套用的改寫，因此只保留方向提醒。"
+                )
         if before and not example:
             # A "before" with nothing to compare against is useless to the
             # diff view and misleading in the card — drop it.
@@ -485,20 +726,6 @@ def _filter_advice(
         # tasks/lessons.md "決策 log 用 debug 等於沒有 log".
         logger.info("ai_service: dropped %d advice item(s) on forbidden-phrase match", dropped)
     return kept
-
-
-def _clamp_round_pct(value: int | None, estimate_allowed: bool) -> int | None:
-    """Clamp to [0, 100], round to the nearest 5, and force null whenever
-    there is nothing to estimate — never let the raw model value through
-    unmodified."""
-    if not estimate_allowed or value is None:
-        return None
-    try:
-        v = int(value)
-    except (TypeError, ValueError):
-        return None
-    v = max(0, min(100, v))
-    return round(v / 5) * 5
 
 
 # PRD §25.4's exact fixed copy for "declined to auto-rewrite" — used
@@ -600,6 +827,24 @@ def _revalidate_suggested_sql(
         if orig_sig["select_count"] != new_sig["select_count"]:
             return False, "建議寫法的查詢欄位數與原始不同"
 
+        # Current VERIFIED_REWRITE authority is predicate-only. Make a
+        # WHERE-shell change explicit before the generic skeleton comparison:
+        # dropping an existing filter is a condition change, not a
+        # "non-condition structure" change.
+        orig_where = representative.tree.args.get("where")
+        new_where = stmt.tree.args.get("where")
+        if (orig_where is None) != (new_where is None):
+            return False, "建議寫法新增或移除了 WHERE 查詢條件，可能改變查詢結果"
+
+        # The detailed checks above retain specific user-facing reasons for
+        # obvious structure changes; this final skeleton equality closes
+        # same-count holes such as changing SELECT/GROUP BY/ORDER BY
+        # expressions. Predicate equivalence is checked separately below.
+        if rewrite_rules.query_skeleton_without_conditions(
+            representative.tree
+        ) != rewrite_rules.query_skeleton_without_conditions(stmt.tree):
+            return False, "建議寫法改動了查詢欄位、分組、排序或其他非條件結構"
+
         _compliance, _rows, new_findings = rule_engine.evaluate(
             parsed, cost, rules_config, important_tables_config
         )
@@ -641,7 +886,7 @@ def _finalize_suggested_sql(
     rules_config: dict[str, Any],
     important_tables_config: dict[str, Any],
 ) -> SuggestedSql:
-    reason = _apply_vocabulary(raw.reason, vocab)
+    reason = _sanitize_user_prose(raw.reason, vocab)
     # Server-side override (never trust the model on this): candidate_allowed
     # is computed deterministically and wins regardless of what the model
     # claims.
@@ -744,7 +989,6 @@ def _finalize(
     raw: _AiRawResponse,
     reverse_map: dict[str, str],
     candidate_allowed: bool,
-    estimate_allowed: bool,
     decline_code: str | None,
     ai_guard_cfg: dict[str, Any],
     representative: ParsedStatement | None,
@@ -754,17 +998,22 @@ def _finalize(
     important_tables_config: dict[str, Any],
     *,
     original_sql: str = "",
-    estimate_with_fragments: bool = False,
 ) -> AiResult:
     forbidden = ai_guard_cfg.get("forbidden_phrases", [])
     vocab = ai_guard_cfg.get("vocabulary_replacements", {})
 
-    summary: str | None = _apply_vocabulary(raw.summary, vocab)
+    summary: str | None = _sanitize_user_prose(raw.summary, vocab)
     if _contains_forbidden(summary, forbidden):
         logger.info("ai_service: summary discarded on forbidden-phrase match")
         summary = None
 
-    advice = _filter_advice(raw.advice, forbidden, vocab, reverse_map)
+    advice = _filter_advice(
+        raw.advice,
+        forbidden,
+        vocab,
+        reverse_map,
+        source_sql=representative.raw_sql if representative is not None else original_sql,
+    )
     suggested_sql = _finalize_suggested_sql(
         raw.suggested_sql,
         reverse_map,
@@ -778,12 +1027,10 @@ def _finalize(
         rules_config,
         important_tables_config,
     )
-    # 2026-09-17: concrete advice fragments (example present) are a basis for
-    # an estimate even when the rule engine found nothing and no full rewrite
-    # was allowed (app.yaml ai_gate.estimate_allowed_with_advice_fragments).
-    has_fragments = any(item.example for item in advice)
-    effective_estimate_allowed = estimate_allowed or (estimate_with_fragments and has_fragments)
-    pct = _clamp_round_pct(raw.estimated_improvement_pct, effective_estimate_allowed)
+    # Improvement percentages were never measured Oracle results. The API
+    # field remains for wire compatibility, but live and mocked model values
+    # are deliberately ignored.
+    pct = None
 
     # 2026-09-17: a `:STR_001` the model made up (not in the reverse map, not
     # in the user's SQL) must not reach the reviewer — see masking.py.
@@ -1138,8 +1385,8 @@ async def get_ai_result(
             mask_result = mask_sql(sql_text, settings.masking.keep_short_ascii_literal_max_len)
 
         sql_tokens = _estimate_tokens(mask_result.masked_sql)
-        candidate_allowed, estimate_allowed, decline_code = _compute_gates(
-            statements, findings, settings.ai_gate, sql_tokens=sql_tokens, num_predict=settings.ollama.num_predict
+        candidate_allowed, decline_code = _compute_gates(
+            statements, settings.ai_gate, sql_tokens=sql_tokens, num_predict=settings.ollama.num_predict
         )
 
         # Pattern Selector stays fail-open: a catalog/selector problem must
@@ -1180,20 +1427,14 @@ async def get_ai_result(
             }
 
         logger.info(
-            "ai_service: gate candidate=%s estimate=%s decline_code=%s stmt_type=%s flags=%s where_kind=%s sql_tokens=%d",
+            "ai_service: gate candidate=%s decline_code=%s stmt_type=%s flags=%s where_kind=%s sql_tokens=%d",
             candidate_allowed,
-            estimate_allowed,
             decline_code,
             statement_type,
             sorted(representative.complexity_flags) if representative else [],
             representative.restriction_kind if representative else None,
             sql_tokens,
         )
-
-        # The model must be asked for a number whenever fragments could later
-        # justify one; _finalize drops it again if they do not materialise.
-        estimate_with_fragments = bool(settings.ai_gate.get("estimate_allowed_with_advice_fragments", True))
-        estimate_requested = estimate_allowed or estimate_with_fragments
 
         def build(candidate: bool) -> dict[str, Any]:
             return _build_payload(
@@ -1203,7 +1444,6 @@ async def get_ai_result(
                 compliance_status=compliance_status,
                 findings=findings,
                 candidate_allowed=candidate,
-                estimate_improvement_allowed=estimate_requested,
                 literal_hints=mask_result.literal_hints,
                 where_evidence=where_evidence,
                 structure_flags=sorted(representative.complexity_flags) if representative else [],
@@ -1233,7 +1473,6 @@ async def get_ai_result(
             raw,
             mask_result.reverse_map,
             candidate_allowed,
-            estimate_allowed,
             decline_code,
             settings.ai_guard,
             representative,
@@ -1242,7 +1481,6 @@ async def get_ai_result(
             settings.rules_config,
             settings.important_tables_config,
             original_sql=sql_text,
-            estimate_with_fragments=estimate_with_fragments,
         )
         level, basis = improvement_potential(result, findings)
         return result.model_copy(update={"improvement_potential": level, "improvement_potential_basis": basis})

@@ -348,3 +348,14 @@ def test_full_rewrite_with_in_list_over_oracle_limit_is_rejected():
 def test_full_rewrite_with_in_list_at_oracle_limit_is_accepted():
     o, s = _trees(f"SELECT A.X FROM T A WHERE {_or_chain(1000)}", f"SELECT A.X FROM T A WHERE {_in_list(1000)}")
     assert rr.verify_predicate_changes(o, s) == (True, None)
+
+
+
+def test_or_to_in_fragment_with_where_wrapper_is_verified():
+    v = _v("WHERE A.C = '1' OR A.C = '2'", "WHERE A.C IN ('1', '2')")
+    assert v.status == "verified"
+
+
+def test_or_to_in_fragment_with_on_wrapper_is_verified():
+    v = _v("ON A.C = '1' OR A.C = '2'", "ON A.C IN ('1', '2')")
+    assert v.status == "verified"

@@ -24,21 +24,21 @@ describe("SqlCompare", () => {
       />,
     );
     expect(screen.queryByTestId("sql-editor-原始 SQL")).toBeNull();
-    expect(screen.getByTestId("compare-verdict").textContent).toContain("不需要改寫");
+    expect(screen.getByTestId("compare-verdict").textContent).toContain("目前未發現需要調整的寫法");
   });
 
   it("shows the aligned diff without repeating the COST when there is a full rewrite", () => {
     render(<SqlCompare originalSql="SELECT 1 FROM DUAL;" ai={makeAi()} />);
-    expect(screen.getByRole("table", { name: "原始 SQL 與 AI 建議寫法逐行對照" })).toBeTruthy();
+    expect(screen.getByRole("table", { name: "原始 SQL 與查詢結果已確認的建議寫法逐行對照" })).toBeTruthy();
     expect(screen.queryByText(/COST/)).toBeNull();
     expect(screen.queryByText("複製建議寫法")).toBeNull();
   });
 
-  it("is titled 優化前後比較 and labels the right-hand side as AI 建議寫法", () => {
+  it("uses neutral before/suggestion wording rather than implying an optimization result", () => {
     render(<SqlCompare originalSql="SELECT 1 FROM DUAL;" ai={makeAi()} />);
-    expect(screen.getByText("優化前後比較")).toBeTruthy();
-    expect(screen.queryByText("SQL 寫法比較")).toBeNull();
-    expect(screen.getAllByText("AI 建議寫法").length).toBeGreaterThan(0);
+    expect(screen.getByText("原寫法與建議寫法")).toBeTruthy();
+    expect(screen.queryByText("優化前後比較")).toBeNull();
+    expect(screen.getAllByText("查詢結果已確認的建議寫法").length).toBeGreaterThan(0);
   });
 
   it("renders a line-aligned word-highlighted diff when a suggestion is available", () => {
@@ -51,7 +51,7 @@ describe("SqlCompare", () => {
         })}
       />,
     );
-    expect(screen.getByRole("table", { name: "原始 SQL 與 AI 建議寫法逐行對照" })).toBeTruthy();
+    expect(screen.getByRole("table", { name: "原始 SQL 與查詢結果已確認的建議寫法逐行對照" })).toBeTruthy();
     const marks = document.querySelectorAll("mark.diff-add");
     expect(marks.length).toBeGreaterThan(1); // legend + at least one real change
   });
@@ -118,9 +118,9 @@ describe("SqlCompare", () => {
       />,
     );
     const blocks = screen.getAllByTestId("fragment-diff");
-    expect(blocks[0].textContent).toContain("系統修正後的建議寫法（查詢結果不變）");
+    expect(blocks[0].textContent).toContain("系統修正後的建議寫法");
     expect(blocks[0].textContent).toContain("AI 原本給的寫法會改變查詢結果");
-    expect(blocks[1].textContent).toContain("AI 示意寫法（系統無法確認查詢結果是否相同，僅供參考）");
+    expect(blocks[1].textContent).toContain("示意方向（請勿直接套用）");
     expect(blocks[1].querySelector(".fragment-after-unverified")).toBeTruthy();
     expect(screen.queryByText(/等價/)).toBeNull();
   });
@@ -180,7 +180,7 @@ describe("SqlCompare", () => {
         })}
       />,
     );
-    expect(screen.getByText("AI 檢視後認為目前寫法已良好，本次不需要改寫。")).toBeTruthy();
+    expect(screen.getByText("目前未發現需要調整的寫法。")).toBeTruthy();
     expect(screen.queryByText("為避免改變原本查詢內容，本次先提供改善方向，不自動產生建議寫法。")).toBeNull();
   });
 
@@ -194,7 +194,7 @@ describe("SqlCompare", () => {
         })}
       />,
     );
-    expect(screen.getByText(/改善方向請見上方/)).toBeTruthy();
+    expect(screen.getByText("有改善方向，但正確改法需要先確認業務條件。")).toBeTruthy();
     expect(screen.getByText("需確認切分方式。")).toBeTruthy();
   });
 

@@ -21,6 +21,7 @@ export type ImprovementBreakdownComponent =
   | "rule_findings"
   | "structure"
   | "cost_ratio"
+  | "structure_floor"
   | "block_floor";
 
 // ---------------------------------------------------------------------------
@@ -110,7 +111,7 @@ export interface AdviceItem {
   // Original fragment that `example` replaces (verbatim); optional on the
   // wire for backward compatibility with an older backend.
   before?: string | null;
-  /** Server verdict on before→example: verified / corrected (system replaced it) / unverified. */
+  /** Server verdict on before→example: query-result-preserving / corrected to a proven form / not proven. */
   verification?: "verified" | "corrected" | "unverified" | null;
   /** Caveat the rule's equivalence depends on, if any. */
   assumption?: string | null;
@@ -139,7 +140,7 @@ export interface AiResult {
   summary: string | null;
   advice: AdviceItem[];
   suggested_sql: SuggestedSql | null;
-  /** Archive-only; the UI shows `improvement_potential` instead (never measured). */
+  /** Backward-compatible wire field; current server returns null because no post-change percentage is measured. */
   estimated_improvement_pct: number | null;
   /** Server-derived improvement-potential level; null = nothing to improve found. */
   improvement_potential?: ImprovementPotential | null;

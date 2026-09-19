@@ -134,3 +134,17 @@ def test_block_floor_breakdown_item_has_detail(rules_cfg, tables_cfg):
     result = improvement_score.compute(parsed.statements, findings, 1000, rules_cfg)
     floor = next(b for b in result.breakdown if b.component == "block_floor")
     assert floor.detail and "80" in floor.detail
+
+
+
+def test_cartesian_join_is_at_least_improve_without_becoming_center_block(rules_cfg, tables_cfg):
+    sql = "SELECT A.ID, B.TYPE FROM TEST_DATA A, TEST_ADDRESS B WHERE A.STATUS = 'A'"
+    parsed = parse_sql_text(sql)
+    compliance, _, findings = rule_engine.evaluate(parsed, 5000, rules_cfg, tables_cfg)
+    result = improvement_score.compute(parsed.statements, findings, 5000, rules_cfg)
+
+    assert compliance.status == "PASS"
+    assert result.level in {"IMPROVE", "PRIORITY"}
+    assert result.score >= 60
+    floor = next(b for b in result.breakdown if b.component == "structure_floor")
+    assert "不是新增中心規範" in (floor.detail or "")

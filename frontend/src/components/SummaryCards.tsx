@@ -95,7 +95,7 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
 
       <div className={`metric tone-${improvementColor}`}>
         <div className="m-top">
-          <div className="m-label">改善指數</div>
+          <div className="m-label">改善優先指數</div>
           <div className="m-icon m-icon-text" data-testid="improvement-level">
             {improvement.label}
           </div>
@@ -103,7 +103,7 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
         <div className="score-line">
           <div className={`m-value${improvementColor === "red" ? " m-value-bad" : ""}`}>{improvement.score} / 100</div>
         </div>
-        <div className="m-sub">分數越高，代表值得優先檢視的項目越多</div>
+        <div className="m-sub">分數越高，代表越需要優先檢視與改善</div>
         {improvement.breakdown.length > 0 && (
           <>
             <button
@@ -116,13 +116,13 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
             </button>
             {breakdownOpen && (
               <div className="breakdown-list" data-testid="breakdown-list">
-                <p className="breakdown-intro">指數為 0～100 分，由下列項目加總而成；每一項都有加分上限，加總後超過 100 以 100 計。</p>
+                <p className="breakdown-intro">指數為 0～100 分，依規則命中、SQL 結構、COST 與必要的最低分數門檻綜合計算。</p>
                 {improvement.breakdown.map((item) => (
                   <div className="breakdown-row" key={item.component}>
                     <div className="breakdown-head">
                       <span className="breakdown-label">{item.label}</span>
                       <span className="breakdown-score">
-                        {item.component === "block_floor" ? `至少 ${item.score} 分` : `+${item.score} 分`}
+                        {item.component === "block_floor" || item.component === "structure_floor" ? `至少 ${item.score} 分` : `+${item.score} 分`}
                       </span>
                     </div>
                     {item.detail && <div className="breakdown-detail">{item.detail}</div>}

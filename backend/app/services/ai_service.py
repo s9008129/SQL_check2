@@ -424,8 +424,10 @@ def _contains_forbidden(text: str, forbidden: list[str]) -> bool:
 _INTERNAL_PLACEHOLDER_RE = re.compile(r":(?P<kind>STR|NUM)_\d+", re.IGNORECASE)
 _UNOBSERVABLE_DB_CLAIM_RE = re.compile(
     r"(?:Full\s+Table\s+Scan|全(?:資料)?表掃描|Execution\s+Plan|執行計畫(?:顯示)?|"
-    r"排序特性|(?:使用|利用|採用|走|命中|失效|建立|新增|調整).{0,12}(?:索引|\bindex\b)|"
-    r"(?:索引|\bindex\b).{0,12}(?:使用|利用|採用|走|命中|失效|建立|新增|調整)|無隱含型別轉換)",
+    r"排序特性|資料量|資料分布|統計資訊|\bstatistics?\b|\bcardinality\b|索引設定|"
+    r"(?:使用|利用|採用|走|命中|失效|建立|新增|調整).{0,12}(?:索引|\bindex\b)|"
+    r"(?:索引|\bindex\b).{0,12}(?:使用|利用|採用|走|命中|失效|建立|新增|調整|設定|定義)|"
+    r"無隱含型別轉換)",
     re.IGNORECASE,
 )
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[。！？!?])")
@@ -485,6 +487,43 @@ def _sanitize_user_prose(
     text = _apply_vocabulary(text, vocab)
     text = _humanize_internal_placeholders(text, literal_hints)
     return _sanitize_unobservable_db_claims(text)
+
+
+def _configured_cost_threshold(rules_config: dict[str, Any]) -> int | None:
+    """Return the enabled R001 threshold without duplicating a business number."""
+    for rule in rules_config.get("rules", []):
+        if rule.get("id") != "R001" or not rule.get("enabled", True):
+            continue
+        threshold = rule.get("threshold")
+        if type(threshold) is int and threshold >= 0:
+            return threshold
+    return None
+
+
+def _normalize_exact_cost_threshold_summary(
+    summary: str | None,
+    cost: int,
+    rules_config: dict[str, Any],
+) -> str | None:
+    """Use exact boundary wording when COST equals the configured threshold."""
+    threshold = _configured_cost_threshold(rules_config)
+    if threshold is None or cost != threshold or not summary:
+        return summary
+    if "COST" not in summary and "執行成本" not in summary:
+        return summary
+    return f"目前執行成本（COST）已達規範門檻 {threshold:,}，不符合中心規範。"
+
+
+def _cost_block_not_needed_reason(cost: int, rules_config: dict[str, Any]) -> str | None:
+    """Server-owned reason for a COST block when SQL text has no safe rewrite."""
+    threshold = _configured_cost_threshold(rules_config)
+    if threshold is None or cost < threshold:
+        return None
+    relation = "已達" if cost == threshold else "已高於"
+    return (
+        "目前 SQL 文字本身未發現可由系統安全改寫的地方；"
+        f"COST {relation}規範門檻 {threshold:,}，是否能降低仍需搭配實際資料庫環境確認。"
+    )
 
 
 _ADVICE_ONLY_PROSE_GUARDS: tuple[tuple[str, re.Pattern[str], re.Pattern[str], str], ...] = (
@@ -1126,6 +1165,11 @@ def _finalize_suggested_sql(
 
     if outcome == "advice_only":
         reason = _tidy_advice_only_reason(reason)
+    elif outcome == "not_needed":
+        cost_reason = _cost_block_not_needed_reason(cost, rules_config)
+        if cost_reason is not None:
+            reason = cost_reason
+            confidence_score = None
 
     logger.info("ai_service: rewrite outcome=%s", outcome)
     return SuggestedSql(
@@ -1179,6 +1223,7 @@ def _finalize(
     vocab = ai_guard_cfg.get("vocabulary_replacements", {})
 
     summary: str | None = _sanitize_user_prose(raw.summary, vocab, literal_hints)
+    summary = _normalize_exact_cost_threshold_summary(summary, cost, rules_config)
     if _contains_forbidden(summary, forbidden):
         logger.info("ai_service: summary discarded on forbidden-phrase match")
         summary = None

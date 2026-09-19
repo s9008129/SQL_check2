@@ -1611,6 +1611,72 @@ def test_not_needed_cannot_surface_no_implicit_conversion_claim():
     )
     assert "無隱含型別轉換" not in text
 
+
+def test_unobservable_data_volume_and_index_setting_claim_is_removed():
+    text = ai_service._sanitize_user_prose(
+        "成本偏高可能與資料量或索引設定有關。請以 SQL 寫法本身可觀察的資訊為準。",
+        {},
+    )
+    assert "資料量" not in text
+    assert "索引設定" not in text
+    assert "SQL 寫法本身可觀察的資訊" in text
+
+
+def test_cost_not_needed_reason_distinguishes_exact_and_above_threshold(settings):
+    exact = ai_service._cost_block_not_needed_reason(100000, settings.rules_config)
+    above = ai_service._cost_block_not_needed_reason(100001, settings.rules_config)
+
+    assert exact is not None and "COST 已達規範門檻 100,000" in exact
+    assert above is not None and "COST 已高於規範門檻 100,000" in above
+
+
+@respx.mock
+async def test_exact_cost_threshold_uses_server_owned_boundary_wording(settings, chat_url):
+    sql = "SELECT A.ID FROM PLAIN_TABLE A WHERE A.ID = :ID"
+    inner = {
+        "summary": "目前執行成本（COST）過高，不符合中心規範。",
+        "advice": [],
+        "suggested_sql": {
+            "available": False,
+            "reason": "目前 SQL 寫法簡單，成本過高可能與資料量或索引設定有關，建議請 DBA 協助檢視。",
+            "sql": "",
+            "rewrite_outcome": "not_needed",
+            "confidence_score": 100,
+        },
+    }
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+
+    result = await ai_service.get_ai_result(
+        sql_text=sql,
+        cost=100000,
+        compliance_status="BLOCK",
+        findings=[
+            Finding(
+                rule_id="R001",
+                status="BLOCK",
+                fact="COST 達到規範門檻 100,000",
+                statement_index=-1,
+            )
+        ],
+        statements=parse_sql_text(sql).statements,
+        settings=settings,
+    )
+
+    assert result.status == "ok"
+    assert result.summary == "目前執行成本（COST）已達規範門檻 100,000，不符合中心規範。"
+    assert result.suggested_sql is not None
+    assert result.suggested_sql.outcome == "not_needed"
+    assert result.suggested_sql.confidence_score is None
+    assert result.suggested_sql.reason == (
+        "目前 SQL 文字本身未發現可由系統安全改寫的地方；"
+        "COST 已達規範門檻 100,000，是否能降低仍需搭配實際資料庫環境確認。"
+    )
+    assert "資料量" not in result.suggested_sql.reason
+    assert "索引" not in result.suggested_sql.reason
+
+
 @respx.mock
 async def test_remote_gemma_parity_profile_keeps_same_short_ascii_literals_as_local(settings):
     cloud_llm = dataclasses.replace(
@@ -1868,6 +1934,9 @@ def test_prompt_requires_advice_only_to_be_prose_only():
     assert "example／before 一律留空" in prompt
     assert "替代 LIKE 片段" in prompt
     assert "未驗證片段不會顯示成可複製 SQL" in prompt
+    assert "ADVICE_ONLY／INFORMATIONAL 的 explanation 只能描述**概念方向**" in prompt
+    assert "(A.STATUS = 'N' OR A.STATUS IS NULL)" in prompt
+    assert ">= 2024-01-01 AND < 2025-01-01" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -1926,6 +1995,9 @@ def test_system_prompt_calibrates_confidence_without_turning_it_into_permission(
         "60–79",
         "0–59",
         "低 confidence 是合法且有價值的輸出",
+        "confidence_score **不得超過 79**",
+        "suggested_sql 若 available=false",
+        "confidence_score **必須填 0**",
     ):
         assert phrase in prompt
 

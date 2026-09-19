@@ -1491,3 +1491,74 @@ def test_not_needed_cannot_surface_no_implicit_conversion_claim():
         {},
     )
     assert "無隱含型別轉換" not in text
+
+@respx.mock
+async def test_remote_gemini_profile_masks_short_ascii_literals_too(settings):
+    cloud_llm = dataclasses.replace(
+        settings.llm,
+        provider="gemini",
+        provider_type="gemini",
+        remote=True,
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+        model="gemini-3.8-flash",
+        api_key_env="GEMINI_API_KEY",
+        api_key="test-key",
+        allow_short_ascii_literals=False,
+    )
+    cloud = dataclasses.replace(settings, llm=cloud_llm)
+    route = respx.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "finishReason": "STOP",
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": json.dumps(
+                                        {
+                                            "summary": "目前未發現需要調整的寫法。",
+                                            "advice": [],
+                                            "suggested_sql": {
+                                                "available": False,
+                                                "reason": "目前未發現需要調整的寫法。",
+                                                "rewrite_outcome": "not_needed",
+                                            },
+                                        },
+                                        ensure_ascii=False,
+                                    )
+                                }
+                            ]
+                        },
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 100,
+                    "candidatesTokenCount": 30,
+                    "totalTokenCount": 130,
+                },
+            },
+        )
+    )
+
+    sql = "SELECT A.X FROM T A WHERE A.CODE = '55'"
+    result = await ai_service.get_ai_result(
+        sql_text=sql,
+        cost=1000,
+        compliance_status="PASS",
+        findings=[],
+        statements=parse_sql_text(sql).statements,
+        settings=cloud,
+    )
+    assert result.status == "ok"
+
+    body = json.loads(route.calls[0].request.content)
+    user_content = body["contents"][0]["parts"][0]["text"]
+    payload = json.loads(user_content.removeprefix("<SQL_DATA>\n").removesuffix("\n</SQL_DATA>"))
+    assert "'55'" not in payload["sanitized_sql"]
+    assert ":STR_001" in payload["sanitized_sql"]
+    assert payload["literal_hints"][":STR_001"]["length"] == 2
+

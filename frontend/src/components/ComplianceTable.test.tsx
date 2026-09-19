@@ -51,3 +51,19 @@ describe("ComplianceTable", () => {
     expect(screen.getByText("1 項不符合")).toBeTruthy();
   });
 });
+
+
+it("labels REVIEW separately from ordinary reminders", () => {
+  render(
+    <ComplianceTable
+      compliance={{ status: "REVIEW", label: "請人工確認", notice_count: 0, block_count: 0 }}
+      parseMessage={null}
+      rules={[
+        { rule_id: "R001", name: "COST", status: "PASS", evidence: "42,000", note: "低於門檻" },
+        { rule_id: "R002", name: "WHERE 查詢條件", status: "REVIEW", evidence: "JOIN ON", note: "請人工確認" },
+      ]}
+    />,
+  );
+  expect(screen.getByText("1 項需確認")).toBeTruthy();
+  expect(screen.queryByText(/1 提醒/)).toBeNull();
+});

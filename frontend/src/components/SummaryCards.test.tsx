@@ -9,8 +9,8 @@ describe("SummaryCards — improvement colour states", () => {
     const { container } = render(<SummaryCards result={result} />);
     expect(screen.getByText("68 / 100")).toBeTruthy();
     expect(screen.getByTestId("improvement-level").textContent).toBe("建議改善");
-    expect(screen.getByText("改善優先指數")).toBeTruthy();
-    expect(screen.queryByText("改善指數")).toBeNull();
+    expect(screen.getByText("改善指數")).toBeTruthy();
+    expect(screen.queryByText("改善優先指數")).toBeNull();
     expect(screen.queryByText("67")).toBeNull();
     expect(container.querySelector(".tone-yellow")).toBeTruthy();
   });
@@ -38,7 +38,7 @@ describe("SummaryCards — improvement colour states", () => {
     expect(screen.queryByTestId("breakdown-list")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /指數組成/ }));
     const list = screen.getByTestId("breakdown-list");
-    expect(list.textContent).toContain("指數為 0～100 分");
+    expect(list.textContent).toContain("0～100 分，綜合規則、SQL 結構與 COST 計算。");
     expect(list.textContent).toContain("+40 分");
     expect(list.textContent).toContain("目前 COST 68,888 約為規範門檻 100,000 的 69%");
     expect(list.textContent).toContain("至少 80 分");
@@ -161,5 +161,23 @@ describe("SummaryCards — AI-dependent card", () => {
     });
     render(<SummaryCards result={result} />);
     expect(screen.getByText("暫不提供")).toBeTruthy();
+  });
+});
+
+
+describe("SummaryCards — REVIEW wording", () => {
+  it("shows the number of items that need confirmation instead of saying there are no reminders", () => {
+    render(
+      <SummaryCards
+        result={makeResult({
+          compliance: { status: "REVIEW", label: "請人工確認", notice_count: 0, block_count: 0 },
+          rules: [
+            { rule_id: "R002", name: "WHERE 查詢條件", status: "REVIEW", evidence: "JOIN ON", note: "請人工確認" },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText("1 項需確認")).toBeTruthy();
+    expect(screen.queryByText("目前無提醒事項")).toBeNull();
   });
 });

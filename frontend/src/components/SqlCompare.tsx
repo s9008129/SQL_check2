@@ -2,14 +2,6 @@ import { useMemo } from "react";
 import type { AdviceItem, AiResult } from "../types/api";
 import { FragmentDiff, FullSqlDiff } from "./SqlDiffView";
 import { locateOriginalFragment, looksLikeSqlFragment } from "../lib/sqlDiff";
-import {
-  AI_PENDING_MESSAGE,
-  AI_UNAVAILABLE_MESSAGE,
-  SUGGESTED_SQL_ADVICE_ONLY_MESSAGE,
-  SUGGESTED_SQL_NOT_AVAILABLE_MESSAGE,
-  SUGGESTED_SQL_NOT_NEEDED_MESSAGE,
-  SUGGESTED_SQL_WARNING,
-} from "../lib/copy";
 
 export interface SqlCompareProps {
   originalSql: string;
@@ -26,13 +18,10 @@ interface Segment {
 
 const VERIFICATION_NOTE: Record<NonNullable<AdviceItem["verification"]>, string | null> = {
   verified: null,
-  corrected: "AI 原本給的寫法會改變查詢結果，系統已改為查詢結果不變的寫法。",
-  unverified: "系統無法確認這個改法會保留相同查詢結果，請先確認業務條件，不要直接套用。",
+  corrected: "AI 原本寫法已由系統修正。",
+  unverified: null,
 };
 
-// "若 TAX_CD 為 2 碼且 SUBTAX_CD 為 1 碼：WHERE ..." — the model sometimes keeps
-// the business assumption as a prefix inside `example`; split it off so the
-// diff compares SQL with SQL and the assumption is shown as a note.
 const ASSUMPTION_PREFIX_RE = /^((?:若|假設|如果)[^：:]{1,80})[：:]\s*/;
 
 export function splitAssumption(example: string): { sql: string; assumption: string | null } {
@@ -41,19 +30,12 @@ export function splitAssumption(example: string): { sql: string; assumption: str
   return { sql: example.slice(m[0].length).trim(), assumption: m[1] };
 }
 
-/**
- * Every advice item that carries a SQL fragment becomes one "segment" for
- * the per-advice diff list. `before` comes from the model when it copied
- * the original fragment verbatim; otherwise we try to locate the closest
- * original line so the reviewer still gets a side-by-side view.
- */
 function toSegments(originalSql: string, advice: AdviceItem[]): Segment[] {
   const segments: Segment[] = [];
   for (const item of advice) {
     const raw = item.example?.trim();
     if (!raw) continue;
     const { sql: after, assumption } = splitAssumption(raw);
-    // Prose-only examples stay on the advice card; they are not SQL to diff.
     if (!after || !looksLikeSqlFragment(after)) continue;
     const before = item.before?.trim() || locateOriginalFragment(originalSql, after);
     const verification = item.before?.trim() ? (item.verification ?? null) : null;
@@ -61,23 +43,13 @@ function toSegments(originalSql: string, advice: AdviceItem[]): Segment[] {
       assumption ? `前提：${assumption}` : null,
       item.assumption ? `前提：${item.assumption}` : null,
       verification ? VERIFICATION_NOTE[verification] : null,
-      before ? null : "找不到對應的原始片段，僅顯示建議片段。",
+      before ? null : "找不到對應的原寫法。",
     ].filter((n): n is string => n !== null);
     segments.push({ title: item.title, before, after, note: notes.length ? notes.join("　") : null, verification });
   }
   return segments;
 }
 
-/**
- * 原寫法與建議寫法區 (PRD §33 「SQL 寫法比較」), 2026-09-17 layout: a one-line AI
- * verdict, then — when a full rewrite exists — the whole statement as a
- * line-aligned, word-highlighted diff, then every advice item with a SQL
- * fragment as its own before/after diff. The old side-by-side editor panes
- * were removed (user request): the segment diffs already show the original
- * fragments, and the original statement is visible in the input panel. The
- * COST is deliberately not repeated here (user request; it lives in the
- * summary cards and the rule table).
- */
 export default function SqlCompare({ originalSql, ai }: SqlCompareProps) {
   const suggestedSql =
     ai.status === "ok" && ai.suggested_sql?.available && ai.suggested_sql.sql
@@ -89,61 +61,28 @@ export default function SqlCompare({ originalSql, ai }: SqlCompareProps) {
     [ai.status, ai.advice, originalSql],
   );
 
-  const outcome = ai.suggested_sql?.outcome;
-
-  let verdict: React.ReactNode;
-  if (ai.status === "pending") {
-    verdict = <div className="ai-note">{AI_PENDING_MESSAGE}</div>;
-  } else if (ai.status === "unavailable") {
-    verdict = <div className="ai-note">{ai.message?.trim() ? ai.message : AI_UNAVAILABLE_MESSAGE}</div>;
-  } else if (suggestedSql !== null) {
-    verdict = null;
-  } else {
-    const headline =
-      outcome === "not_needed"
-        ? SUGGESTED_SQL_NOT_NEEDED_MESSAGE
-        : outcome === "advice_only"
-          ? SUGGESTED_SQL_ADVICE_ONLY_MESSAGE
-          : SUGGESTED_SQL_NOT_AVAILABLE_MESSAGE;
-    const reason =
-      ai.suggested_sql?.reason && ai.suggested_sql.reason !== SUGGESTED_SQL_NOT_AVAILABLE_MESSAGE
-        ? ai.suggested_sql.reason
-        : null;
-    // 2026-09-17: when the backend declined (gated/rejected) with a specific
-    // reason, that reason IS the message — showing the generic PRD sentence
-    // above it read as two contradicting statements ("不自動產生建議寫法" right
-    // before a list of 建議寫法). advice_only / not_needed keep their own
-    // headline because their reason is the model's supporting detail.
-    const serverDeclined = outcome !== "not_needed" && outcome !== "advice_only";
-    const headlineText = serverDeclined && reason ? reason : headline;
-    const detailText = serverDeclined ? null : reason;
-    verdict = (
-      <div className={`ai-note${outcome === "not_needed" ? " ai-note-good" : ""}`} data-testid="compare-verdict">
-        <p className="verdict-headline">{headlineText}</p>
-        {detailText && <p className="verdict-reason">{detailText}</p>}
-      </div>
-    );
+  if (ai.status !== "ok" || (suggestedSql === null && segments.length === 0)) {
+    return null;
   }
 
+  const hasUnverified = segments.some(
+    (seg) => seg.verification !== "verified" && seg.verification !== "corrected",
+  );
+  const statusTone = suggestedSql !== null && !hasUnverified ? "green" : "yellow";
+  const statusText = statusTone === "green" ? "已確認" : "需確認";
+
   return (
-    <section className="card card-compare">
+    <section className={`card card-compare card-compare-${statusTone}`}>
       <div className="card-head">
-        <div>
-          <div className="card-title">原寫法與建議寫法</div>
-          <div className="card-desc card-warning" role="note">
-            ⚠ {SUGGESTED_SQL_WARNING}
-          </div>
-        </div>
-        <span className="badge blue">對照查看</span>
+        <div className="card-title">建議寫法</div>
+        <span className={`badge ${statusTone}`}>{statusText}</span>
       </div>
       <div className="card-body">
-        {verdict}
-
         {suggestedSql !== null && (
           <div className="sql-box sql-box-light">
             <div className="sql-head">
               <span>
-                原始 SQL 與查詢結果已確認的建議寫法逐行對照 · <mark className="diff-add legend">黃底</mark> 為建議修改處
+                原寫法與建議寫法對照 · <mark className="diff-add legend">黃底</mark> 為修改處
               </span>
             </div>
             <FullSqlDiff original={originalSql} suggested={suggestedSql} />
@@ -152,7 +91,7 @@ export default function SqlCompare({ originalSql, ai }: SqlCompareProps) {
 
         {segments.length > 0 && (
           <div className="segment-list">
-            <div className="segment-list-title">逐段對照（每一項建議都會標示目前可採用程度）</div>
+            <div className="segment-list-title">寫法對照</div>
             {segments.map((seg, i) =>
               seg.before ? (
                 <FragmentDiff
@@ -164,15 +103,15 @@ export default function SqlCompare({ originalSql, ai }: SqlCompareProps) {
                   verification={seg.verification}
                 />
               ) : (
-                <div className="fragment-diff" key={i} data-testid="fragment-diff">
+                <div className="fragment-diff fragment-unverified" key={i} data-testid="fragment-diff">
                   <div className="fragment-title">
                     {i + 1}. {seg.title}
                   </div>
-                  <div className="fragment-cell fragment-after">
-                    <div className="fragment-label">建議片段</div>
+                  <div className="fragment-cell fragment-after fragment-after-unverified">
+                    <div className="fragment-label">參考寫法（需確認）</div>
                     <code>{seg.after}</code>
                   </div>
-                  <div className="fragment-note">{seg.note}</div>
+                  {seg.note && <div className="fragment-note">{seg.note}</div>}
                 </div>
               ),
             )}

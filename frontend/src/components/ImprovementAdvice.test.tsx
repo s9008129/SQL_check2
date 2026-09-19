@@ -6,7 +6,7 @@ import { makeAi } from "../test/fixtures";
 describe("ImprovementAdvice", () => {
   it("renders advice cards when ai.status is ok", () => {
     render(<ImprovementAdvice ai={makeAi()} />);
-    expect(screen.getByText("建議先看這些")).toBeTruthy();
+    expect(screen.getByText(/智慧改善建議/)).toBeTruthy();
     expect(screen.getByText("日期條件可再簡化")).toBeTruthy();
     expect(
       screen.getByText("目前使用 TRUNC() 比對日期，可評估改成日期範圍。"),
@@ -44,9 +44,9 @@ describe("ImprovementAdvice", () => {
         })}
       />,
     );
-    expect(screen.getByText("系統可確認")).toBeTruthy();
-    expect(screen.getByText("需人工確認")).toBeTruthy();
-    expect(screen.getByText("觀念提醒")).toBeTruthy();
+    expect(screen.getByText("已確認")).toBeTruthy();
+    expect(screen.getByText("需確認")).toBeTruthy();
+    expect(screen.getByText("提醒")).toBeTruthy();
     expect(screen.queryByText("影響：高")).toBeNull();
     expect(screen.queryByText("影響：低")).toBeNull();
   });
@@ -93,4 +93,11 @@ describe("ImprovementAdvice", () => {
       screen.getByText("智慧改善建議目前暫時無法使用，仍可依上方規則檢核結果進行確認。"),
     ).toBeTruthy();
   });
+});
+
+
+it("does not repeat the AI summary when detailed advice cards are visible", () => {
+  render(<ImprovementAdvice ai={makeAi({ summary: "這句摘要不應重複顯示。" })} />);
+  expect(screen.queryByText("這句摘要不應重複顯示。")).toBeNull();
+  expect(screen.getByText("AI 建議僅供參考，採用前請先測試。")).toBeTruthy();
 });

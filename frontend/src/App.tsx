@@ -4,7 +4,6 @@ import SummaryCards from "./components/SummaryCards";
 import ResultOverview from "./components/ResultOverview";
 import ComplianceTable from "./components/ComplianceTable";
 import ImprovementAdvice from "./components/ImprovementAdvice";
-import EstimateCard from "./components/EstimateCard";
 import SqlCompare from "./components/SqlCompare";
 import PrintFooter from "./components/PrintFooter";
 import { analyze, ApiError } from "./api/client";
@@ -203,7 +202,6 @@ export default function App() {
               <SummaryCards result={result} />
               <ImprovementAdvice ai={result.ai} />
               <SqlCompare originalSql={submittedSql} ai={result.ai} />
-              <EstimateCard ai={result.ai} compliance={result.compliance} />
               <ComplianceTable
                 rules={result.rules}
                 compliance={result.compliance}

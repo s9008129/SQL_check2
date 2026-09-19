@@ -1561,3 +1561,21 @@ async def test_remote_gemma_parity_profile_keeps_same_short_ascii_literals_as_lo
     assert "'55'" in payload["sanitized_sql"]
     assert ":STR_001" not in payload["sanitized_sql"]
 
+
+
+def test_sanitize_user_prose_uses_typed_literal_hint_for_date_placeholder():
+    text = ai_service._sanitize_user_prose(
+        "請確認 :STR_001 的格式。",
+        {},
+        {":STR_001": {"kind": "string", "oracle_literal_type": "date"}},
+    )
+    assert text == "請確認 原查詢中的日期值 的格式。"
+
+
+def test_sanitize_user_prose_uses_typed_literal_hint_for_timestamp_placeholder():
+    text = ai_service._sanitize_user_prose(
+        "請確認 :STR_001 的格式。",
+        {},
+        {":STR_001": {"kind": "string", "oracle_literal_type": "timestamp"}},
+    )
+    assert text == "請確認 原查詢中的日期時間值 的格式。"

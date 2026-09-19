@@ -38,8 +38,8 @@ describe("SqlCompare — merged suggestion/adoption block", () => {
     expect(screen.queryByText("建議採用狀態")).toBeNull();
   });
 
-  it("uses yellow 需確認 semantics for an unverified fragment", () => {
-    render(
+  it("hides unverified fragments even if an old API response still contains one", () => {
+    const { container } = render(
       <SqlCompare
         originalSql="SELECT A.X FROM T A WHERE A.NAME LIKE '%明'"
         ai={makeAi({
@@ -57,32 +57,31 @@ describe("SqlCompare — merged suggestion/adoption block", () => {
         })}
       />,
     );
-    expect(screen.getByText("需確認")).toBeTruthy();
-    expect(screen.getByText("參考寫法（需確認）")).toBeTruthy();
-    expect(screen.queryByText(/示意方向/)).toBeNull();
-    expect(screen.queryByText(/系統無法確認這個改法/)).toBeNull();
+    expect(container.firstChild).toBeNull();
+    expect(screen.queryByText("A.NAME LIKE '明%'")).toBeNull();
   });
 
-  it("uses the short 寫法對照 heading without the old parenthetical", () => {
+  it("shows verified advice fragments in the concise 寫法對照 block", () => {
     render(
       <SqlCompare
-        originalSql="SELECT A.X FROM T A WHERE A.NAME LIKE '%明'"
+        originalSql="SELECT A.X FROM T A WHERE A.C = '1' OR A.C = '2'"
         ai={makeAi({
           advice: [
             {
-              title: "評估 LIKE 比對方式",
-              explanation: "先確認需求。",
-              before: "A.NAME LIKE '%明'",
-              example: "A.NAME LIKE '明%'",
+              title: "合併相同欄位條件",
+              explanation: "可改成 IN。",
+              before: "A.C = '1' OR A.C = '2'",
+              example: "A.C IN ('1','2')",
               impact: "low",
-              verification: "unverified",
+              verification: "verified",
             },
           ],
-          suggested_sql: { available: false, reason: "需確認。", sql: null, outcome: "advice_only" },
+          suggested_sql: { available: false, reason: "局部建議。", sql: null, outcome: "advice_only" },
         })}
       />,
     );
     expect(screen.getByText("寫法對照")).toBeTruthy();
+    expect(screen.getByText("建議寫法（已確認）")).toBeTruthy();
     expect(screen.queryByText(/每一項建議都會標示/)).toBeNull();
   });
 });

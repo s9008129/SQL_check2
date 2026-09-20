@@ -8,7 +8,8 @@ is reshaped around what SQLCheck can actually verify:
 
 1. **Detect** — `sql_parser.py` (sqlglot AST) and `rule_engine.py` extract
    objective structural facts: tables, `complexity_flags`,
-   `structural_signature`, rule findings (R001–R008). No judgment yet.
+   `structural_signature`, rule findings（現行 active policy 為 R001–R007；R008 engine capability
+   仍保留但已由 2026-09-20 owner 決策停用）。No judgment yet.
 
 2. **Classify** — `pattern_catalog.yaml` decides how far a detected pattern
    may go: VERIFIED_REWRITE / ADVICE_ONLY / INFORMATIONAL / OUT_OF_SCOPE.

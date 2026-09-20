@@ -1,3 +1,7 @@
+> **文件狀態：HISTORICAL / 歷史交接快照**  
+> 本檔記錄過去階段的交接內容，內含當時尚未完成、後來已修正或已結案的事項。  
+> **目前待辦請看 `tasks/todo.md`，文件狀態請看 `docs/document-status.md`；不要把本檔的「待辦」直接視為現在 backlog。**
+
 # SQLCheck 2.0 交接文件（Handoff）— 2026-09-17
 
 > 給接手 Agent 的指示 prompt（請將下面這段直接貼給新對話的 Agent）：

@@ -2,10 +2,11 @@
 #
 # name    : 精確表名比對（不分大小寫，比對時忽略 schema 前綴，例如 TAX.HOUT120 -> HOUT120）。
 # pattern : fnmatch 萬用字元比對（不分大小寫），例如 "HOU*" 會同時比對到 HOUT120 與
-#           HOUSE_TMP 這類名稱，需業務端確認清單後再收斂。
+#           HOUSE_TMP 這類名稱；若未來要調整範圍，必須另有 owner 決策。
 # message : 顯示於「智慧改善建議」與規則比對表的提醒文字。
 #
-# 以下僅為 PRD 範例值，正式清單待業務端提供（PRD §61.4），不得由 Coding Agent 自行擴充。
+# 2026-09-20 owner 確認：重要資料表維持目前「提醒」用途並結案。
+# 以下清單作為現行 operational baseline；Coding Agent 不得自行擴充或把提醒升級為禁止。
 
 important_tables:
   - name: WIIT001
@@ -13,7 +14,7 @@ important_tables:
   - pattern: "HOU*"
     message: 請確認查詢條件範圍，避免一次讀取過多資料。
 
-# 重要資料表禁止操作矩陣（R008，PRD §13.3、§45）。
-# 每筆：table（name 或 pattern）+ statement_types（適用的 BLOCK 語句類型）+ message。
-# 正式清單待業務端提供；預設空陣列，R008 在此清單為空時不會產生任何 BLOCK。
+# R008 已於 2026-09-20 由專案 owner 正式結案：實務上沒有重要資料表「禁止操作」矩陣，
+# 重要資料表只保留上方 R007 NOTICE 提醒。因此此陣列固定維持空白，R008 也在 rules.yaml 停用。
+# 若未來真的出現新的正式規範，應另開需求重新評估，而不是把這裡視為待補清單。
 forbidden_operations: []

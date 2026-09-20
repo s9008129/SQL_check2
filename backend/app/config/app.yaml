@@ -102,6 +102,10 @@ ai_guard:
 
 # 送給 AI 前的 SQL 遮罩規則（backend/app/services/masking.py，PRD §17.4、§20）。
 masking:
+  # 2026-09-20 專案 owner 確認：目前 Balanced privacy policy 已達實務平衡，正式結案。
+  # 不新增 Strict Mode；保留必要 SQL 結構與短 ASCII 業務碼，同時沿用既有 literal masking
+  # 與一般自由文字註解移除。未來若有新的資安規範，再另案評估。
+  #
   # 2026-09-16 新增：字串常數只有在「長度 <= 此值，且僅含 ASCII 英數字／% ／ _」
   # 時才保留原文不遮罩（例如 '114%'、'2'、'H'、'55R' 這類稅務代碼／年度／萬用字元）。
   # 背景：實測發現舊規則把所有字串常數一律遮罩，導致 AI 看不到
@@ -118,6 +122,8 @@ masking:
 # 申請單號／COST」的明確例外——蒐集檔只存去識別化後的 SQL 與規則結果，不存
 # 申請單號、原始 SQL 常數值、附件檔名或任何使用者/IP 資訊。
 archive:
+  # 2026-09-20 專案 owner 確認：SQL Archive retention 維持現況，不新增自動 purge／retention。
+  # 此項正式結案；runtime archive 仍由部署環境依既有方式保存與人工維運。
   enabled: true
   enabled_env: SQLCHECK_ARCHIVE_ENABLED
   dir_env: SQLCHECK_ARCHIVE_DIR

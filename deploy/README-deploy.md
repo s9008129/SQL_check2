@@ -202,19 +202,18 @@ App-only deploy 不會自動匯入 Windows Trusted Root。
 
 ## 9. Windows Firewall / Ollama 11434
 
-目前正式機 10.97.15.58 的 Firewall / 11434 hardening 是已知、延後的獨立工作。
+2026-09-20 專案 owner 已決定：Ollama 11434 / Windows Firewall hardening 由 owner **人工維運**，
+不再列入 SQLCheck 應用程式專案的待辦或 release gate。
 
-日常 `deploy.ps1` 不會因此失敗，也不會嘗試修正。
+因此：
 
-核心程式完成後，再使用 `deploy-infra.ps1` 與主機實測完成：
+- 日常 `deploy.ps1` 不修改 Firewall、`OLLAMA_HOST` 或 Windows 網路設定。
+- `deploy-infra.ps1` 保留作為歷史／人工基礎設施工具，但不代表部署時一定要執行。
+- SQLCheck 程式碼與一般 PR 不應因 11434 人工治理尚未處理而被阻塞。
+- 若 owner 要做主機端安全調整，應在正式 Windows 主機上自行驗證 container → Ollama 仍可連線，
+  並依現場網路政策限制不必要的 LAN 存取。
 
-1. container -> `host.docker.internal:11434` 成功
-2. `/api/health` -> `ai_available:true`
-3. 第二台 LAN 電腦 -> `10.97.15.58:11434` 失敗
-4. Windows Firewall 規則來源範圍明確限制
-
-在那之前，不要使用 `-BreakGlassFirewall` 來繞過日常部署問題；日常部署直接使用
-App-only `deploy.ps1`。
+這項目已結案；除非 owner 重新開案，Coding Agent 不得自行修改正式主機 Firewall 政策。
 
 ---
 
@@ -232,6 +231,9 @@ Deployment scripts 有獨立 GitHub Actions：
 - 保留原有 firewall helper regression tests
 
 正式 merge 前，Deploy Script CI 必須綠燈。
+
+真正 Ollama Cloud / Gemma 的模型驗證另由 `.github/workflows/live-cloud-e2e.yml` 手動執行；
+它不是每次部署或 PR 的自動必要步驟。
 
 ---
 

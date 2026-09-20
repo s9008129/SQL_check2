@@ -1,3 +1,7 @@
+> **文件狀態：REFERENCE / 累積歷史紀錄**  
+> 本檔保留開發過程的 lessons、舊問題與當時決策，內容刻意不回寫成「永遠正確的現在式」。  
+> **目前專案狀態與 backlog 請看 `tasks/todo.md`；文件新舊判讀請看 `docs/document-status.md`。**
+
 # Lessons
 
 （尚無；於修正或事後檢討時新增：失敗模式 / 偵測訊號 / 預防規則）

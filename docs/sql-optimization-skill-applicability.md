@@ -1,3 +1,6 @@
+> **文件狀態：REFERENCE**  
+> 本文件是外部 sql-optimization skill 的適用性研究，不是現行 runtime 規格。Pattern Catalog、SQLCheck skill 與 deterministic runtime 才是現行治理來源。
+
 # Awesome Copilot `sql-optimization` skill — applicability to SQLCheck
 
 Source reviewed: `github/awesome-copilot`, `skills/sql-optimization/SKILL.md`

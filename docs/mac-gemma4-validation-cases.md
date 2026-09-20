@@ -1,3 +1,7 @@
+> **文件狀態：REFERENCE / 人工驗證案例集**  
+> 這 5 案仍可用來人工觀察 UI 與模型語意，但不再是主要 Live 驗收流程。  
+> **目前真實模型驗證優先使用 GitHub Actions 的 `Manual Live Cloud E2E`（smoke / full）；本文件保留作人工補充案例。**
+
 # Mac / Ollama Cloud：Gemma 4 31B 五情境驗證
 
 目的：在沒有正式案件 SQL 的 Mac 上，用 **synthetic SQL** 驗證與正式機相同的 Gemma 4 31B

@@ -1,0 +1,126 @@
+name: Cloud E2E Smoke
+
+on:
+  push:
+    branches:
+      - test/cloud-e2e-smoke-20260920
+    paths:
+      - ".github/workflows/cloud-e2e-smoke.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-e2e-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-ollama-cloud-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SQLCHECK_LLM_PROVIDER: ollama_cloud
+      OLLAMA_API_KEY: ${{ secrets.openrouter }}
+      OLLAMA_CLOUD_MODEL: gemma4:31b
+      SQLCHECK_ARCHIVE_ENABLED: "false"
+      RUN_ROOT: data/cloud_e2e_smoke_${{ github.run_id }}
+      TMPDIR: ${{ github.workspace }}/data/cloud_e2e_smoke_${{ github.run_id }}/tmp
+      TMP: ${{ github.workspace }}/data/cloud_e2e_smoke_${{ github.run_id }}/tmp
+      TEMP: ${{ github.workspace }}/data/cloud_e2e_smoke_${{ github.run_id }}/tmp
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare evidence directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUN_ROOT/logs" "$RUN_ROOT/tmp"
+          {
+            echo "workflow=Cloud E2E Smoke"
+            echo "sha=$GITHUB_SHA"
+            echo "ref=$GITHUB_REF"
+            echo "run_id=$GITHUB_RUN_ID"
+          } > "$RUN_ROOT/environment.txt"
+
+      - name: Verify secret alias is present
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${OLLAMA_API_KEY:-}" ]; then
+            echo "::error::GitHub secret 'openrouter' did not resolve into OLLAMA_API_KEY."
+            exit 20
+          fi
+          echo "secret_alias=openrouter -> OLLAMA_API_KEY (present; value not printed)"             >> "$RUN_ROOT/environment.txt"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install --disable-pip-version-check "uv==0.12.5"
+
+      - name: Ollama Cloud provider preflight
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --frozen --python 3.12 python - <<'PY'             > "../$RUN_ROOT/logs/provider_preflight.txt" 2>&1
+          import asyncio
+          from app.settings import get_settings
+          from app.services import llm_provider
+
+          settings = get_settings()
+          llm = settings.llm
+          print(f"provider={llm.provider}")
+          print(f"provider_type={llm.provider_type}")
+          print(f"remote={llm.remote}")
+          print(f"base_url={llm.base_url}")
+          print(f"model={llm.model}")
+          print(f"api_key_present={bool(llm.api_key)}")
+          print(f"temperature={llm.temperature}")
+          print(f"top_p={llm.top_p}")
+          print(f"top_k={llm.top_k}")
+          print(f"context_window={llm.context_window}")
+          print(f"max_output_tokens={llm.max_output_tokens}")
+          print(f"think={llm.think}")
+
+          if llm.provider != "ollama_cloud":
+              raise SystemExit("provider mismatch")
+          if llm.base_url != "https://ollama.com":
+              raise SystemExit("base_url mismatch")
+          if llm.model != "gemma4:31b":
+              raise SystemExit("model mismatch")
+          if not llm.api_key:
+              raise SystemExit("api key missing after settings load")
+          available = asyncio.run(llm_provider.check_available(llm))
+          print(f"provider_available={available}")
+          if not available:
+              raise SystemExit("Ollama Cloud /api/tags preflight failed")
+          PY
+
+      - name: Live Gemma golden smoke
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --frozen --python 3.12             python tests/golden/run_golden.py -v             --out "../$RUN_ROOT/golden_evidence.json"             > "../$RUN_ROOT/logs/golden.txt" 2>&1
+
+      - name: Build manifest and checksums
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          find "$RUN_ROOT" -type f -printf '%P\t%s bytes\n' | sort > "$RUN_ROOT/manifest.txt"
+          find "$RUN_ROOT" -type f ! -path '*/tmp/*' -print0             | sort -z             | xargs -0 sha256sum > "$RUN_ROOT/logs/checksums.sha256"
+
+      - name: Upload smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloud-e2e-smoke-${{ github.run_id }}
+          path: data/cloud_e2e_smoke_${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 7

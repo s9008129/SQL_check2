@@ -30,6 +30,28 @@ Python uses four spaces, Python 3.12 syntax, `snake_case` functions/modules, and
 
 Use Pytest/`pytest-asyncio` for backend tests and Vitest with Testing Library for frontend tests. Name tests `test_*.py` or `*.test.ts(x)`. Add focused regression coverage for changed behavior, then run the complete affected suite and frontend build. Use only synthetic or de-identified SQL in cloud-backed tests.
 
+## E2E Artifact & Disk Hygiene
+
+All manual, Live-Gemma, browser, Computer Use, and regression evidence must stay under the repository's ignored `data/` tree. **Do not write test artifacts to `/tmp`, `/var/tmp`, the repository root, or arbitrary desktop/download folders.**
+
+For every independent test run, create one clearly named run directory, for example:
+
+```text
+data/e2e_post_pr20_YYYYMMDD_HHMMSS/
+```
+
+Put every run-specific artifact there, including temporary test harness scripts created only for that run, raw model captures, final API JSON, CSV matrices, logs, screenshots, print evidence, environment/git-state evidence, and the Markdown report. Product source code changes still belong in the normal source tree; this rule applies to generated test/run artifacts.
+
+At the end of the run:
+
+1. remove disposable caches/intermediate files that are not evidence;
+2. scan the artifact tree for secrets and identifiable production SQL/data;
+3. package the complete run directory into a single ZIP under `data/`, using the same run name;
+4. verify the ZIP can be opened and contains the expected manifest;
+5. report the ZIP path as the hand-off artifact for independent review.
+
+The contents of `data/` are intentionally git-ignored (except repository documentation/placeholders). Never commit E2E evidence, Live model output, screenshots, or ZIP bundles unless the user explicitly requests it. Do not delete or modify `data/sql_archive/`, which is application runtime data.
+
 ## Commit & Pull Request Guidelines
 
 ### Commit message 規則（強制）

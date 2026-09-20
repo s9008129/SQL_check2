@@ -45,6 +45,7 @@ from sqlglot import exp, parse_one
 
 from app.schemas import AdviceItem, AiResult, Finding, SuggestedSql, normalize_confidence_score
 from app.services import context_adapter, llm_provider, pattern_selector, rewrite_rules, rule_engine
+from app.services.cost_utils import classify_cost_relation, cost_formal_summary, cost_threshold_note
 from app.services.masking import mask_sql, scrub_invented_placeholders, unmask_sql
 from app.services.rule_engine import GLOBAL_STATEMENT_INDEX
 from app.services.sql_parser import ParsedStatement, parse_sql_text, structural_signature
@@ -363,6 +364,7 @@ def _build_payload(
     where_evidence: dict[str, str] | None = None,
     structure_flags: list[str] | None = None,
     knowledge_context: list[dict[str, str]] | None = None,
+    cost_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the de-identified <SQL_DATA> object sent to Gemma.
 
@@ -379,6 +381,10 @@ def _build_payload(
         "statement_type": statement_type,
         "sanitized_sql": sanitized_sql,
         "input_cost": cost,
+        # R001 boundary semantics are calculated by the server, not inferred
+        # by the model.  The model may explain this context but must not
+        # recompute whether the value is equal to or above the threshold.
+        "cost_context": cost_context or {},
         "compliance": compliance_status,
         "findings": [{"rule_id": f.rule_id, "level": f.status, "fact": f.fact} for f in findings],
         "important_table_notices": important_table_notices,
@@ -500,18 +506,35 @@ def _configured_cost_threshold(rules_config: dict[str, Any]) -> int | None:
     return None
 
 
-def _normalize_exact_cost_threshold_summary(
+def _cost_context(cost: int, rules_config: dict[str, Any]) -> dict[str, Any]:
+    """Deterministic R001 context sent to the model.
+
+    The model should never have to infer the exact threshold relationship
+    from a bare number.  This context is advisory input only; rule_engine
+    remains the compliance authority.
+    """
+    threshold = _configured_cost_threshold(rules_config)
+    if threshold is None:
+        return {}
+    return {
+        "threshold": threshold,
+        "relation": classify_cost_relation(cost, threshold),
+        "formal_message": cost_formal_summary(cost, threshold),
+    }
+
+
+def _normalize_cost_threshold_summary(
     summary: str | None,
     cost: int,
     rules_config: dict[str, Any],
 ) -> str | None:
-    """Use exact boundary wording when COST equals the configured threshold."""
+    """Use server-owned wording for every R001 BLOCK boundary relation."""
     threshold = _configured_cost_threshold(rules_config)
-    if threshold is None or cost != threshold or not summary:
+    if threshold is None or cost < threshold or not summary:
         return summary
     if "COST" not in summary and "執行成本" not in summary:
         return summary
-    return f"目前執行成本（COST）已達規範門檻 {threshold:,}，不符合中心規範。"
+    return cost_formal_summary(cost, threshold)
 
 
 def _cost_block_not_needed_reason(cost: int, rules_config: dict[str, Any]) -> str | None:
@@ -519,10 +542,9 @@ def _cost_block_not_needed_reason(cost: int, rules_config: dict[str, Any]) -> st
     threshold = _configured_cost_threshold(rules_config)
     if threshold is None or cost < threshold:
         return None
-    relation = "已達" if cost == threshold else "已高於"
     return (
         "目前 SQL 文字本身未發現可由系統安全改寫的地方；"
-        f"COST {relation}規範門檻 {threshold:,}，是否能降低仍需搭配實際資料庫環境確認。"
+        f"COST {cost_threshold_note(cost, threshold)}，是否能降低仍需搭配實際資料庫環境確認。"
     )
 
 
@@ -1223,7 +1245,7 @@ def _finalize(
     vocab = ai_guard_cfg.get("vocabulary_replacements", {})
 
     summary: str | None = _sanitize_user_prose(raw.summary, vocab, literal_hints)
-    summary = _normalize_exact_cost_threshold_summary(summary, cost, rules_config)
+    summary = _normalize_cost_threshold_summary(summary, cost, rules_config)
     if _contains_forbidden(summary, forbidden):
         logger.info("ai_service: summary discarded on forbidden-phrase match")
         summary = None
@@ -1668,6 +1690,7 @@ async def get_ai_result(
                 where_evidence=where_evidence,
                 structure_flags=sorted(representative.complexity_flags) if representative else [],
                 knowledge_context=knowledge_context,
+                cost_context=_cost_context(cost, settings.rules_config),
             )
 
         payload = build(candidate_allowed)

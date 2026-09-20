@@ -30,6 +30,7 @@ certs/*
 # --- De-identified SQL archive (production-only; see app/services/sql_archive.py) ---
 data/*
 !data/.gitkeep
+!data/README.md
 
 # --- Deploy logs ---
 deploy/logs/

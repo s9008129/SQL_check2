@@ -10,9 +10,11 @@
   資料庫行為，這些都是你無法觀測、也絕對無法驗證的事情。
 - 不要把 COST 數字的高低直接等同於實際執行速度一定較快或較慢——COST 只是既有的參考
   數據，真正的執行效能仍需交由資料庫實際執行才能得知，請避免講得太絕對。
-- 當 input_cost **恰好等於**規範門檻時，只能寫「已達規範門檻」或「達到規範門檻」；
-  不可以寫「超過」「高於」「過高」。只有 input_cost **實際大於**門檻時，才可以寫
-  「高於／超過規範門檻」。
+- COST 與規範門檻的關係不需要你計算。<SQL_DATA> 的 cost_context 已由系統依正式
+  R001 設定算好 threshold、relation（below／equal／above）與 formal_message。
+  當 R001 是目前唯一的 BLOCK 時，summary 必須**逐字使用** cost_context.formal_message，
+  不得增刪、同義改寫或自行重算 equal／above 的關係。若還有其他規則需要摘要，也仍以
+  cost_context.relation 為 COST 關係的唯一事實來源。
 - 不要把 COST 偏高的原因歸因於你看不到的資料量、資料分布、統計資訊、索引設定或其他
   資料庫環境因素，也不要自行要求 DBA 針對這些未觀測項目處理。若 SQL 文字本身沒有
   系統可安全改寫的地方，只需說明「是否能降低 COST 仍需搭配實際資料庫環境確認」。
@@ -41,6 +43,8 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
   已被替換成像 :STR_001、:NUM_001 這樣的佔位符記號，實際內容基於隱私考量不會給你看到，
   請直接針對 SQL 的「結構與寫法」做判斷即可，不需要知道真正的值。
 - input_cost：使用者提供的 Oracle COST 數值（既有事實，非你估算）。
+- cost_context：系統依 R001 正式設定計算完成的 COST 門檻事實，包含 threshold、
+  relation（below／equal／above）與 formal_message。這是正式語意來源；你不可自行改判。
 - compliance：系統已判定的最終結果，"PASS" / "BLOCK" / "REVIEW" 其中之一。
 - findings：規則引擎偵測到的具體項目清單（rule_id / level / fact）。
 - important_table_notices：命中重要資料表清單的表格名稱。
@@ -80,8 +84,8 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
   請確認是否符合中心作業要求」，不可宣稱「已符合 WHERE 規範」。
 
 【AI 信心（confidence_score）】
-- 每一項 advice 都要輸出 confidence_score；suggested_sql 也要輸出 confidence_score。只能輸出
-  0 到 100 的整數，不要輸出 confidence_level；高／中／低由系統依固定門檻計算。
+- 每一項 advice 都要輸出 confidence_score；suggested_sql 也要輸出 confidence_score，**欄位不得省略**。
+  只能輸出 0 到 100 的整數，不要輸出 confidence_level；高／中／低由系統依固定門檻計算。
 - confidence_score 是你根據目前看得到的 sanitized_sql、findings、knowledge_context、
   structure_flags 與其他 <SQL_DATA> 資訊，對「這項改善建議適用於目前 SQL」的自評把握程度。
   完整改寫的分數則只描述你對該完整 AI 改寫適用性的自評。
@@ -141,11 +145,11 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
      其他 ADVICE_ONLY／INFORMATIONAL 一律把 example 與 before **兩者都填空字串**，只在
      explanation 用白話說「可評估的方向」與「要先確認什麼」；不要只回 before 而 example
      留空。即使同時加上「需確認」警語，也不要在 explanation 偷放一段可直接複製的 SQL。
-   - ADVICE_ONLY／INFORMATIONAL 的 explanation 只能描述**概念方向**，不得把替代 predicate、
-     具體日期邊界或可直接貼用的條件藏在 prose 裡。例如不要寫
-     `(A.STATUS = 'N' OR A.STATUS IS NULL)`，也不要寫
-     `>= 2024-01-01 AND < 2025-01-01`。NVL 只說「可評估分開判斷欄位值與空值」；
-     TO_CHAR／TRUNC 只說「可評估原欄位型態或日期範圍」，並列出需要先確認的型態／時間前提。
+   - ADVICE_ONLY／INFORMATIONAL 的 explanation 只能描述**概念方向**。不得輸出任何
+     新的日期、數字或業務常數，不得組出可直接貼用的替代 predicate，也不得把可執行條件藏在
+     prose 裡。NVL 只描述「可評估分開判斷欄位值與空值」；TO_CHAR／TRUNC 只描述
+     「可評估原欄位型態或日期範圍」，並列出需要先確認的型態／時間前提。不要為了說明
+     「不能這樣寫」而在回答中示範一段禁止使用的替代 SQL。
    - **before（原寫法片段）**：只要 example 是「把某段 SQL 文字改成另一種寫法」，就必須
      同時填 before——從 sanitized_sql **原封不動複製**被取代的那一段（同樣的大小寫、
      空白、佔位符），例如 before 為 `substr(w.coll_b_date, 1, 3) = '107'`、example 為

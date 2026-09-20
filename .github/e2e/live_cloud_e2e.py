@@ -601,7 +601,7 @@ async def main(out: Path) -> int:
     verdict = "PASS" if deterministic_pass and model_quality_pass else "FAIL_MODEL_QUALITY_TARGETS"
 
     report = [
-        "# Live Cloud Cloud E2E — Model / API only",
+        "# SQLCheck Live Cloud E2E — Model / API only",
         "",
         f"- Verdict: **{verdict}**",
         f"- Planned live analyze invocations: {total_invocations}",

@@ -1,3 +1,6 @@
+> **文件狀態：CURRENT**  
+> 本策略仍是 Golden Benchmark 的現行治理原則。改善指數的既有權重與分級已於 2026-09-20 定案；真實模型驗證可使用 GitHub Actions 的 `Manual Live Cloud E2E`。
+
 # SQLCheck Golden Benchmark Strategy — 無資深 DBA 情境
 
 > 目的：建立可重跑、可解釋、可逐步擴充的 SQLCheck 評估基準，不要求先蒐集 30～50 支
@@ -149,3 +152,15 @@ SQLCheck 不連 Oracle，不看實際 Execution Plan、Index Metadata、Statisti
 8. 正式 Gemma 用 `run_golden.py` 做 Context ON/OFF A/B。
 
 這樣 Golden Set 會隨實務使用自然成長，而不是在專案初期硬湊 50 支 SQL。
+
+
+## 7. 現行 Live Cloud 驗證入口
+
+永久 workflow：`.github/workflows/live-cloud-e2e.yml`。
+
+- `smoke`：跑 live golden cases，適合 prompt / model-path 一般調整。
+- `full`：跑較完整的 model/API suite，適合 masking、AI guard、rewrite governance、confidence 或 provider 行為重大變更後封板。
+- workflow 只接受 synthetic / 去識別化 SQL，不應放 production 原始 SQL。
+- Browser DOM / Native Print Preview 不屬於這個 Cloud model/API workflow 的證據範圍。
+
+改善指數的目的仍是「值得優先檢視的程度」；2026-09-20 owner 已確認沿用現有權重、分級與演算法，不再列為 provisional calibration 待辦。

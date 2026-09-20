@@ -13,6 +13,7 @@ import fnmatch
 from typing import Any
 
 from app.schemas import ComplianceResult, Finding, RuleRow
+from app.services.cost_utils import cost_threshold_note
 from app.services.sql_parser import ParsedSql, ParsedStatement
 
 # Maps rule_id -> the improvement_score.yaml weight key it feeds (see
@@ -65,9 +66,10 @@ def _eval_cost(cost: int, rules_config: dict[str, Any]) -> tuple[RuleRow, list[F
             name="COST",
             status="BLOCK",
             evidence=_fmt_int(cost),
-            # `>=`: the rule is 「COST 須低於門檻」, so exactly-at-threshold is
-            # BLOCK too — say 「達到或超過」 so the boundary case reads correctly.
-            note=f"達到或超過規範門檻 {_fmt_int(threshold)}",
+            # The rule is 「COST 須低於門檻」.  Keep exact equality distinct
+            # from a truly-above-threshold value so the UI never has to use
+            # the ambiguous 「達到或超過」 wording.
+            note=cost_threshold_note(cost, threshold),
         )
         findings.append(
             Finding(rule_id="R001", status="BLOCK", fact=f"COST {_fmt_int(cost)}", statement_index=GLOBAL_STATEMENT_INDEX)
@@ -75,7 +77,11 @@ def _eval_cost(cost: int, rules_config: dict[str, Any]) -> tuple[RuleRow, list[F
         return row, findings
 
     row = RuleRow(
-        rule_id="R001", name="COST", status="PASS", evidence=_fmt_int(cost), note=f"低於規範門檻 {_fmt_int(threshold)}"
+        rule_id="R001",
+        name="COST",
+        status="PASS",
+        evidence=_fmt_int(cost),
+        note=cost_threshold_note(cost, threshold),
     )
     return row, findings
 

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { vi } from "vitest";
+import { test, vi } from "vitest";
 import ExecutionPlanInput from "./ExecutionPlanInput";
 
 vi.mock("../api/client", () => ({

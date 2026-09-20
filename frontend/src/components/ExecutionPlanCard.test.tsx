@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { test } from "vitest";
 import ExecutionPlanCard from "./ExecutionPlanCard";
 import type { ExecutionPlanAnalysis } from "../types/api";
 

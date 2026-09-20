@@ -1,3 +1,7 @@
+> **文件狀態：HISTORICAL / 歷史基線**  
+> 本檔為早期 v6 Draft PRD，保留供追溯初始需求；它已包含多項被後續決策取代的內容，例如「改善優先指數」、AI 改善百分比與完全 stateless 的描述。  
+> **目前系統行為請以現行程式碼／config、`AGENTS.md`、`SQLCheck2_系統架構與設計簡易說明.md` 與 `docs/document-status.md` 為準。請勿用本文件覆蓋較新的 owner 決策。**
+
 # SQLCheck 2.0 智慧 SQL 效能檢核系統 — 詳細產品需求文件（PRD）
 
 > 文件版本：v6.0 Draft  

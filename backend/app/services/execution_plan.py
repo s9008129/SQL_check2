@@ -43,9 +43,11 @@ _SECTION_STOP_RE = re.compile(
 _HEADER_ALIASES = {
     "ID": "id",
     "OPERATION": "operation",
+    "OPTIONS": "options",
     "NAME": "object_name",
     "OBJECT_NAME": "object_name",
     "ROWS": "estimated_rows",
+    "CARDINALITY": "estimated_rows",
     "E_ROWS": "estimated_rows",
     "A_ROWS": "actual_rows",
     "STARTS": "starts",
@@ -55,6 +57,8 @@ _HEADER_ALIASES = {
     "READS": "reads",
     "A_TIME": "actual_time",
     "ACTUAL_TIME": "actual_time",
+    "ACCESS_PREDICATES": "access_predicates",
+    "FILTER_PREDICATES": "filter_predicates",
 }
 
 _RUNTIME_METRICS = {
@@ -126,10 +130,14 @@ def _step_from_cells(headers: list[str], cells: list[str]) -> ExecutionPlanStep 
     if step_id is None or not operation:
         return None
 
+    options = (values.get("options") or "").strip() or None
     object_name = (values.get("object_name") or "").strip() or None
+    access_predicate = (values.get("access_predicates") or "").strip()
+    filter_predicate = (values.get("filter_predicates") or "").strip()
     return ExecutionPlanStep(
         id=step_id,
         operation=operation,
+        options=options,
         object_name=object_name,
         estimated_rows=_parse_number(values.get("estimated_rows")),
         actual_rows=_parse_number(values.get("actual_rows")),
@@ -138,6 +146,8 @@ def _step_from_cells(headers: list[str], cells: list[str]) -> ExecutionPlanStep 
         buffers=_parse_number(values.get("buffers")),
         reads=_parse_number(values.get("reads")),
         actual_time=(values.get("actual_time") or "").strip() or None,
+        access_predicates=[access_predicate] if access_predicate else [],
+        filter_predicates=[filter_predicate] if filter_predicate else [],
     )
 
 
@@ -271,8 +281,17 @@ def _attach_predicates(steps: list[ExecutionPlanStep], text: str) -> None:
         item = predicates.get(step.id)
         if not item:
             continue
-        step.access_predicates.extend(item["access"])
-        step.filter_predicates.extend(item["filter"])
+        for predicate in item["access"]:
+            if predicate not in step.access_predicates:
+                step.access_predicates.append(predicate)
+        for predicate in item["filter"]:
+            if predicate not in step.filter_predicates:
+                step.filter_predicates.append(predicate)
+
+
+def _operation_label(step: ExecutionPlanStep) -> str:
+    """Combine PLAN_TABLE OPERATION + OPTIONS as one observable operation."""
+    return f"{step.operation} {step.options or ''}".strip()
 
 
 def _parse_runtime_metrics(text: str) -> list[ExecutionPlanMetric]:
@@ -365,7 +384,8 @@ def _observations(
         )
 
     for step in steps:
-        if "TABLE ACCESS FULL" in step.operation.upper():
+        operation_label = _operation_label(step)
+        if "TABLE ACCESS FULL" in operation_label.upper():
             target = f" {step.object_name}" if step.object_name else ""
             observations.append(
                 ExecutionPlanObservation(
@@ -373,7 +393,7 @@ def _observations(
                     level="fact",
                     title="測試計畫包含 TABLE ACCESS FULL",
                     detail=(
-                        f"Step {step.id}{target} 使用 TABLE ACCESS FULL。"
+                        f"Step {step.id}{target} 使用 {operation_label}。"
                         "這是測試機計畫事實，本身不代表一定需要改成索引存取。"
                     ),
                     step_id=step.id,

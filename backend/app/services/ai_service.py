@@ -774,11 +774,16 @@ def _calibrate_assessment_confidence(
     score = raw_score
     if representative is None or representative.parse_status != "ok":
         return min(score, 59)
-    if suggested_sql.outcome == "rejected" or dropped_advice or policy_corrected_summary:
-        # If the server had to reject/drop a material model claim or correct
-        # the formal policy meaning in the summary, a high confidence label
-        # would describe an assessment the model did not actually get right.
+    if suggested_sql.outcome == "rejected" or dropped_advice:
+        # If the server had to reject/drop a material model claim, a high or
+        # medium confidence label would describe an assessment that did not
+        # survive safety review.
         return min(score, 59)
+    if policy_corrected_summary:
+        # A deterministic policy correction (for example exact COST boundary
+        # wording) means the final statement is not exactly the model's own
+        # assessment. Keep the signal, but never present it as high confidence.
+        score = min(score, 79)
     if suggested_sql.outcome in {"advice_only", "gated"} or any(
         item.verification == "unverified" for item in advice
     ):

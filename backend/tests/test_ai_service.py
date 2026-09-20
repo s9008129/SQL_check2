@@ -2061,8 +2061,11 @@ def test_confidence_missing_fields_default_to_none():
 
 
 def test_response_schema_defines_bounded_integer_confidence():
+    assessment = ai_service.RESPONSE_SCHEMA["properties"]["assessment_confidence_score"]
     advice_props = ai_service.RESPONSE_SCHEMA["properties"]["advice"]["items"]["properties"]
     suggested_props = ai_service.RESPONSE_SCHEMA["properties"]["suggested_sql"]["properties"]
+    assert assessment == {"type": "integer", "minimum": 0, "maximum": 100}
+    assert "assessment_confidence_score" in ai_service.RESPONSE_SCHEMA["required"]
     for props in (advice_props, suggested_props):
         assert props["confidence_score"] == {"type": "integer", "minimum": 0, "maximum": 100}
 
@@ -2070,19 +2073,19 @@ def test_response_schema_defines_bounded_integer_confidence():
 def test_system_prompt_calibrates_confidence_without_turning_it_into_permission():
     prompt = ai_service.SYSTEM_PROMPT
     for phrase in (
-        "confidence_score",
-        "不是 correctness probability",
-        "performance improvement percentage",
-        "不是 server verification",
-        "90–100",
-        "80–89",
-        "60–79",
-        "0–59",
-        "低 confidence 是合法且有價值的輸出",
-        "confidence_score **不得超過 79**",
+        "assessment_confidence_score",
+        "每一次有效回覆",
         "欄位不得省略",
-        "suggested_sql 若 available=false",
-        "confidence_score **必須填 0**",
+        "80～100",
+        "60～79",
+        "0～59",
+        "不需要改寫",
+        "不是 SQL 正確率",
+        "不代表可以直接執行",
+        "不得超過 79",
+        "suggested_sql.confidence_score 只在 available=true",
+        "可省略",
+        "高信心不等於可直接執行",
     ):
         assert phrase in prompt
 

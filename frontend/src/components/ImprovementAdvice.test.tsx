@@ -216,3 +216,69 @@ it.each([null, undefined])("does not render a badge for %s confidence", (score) 
 
   expect(screen.queryByTestId("confidence-badge")).toBeNull();
 });
+
+
+it("shows overall AI assessment confidence even when no rewrite or advice is needed", () => {
+  render(
+    <ImprovementAdvice
+      ai={makeAi({
+        summary: "目前未發現需要調整的寫法。",
+        assessment_confidence_score: 91,
+        advice: [],
+        suggested_sql: {
+          available: false,
+          reason: "目前未發現需要調整的寫法。",
+          sql: null,
+          confidence_score: null,
+          outcome: "not_needed",
+        },
+      })}
+    />,
+  );
+
+  expect(screen.getByText("AI 判讀信心：高（91/100）")).toBeTruthy();
+  expect(screen.getByText("目前未發現需要調整的寫法。")).toBeTruthy();
+  expect(screen.getByTestId("assessment-confidence-note")).toBeTruthy();
+  expect(screen.getByText(/不是 SQL 正確率/)).toBeTruthy();
+  expect(screen.getByText(/不代表可以直接執行/)).toBeTruthy();
+});
+
+it.each([
+  [82, "AI 判讀信心：高（82/100）"],
+  [73, "AI 判讀信心：中（73/100）"],
+  [41, "AI 判讀信心：低（41/100）"],
+])("renders overall confidence band for score %i", (score, expected) => {
+  render(
+    <ImprovementAdvice
+      ai={makeAi({
+        assessment_confidence_score: score,
+      })}
+    />,
+  );
+  expect(screen.getByText(expected)).toBeTruthy();
+});
+
+it("keeps overall confidence separate from verified/review evidence labels", () => {
+  render(
+    <ImprovementAdvice
+      ai={makeAi({
+        assessment_confidence_score: 92,
+        advice: [
+          {
+            title: "需要確認",
+            explanation: "仍需欄位型態資訊。",
+            example: null,
+            impact: "medium",
+            verification: "unverified",
+            confidence_score: 72,
+          },
+        ],
+      })}
+    />,
+  );
+
+  expect(screen.getByText("AI 判讀信心：高（92/100）")).toBeTruthy();
+  expect(screen.getByText("需先確認再改")).toBeTruthy();
+  expect(screen.getByText("AI 信心：中 72/100")).toBeTruthy();
+  expect(screen.queryByText("可使用此改寫")).toBeNull();
+});

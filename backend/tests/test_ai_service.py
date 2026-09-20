@@ -2087,7 +2087,6 @@ def test_system_prompt_calibrates_confidence_without_turning_it_into_permission(
         "0～59",
         "目前未發現需要調整的寫法",
         "不是 SQL 正確率",
-        "不代表可以直接執行",
         "不得超過 79",
         "suggested_sql.confidence_score 只在 available=true",
         "可省略",

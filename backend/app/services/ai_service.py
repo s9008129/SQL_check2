@@ -686,6 +686,14 @@ def _build_advice_contracts(source_sql: str) -> list[dict[str, Any]]:
                     "max_confidence_score": 79,
                 }
             )
+
+    # The same priority order is used by _server_owned_advice_only_reason().
+    # Mark exactly one contract as the canonical source for
+    # suggested_sql.reason so a smaller model does not "helpfully" append
+    # business-field examples that the SQL never supplied. This is model
+    # guidance only; the server still enforces the final reason independently.
+    if contracts:
+        contracts[0]["use_as_suggested_sql_reason"] = True
     return contracts
 
 

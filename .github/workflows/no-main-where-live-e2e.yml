@@ -1,0 +1,221 @@
+name: no-WHERE Live Gemma 驗證
+
+on:
+  push:
+    branches:
+      - fix/no-main-where-raw-reason-20260920
+    paths:
+      - "backend/app/services/ai_service.py"
+      - "backend/app/prompts/sql_review_zh_tw.txt"
+      - "backend/tests/test_ai_service.py"
+      - ".github/workflows/no-main-where-live-e2e.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  focused-live-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SQLCHECK_LLM_PROVIDER: ollama_cloud
+      OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+      OLLAMA_CLOUD_MODEL: gemma4:31b
+      SQLCHECK_ARCHIVE_ENABLED: "false"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install --disable-pip-version-check "uv==0.12.5"
+
+      - name: Backend regression
+        working-directory: backend
+        env:
+          SQLCHECK_LLM_PROVIDER: ollama
+        run: |
+          uv run --frozen --python 3.12 pytest -p no:cacheprovider -q
+          uv run --frozen --python 3.12 ruff check .
+
+      - name: Live golden smoke
+        working-directory: backend
+        run: |
+          uv run --frozen --python 3.12 python tests/golden/run_golden.py -v
+
+      - name: Focused TC11 TC12 raw-reason stress
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../data/no_main_where_live_${GITHUB_RUN_ID}
+          uv run --frozen --python 3.12 python - <<'PY'
+          import asyncio
+          import json
+          import re
+          from pathlib import Path
+
+          from app.api import analyze
+          from app.schemas import AnalyzeRequest
+          from app.services import ai_service, llm_provider
+
+          CASES = {
+              "TC11": ("SELECT A.ID FROM PLAIN_TABLE A", 1000, "BLOCK"),
+              "TC12": (
+                  "SELECT A.ID, B.NAME FROM PLAIN_TABLE A "
+                  "JOIN OTHER_TABLE B ON A.ID=B.ID",
+                  1000,
+                  "REVIEW",
+              ),
+          }
+          REPEATS = 12
+          INVENTED = re.compile(
+              r"日期|狀態|年度|年份|類別|\\bdate\\b|\\bstatus\\b|\\byear\\b|\\bcategory\\b",
+              re.IGNORECASE,
+          )
+          original_generate = llm_provider.generate_structured_json
+          current = {}
+          captures = []
+
+          def parse_payload(user_content):
+              prefix = "<SQL_DATA>\\n"
+              suffix = "\\n</SQL_DATA>"
+              if not user_content.startswith(prefix) or not user_content.endswith(suffix):
+                  return {}
+              return json.loads(user_content[len(prefix):-len(suffix)])
+
+          async def capture_generate(*args, **kwargs):
+              reply = await original_generate(*args, **kwargs)
+              captures.append({
+                  "case_id": current["case_id"],
+                  "run_index": current["run_index"],
+                  "raw": json.loads(reply.content),
+                  "payload": parse_payload(kwargs.get("user_content", "")),
+              })
+              return reply
+
+          async def one(case_id, run_index, include_ai):
+              sql, cost, _ = CASES[case_id]
+              current.update(case_id=case_id, run_index=run_index)
+              result = await analyze(AnalyzeRequest(
+                  application_no=f"CLOUD-{case_id}-{run_index}",
+                  cost=cost,
+                  sql=sql,
+                  include_ai=include_ai,
+              ))
+              return result.model_dump(mode="json")
+
+          async def main():
+              llm_provider.generate_structured_json = capture_generate
+              evidence = []
+              problems = []
+
+              for case_id, (_, _, expected_compliance) in CASES.items():
+                  baseline = await one(case_id, 0, False)
+                  if baseline["compliance"]["status"] != expected_compliance:
+                      problems.append(
+                          f"{case_id}: baseline compliance "
+                          f"{baseline['compliance']['status']} != {expected_compliance}"
+                      )
+
+                  base_projection = {
+                      key: baseline[key]
+                      for key in ("compliance", "rules", "findings", "improvement", "verified_rewrites")
+                  }
+
+                  for run_index in range(1, REPEATS + 1):
+                      before = len(captures)
+                      final = await one(case_id, run_index, True)
+                      cap = captures[before]
+                      raw = cap["raw"]
+                      payload = cap["payload"]
+
+                      final_projection = {
+                          key: final[key]
+                          for key in ("compliance", "rules", "findings", "improvement", "verified_rewrites")
+                      }
+                      deterministic_equal = base_projection == final_projection
+                      reason = str((raw.get("suggested_sql") or {}).get("reason") or "")
+                      advice_prose = "\\n".join(
+                          str(item.get("explanation") or "")
+                          for item in (raw.get("advice") or [])
+                          if isinstance(item, dict)
+                      )
+                      contracts = payload.get("advice_contracts") or []
+                      no_where = next(
+                          (item for item in contracts if item.get("id") == "no_main_where"),
+                          None,
+                      )
+                      expected_reason = (
+                          no_where.get("required_explanation")
+                          if isinstance(no_where, dict)
+                          else None
+                      )
+                      owner = (
+                          no_where.get("use_as_suggested_sql_reason")
+                          if isinstance(no_where, dict)
+                          else None
+                      )
+                      raw_score = raw.get("assessment_confidence_score")
+                      final_ai = final.get("ai") or {}
+                      final_score = final_ai.get("assessment_confidence_score")
+                      final_reason = str((final_ai.get("suggested_sql") or {}).get("reason") or "")
+
+                      row = {
+                          "case_id": case_id,
+                          "run_index": run_index,
+                          "deterministic_equal": deterministic_equal,
+                          "owner_flag": owner,
+                          "raw_reason_exact": reason == expected_reason,
+                          "raw_invented_dimension": bool(INVENTED.search(reason + "\\n" + advice_prose)),
+                          "raw_assessment_confidence": raw_score,
+                          "final_assessment_confidence": final_score,
+                          "final_reason_exact": final_reason == ai_service._NO_MAIN_WHERE_SAFE_COPY,
+                      }
+                      evidence.append(row)
+
+                      if not deterministic_equal:
+                          problems.append(f"{case_id} r{run_index}: deterministic authority changed")
+                      if owner is not True:
+                          problems.append(f"{case_id} r{run_index}: canonical reason flag missing")
+                      if reason != expected_reason:
+                          problems.append(f"{case_id} r{run_index}: raw reason not exact server-owned copy")
+                      if INVENTED.search(reason + "\\n" + advice_prose):
+                          problems.append(f"{case_id} r{run_index}: raw invented business dimension")
+                      if type(raw_score) is not int or not 0 <= raw_score <= 79:
+                          problems.append(f"{case_id} r{run_index}: raw overall confidence invalid/high")
+                      if type(final_score) is not int or not 0 <= final_score <= 79:
+                          problems.append(f"{case_id} r{run_index}: final overall confidence invalid/high")
+                      if final_reason != ai_service._NO_MAIN_WHERE_SAFE_COPY:
+                          problems.append(f"{case_id} r{run_index}: final reason not server-owned safe copy")
+
+              out = Path("../data") / f"no_main_where_live_{__import__('os').environ['GITHUB_RUN_ID']}"
+              out.mkdir(parents=True, exist_ok=True)
+              (out / "evidence.json").write_text(
+                  json.dumps({"evidence": evidence, "problems": problems}, ensure_ascii=False, indent=2) + "\\n",
+                  encoding="utf-8",
+              )
+              print(f"Focused Live Gemma calls: {len(evidence)}")
+              print(f"Violations: {len(problems)}")
+              if problems:
+                  for item in problems:
+                      print("FAIL:", item)
+                  raise SystemExit(2)
+              print("PASS: TC11/TC12 raw reason exact-copy contract held for all runs.")
+
+          asyncio.run(main())
+          PY
+
+      - name: Upload focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: no-main-where-live-${{ github.run_id }}
+          path: data/no_main_where_live_${{ github.run_id }}/evidence.json
+          if-no-files-found: warn
+          retention-days: 7

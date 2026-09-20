@@ -38,3 +38,17 @@ export function confidenceBadgeText(score: unknown): string | null {
   const label = confidenceLabel(normalized);
   return normalized === null || label === null ? null : `AI 信心：${label} ${normalized}/100`;
 }
+
+
+/**
+ * Overall assessment wording is deliberately distinct from per-advice
+ * confidence so users understand this score applies to the whole AI reading,
+ * including a clean "no change needed" result.
+ */
+export function assessmentConfidenceText(score: unknown): string | null {
+  const normalized = normalizeConfidenceScore(score);
+  const label = confidenceLabel(normalized);
+  return normalized === null || label === null
+    ? null
+    : `AI 判讀信心：${label}（${normalized}/100）`;
+}

@@ -237,13 +237,19 @@ def test_important_table_no_match_is_pass(cfg):
     assert _row(rows, "R007").status == "PASS"
 
 
-def test_forbidden_operation_default_config_never_blocks(cfg):
-    # PRD §45: forbidden_operations defaults to an empty list; R008 must
-    # never fire until business rules are supplied.
+def test_forbidden_operation_is_formally_disabled_in_current_business_policy(cfg):
+    # 2026-09-20 owner decision: important tables are reminders only.
+    # R008 is not a pending matrix; it is formally disabled.
     rules_cfg, tables_cfg = cfg
     parsed = parse_sql_text("DELETE FROM WIIT001 A WHERE A.X=1")
-    _, rows, _ = rule_engine.evaluate(parsed, 1000, rules_cfg, tables_cfg)
-    assert _row(rows, "R008").status == "PASS"
+    compliance, rows, findings = rule_engine.evaluate(parsed, 1000, rules_cfg, tables_cfg)
+    r008 = _row(rows, "R008")
+    assert r008.status == "NA"
+    assert "規則未啟用" in r008.evidence
+    assert not any(f.rule_id == "R008" for f in findings)
+    # The existing R007 important-table NOTICE still remains the business reminder.
+    assert _row(rows, "R007").status == "NOTICE"
+    assert compliance.status == "PASS"
 
 
 def test_forbidden_operation_with_custom_config_blocks():

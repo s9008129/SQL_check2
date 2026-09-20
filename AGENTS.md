@@ -42,6 +42,14 @@ data/e2e_post_pr20_YYYYMMDD_HHMMSS/
 
 Put every run-specific artifact there, including temporary test harness scripts created only for that run, raw model captures, final API JSON, CSV matrices, logs, screenshots, print evidence, environment/git-state evidence, and the Markdown report. Product source code changes still belong in the normal source tree; this rule applies to generated test/run artifacts.
 
+Evidence validity is stricter than file existence:
+
+- `ui_pass` must come from actual browser DOM assertions captured from the rendered SQLCheck page. A screenshot merely existing, or a static expected-value table in a harness, is not proof.
+- Every UI screenshot used as PASS evidence must visibly contain SQLCheck content for the named case; a desktop/wallpaper/terminal screenshot is invalid evidence and must fail that case.
+- `print_pass` must be backed by a real native Chrome print-preview capture for that case. A terminal screenshot, browser page screenshot, or Computer Use error screen must be marked NOT PROVEN / FAIL, never PASS.
+- Browser/print evidence JSON must record what was actually observed (text/role/state/window title) and the assertions evaluated. Do not generate a PASS JSON by copying expected values from the test matrix.
+- When Computer Use or browser tooling fails, report the affected evidence as blocked/not proven; never infer success from API output.
+
 At the end of the run:
 
 1. remove disposable caches/intermediate files that are not evidence;

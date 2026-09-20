@@ -30,6 +30,17 @@ Python uses four spaces, Python 3.12 syntax, `snake_case` functions/modules, and
 
 Use Pytest/`pytest-asyncio` for backend tests and Vitest with Testing Library for frontend tests. Name tests `test_*.py` or `*.test.ts(x)`. Add focused regression coverage for changed behavior, then run the complete affected suite and frontend build. Use only synthetic or de-identified SQL in cloud-backed tests.
 
+The user-facing score name is **「改善指數」**. Internal module names such as `improvement_score.py` may remain unchanged, but new UI/documentation must not revive the older 「改善優先指數」 label.
+
+### Manual Live Cloud E2E
+
+`.github/workflows/live-cloud-e2e.yml` is the permanent real-model verification entry point. It is deliberately **manual-only** (`workflow_dispatch`), not a required check on every PR.
+
+- `smoke`: real Ollama Cloud / `gemma4:31b` golden cases; use after ordinary prompt/model-path changes.
+- `full`: the broader ~59-call model/API suite; use for release sealing or changes to masking, AI guards, rewrite governance, confidence, or provider behavior.
+- Do not claim this cloud workflow proves Browser DOM or Native Print Preview behavior.
+- Never paste API keys into prompts, logs, issues, PRs, or evidence; the workflow uses the repository `OLLAMA_API_KEY` secret.
+
 ## E2E Artifact & Disk Hygiene
 
 All manual, Live-Gemma, browser, Computer Use, and regression evidence must stay under the repository's ignored `data/` tree. **Do not write test artifacts to `/tmp`, `/var/tmp`, the repository root, or arbitrary desktop/download folders.**
@@ -99,3 +110,5 @@ Pull requests should explain the user-visible outcome, list verification command
 ## Security & Configuration
 
 Copy from `.env.example` or `.env.mac.example`; never commit `.env`, API keys, identifiable case data, or production SQL. The application must not connect to Oracle or claim measured execution plans, indexes, scans, or performance gains without evidence.
+
+Current owner decisions (2026-09-20): Balanced cloud privacy is closed as-is; SQL Archive retention stays as-is; R008 is disabled because important tables are reminders only (R007 remains); the existing 改善指數 weights/algorithm are final; Ollama 11434 firewall hardening is owner-managed infrastructure, not an application backlog item. See `docs/document-status.md` before treating an older PRD/Handoff/report as current requirements.

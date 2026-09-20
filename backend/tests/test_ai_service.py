@@ -657,6 +657,42 @@ async def test_payload_includes_structure_flags(settings, chat_url):
     assert "not_in_subquery" in payload["structure_flags"]
 
 
+@pytest.mark.parametrize(
+    ("cost", "expected_relation", "expected_phrase"),
+    [
+        (99999, "below", "低於規範門檻 100,000"),
+        (100000, "equal", "已達規範門檻 100,000"),
+        (100001, "above", "已高於規範門檻 100,000"),
+    ],
+)
+@respx.mock
+async def test_payload_includes_server_owned_cost_context(
+    settings, chat_url, cost, expected_relation, expected_phrase
+):
+    route = respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
+    )
+    sql = "SELECT A.X FROM T A WHERE A.Y = 1"
+    await ai_service.get_ai_result(
+        sql_text=sql,
+        cost=cost,
+        compliance_status="BLOCK" if cost >= 100000 else "PASS",
+        findings=[],
+        statements=parse_sql_text(sql).statements,
+        settings=settings,
+    )
+    user_message = next(
+        m["content"]
+        for m in json.loads(route.calls[0].request.content)["messages"]
+        if m["role"] == "user"
+    )
+    payload = json.loads(user_message.removeprefix("<SQL_DATA>\n").removesuffix("\n</SQL_DATA>"))
+    context = payload["cost_context"]
+    assert context["threshold"] == 100000
+    assert context["relation"] == expected_relation
+    assert expected_phrase in context["formal_message"]
+
+
 @respx.mock
 async def test_candidate_not_allowed_model_already_agreeing_keeps_its_own_reason(settings, chat_url):
     # When the model itself already said available=False (agreeing with the
@@ -1678,6 +1714,45 @@ async def test_exact_cost_threshold_uses_server_owned_boundary_wording(settings,
 
 
 @respx.mock
+async def test_above_cost_threshold_uses_server_owned_boundary_wording(settings, chat_url):
+    sql = "SELECT A.ID FROM PLAIN_TABLE A WHERE A.ID = :ID"
+    inner = {
+        "summary": "目前執行成本（COST）過高，不符合中心規範。",
+        "advice": [],
+        "suggested_sql": {
+            "available": False,
+            "reason": "目前未發現需要調整的寫法。",
+            "sql": "",
+            "rewrite_outcome": "not_needed",
+            "confidence_score": 0,
+        },
+    }
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+
+    result = await ai_service.get_ai_result(
+        sql_text=sql,
+        cost=100001,
+        compliance_status="BLOCK",
+        findings=[
+            Finding(
+                rule_id="R001",
+                status="BLOCK",
+                fact="COST 100,001",
+                statement_index=-1,
+            )
+        ],
+        statements=parse_sql_text(sql).statements,
+        settings=settings,
+    )
+
+    assert result.summary == "目前執行成本（COST）已高於規範門檻 100,000，不符合中心規範。"
+    assert result.suggested_sql is not None
+    assert "COST 已高於規範門檻 100,000" in result.suggested_sql.reason
+
+
+@respx.mock
 async def test_remote_gemma_parity_profile_keeps_same_short_ascii_literals_as_local(settings):
     cloud_llm = dataclasses.replace(
         settings.llm,
@@ -1929,14 +2004,18 @@ def test_sql_example_without_before_is_hidden_as_unverified():
     assert item.before is None
 
 
-def test_prompt_requires_advice_only_to_be_prose_only():
+def test_prompt_requires_advice_only_to_be_prose_only_without_forbidden_sql_priming():
     prompt = ai_service.SYSTEM_PROMPT
     assert "example／before 一律留空" in prompt
     assert "替代 LIKE 片段" in prompt
     assert "未驗證片段不會顯示成可複製 SQL" in prompt
     assert "ADVICE_ONLY／INFORMATIONAL 的 explanation 只能描述**概念方向**" in prompt
-    assert "(A.STATUS = 'N' OR A.STATUS IS NULL)" in prompt
-    assert ">= 2024-01-01 AND < 2025-01-01" in prompt
+    assert "不得輸出任何" in prompt
+    assert "新的日期、數字或業務常數" in prompt
+    # Do not teach a smaller model the exact forbidden predicate/literals
+    # while asking it not to repeat them.
+    assert "(A.STATUS = 'N' OR A.STATUS IS NULL)" not in prompt
+    assert ">= 2024-01-01 AND < 2025-01-01" not in prompt
 
 
 # ---------------------------------------------------------------------------

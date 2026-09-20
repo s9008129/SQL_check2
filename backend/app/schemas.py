@@ -182,6 +182,7 @@ class ExecutionPlanMetric(BaseModel):
 class ExecutionPlanStep(BaseModel):
     id: int
     operation: str
+    options: str | None = None
     object_name: str | None = None
     estimated_rows: int | None = None
     actual_rows: int | None = None

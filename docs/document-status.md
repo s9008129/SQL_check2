@@ -29,6 +29,7 @@ HISTORICAL 文件
 
 | 文件 | 狀態 | 用途 |
 |---|---|---|
+| `docs/document-status.md` | CURRENT | 全專案文件新舊狀態與判讀入口。 |
 | `README.md` | CURRENT | 專案首頁；只保留意圖、目標、簡易安裝與簡易架構。 |
 | `SQLCheck2_系統架構與設計簡易說明.md` | CURRENT | 非技術人員的現行系統說明與已結案決策。 |
 | `AGENTS.md` | CURRENT | Coding Agent / 開發者工作規範。 |

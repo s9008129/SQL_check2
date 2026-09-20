@@ -1,7 +1,6 @@
 from app.schemas import VerifiedRewrite
 from app.services import execution_plan
 
-
 ESTIMATED_PLAN = """
 Plan hash value: 3556827125
 

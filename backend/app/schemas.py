@@ -210,6 +210,19 @@ class SuggestedSql(BaseModel):
 class AiResult(BaseModel):
     status: AiStatus
     summary: str | None = None
+    # Overall AI assessment confidence. Unlike suggested_sql.confidence_score,
+    # this describes the model's confidence in the *whole current assessment*
+    # (summary + whether the visible SQL appears to need adjustment), so it is
+    # meaningful even when no rewrite is needed. The server may cap the raw
+    # score when the result depends on unverified assumptions; it is never a
+    # correctness probability and never grants permission to execute SQL.
+    assessment_confidence_score: int | None = None
+
+    @field_validator("assessment_confidence_score", mode="before")
+    @classmethod
+    def _normalize_assessment_confidence_score(cls, value: object) -> int | None:
+        return normalize_confidence_score(value)
+
     advice: list[AdviceItem] = Field(default_factory=list)
     suggested_sql: SuggestedSql | None = None
     # Kept for the archive/analytics only; the UI no longer shows a

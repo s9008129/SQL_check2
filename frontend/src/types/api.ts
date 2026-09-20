@@ -151,6 +151,12 @@ export type ImprovementPotential = "high" | "medium" | "low" | "notice_only";
 export interface AiResult {
   status: AiStatus;
   summary: string | null;
+  /**
+   * Server-calibrated AI self-assessment for the whole current result.
+   * Present for every status="ok" response, including not_needed / zero-advice.
+   * This is not a correctness probability and never grants rewrite permission.
+   */
+  assessment_confidence_score?: number | null;
   advice: AdviceItem[];
   suggested_sql: SuggestedSql | null;
   /** Backward-compatible wire field; current server returns null because no post-change percentage is measured. */

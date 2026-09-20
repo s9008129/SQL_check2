@@ -1,6 +1,6 @@
 import type { AdviceItem, AiResult } from "../types/api";
 import { AI_PENDING_MESSAGE, AI_UNAVAILABLE_MESSAGE, VERIFIED_REWRITE_EXPLANATION } from "../lib/copy";
-import { confidenceBadgeText } from "../lib/confidence";
+import { assessmentConfidenceText, confidenceBadgeText } from "../lib/confidence";
 import { looksLikeSqlFragment } from "../lib/sqlDiff";
 
 export interface ImprovementAdviceProps {
@@ -63,9 +63,12 @@ export function adviceEvidenceLevel(item: AdviceItem): EvidenceLevel {
  * 「系統可確認／需人工確認／觀念提醒」呈現可信度與採用方式。
  */
 export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
+  const assessmentConfidence =
+    ai.status === "ok" ? assessmentConfidenceText(ai.assessment_confidence_score) : null;
   const hasConfidence =
     ai.status === "ok" &&
-    (ai.advice.some((item) => confidenceBadgeText(item.confidence_score) !== null) ||
+    (assessmentConfidence !== null ||
+      ai.advice.some((item) => confidenceBadgeText(item.confidence_score) !== null) ||
       (ai.suggested_sql?.available === true &&
         ai.suggested_sql.outcome === "provided" &&
         confidenceBadgeText(ai.suggested_sql.confidence_score) !== null));
@@ -76,7 +79,20 @@ export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
         <div>
           <div className="card-title"><span className="ai-spark" aria-hidden="true">✦</span> 智慧改善建議</div>
         </div>
-        {ai.status === "ok" && <span className="badge purple">{ai.advice.length} 項建議</span>}
+        {ai.status === "ok" && (
+          <div className="advice-badges">
+            <span className="badge purple">{ai.advice.length} 項建議</span>
+            {assessmentConfidence && (
+              <span
+                className="badge purple assessment-confidence-badge"
+                data-testid="assessment-confidence-badge"
+                title="AI 對目前可見 SQL 文字與系統提供證據的自評；不是 SQL 正確率，也不代表可直接執行。"
+              >
+                {assessmentConfidence}
+              </span>
+            )}
+          </div>
+        )}
       </div>
       <div className="card-body">
         {ai.status === "pending" && <div className="ai-note">{AI_PENDING_MESSAGE}</div>}
@@ -87,6 +103,12 @@ export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
 
         {ai.status === "ok" && (
           <>
+            {assessmentConfidence && (
+              <div className="assessment-confidence-note" data-testid="assessment-confidence-note">
+                這個信心表示 AI 對目前可見 SQL 文字與系統提供證據的把握程度；不是 SQL 正確率，
+                也不代表可以直接執行。能否採用改寫仍以「系統可確認／需先確認」為準。
+              </div>
+            )}
             {ai.advice.length === 0 ? (
               <div className="ai-note">{ai.summary?.trim() || "目前沒有額外的改善建議。"}</div>
             ) : (
@@ -117,7 +139,7 @@ export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
                 <span>AI 建議僅供參考，不代表實際效能提升；採用前請先測試。</span>
                 {hasConfidence && (
                   <span className="confidence-disclaimer">
-                    AI 信心為模型自評，僅供參考，不代表正確率或系統驗證結果。
+                    AI 信心僅描述模型在目前證據下的自評；不代表實際效能、正確率或系統驗證結果。
                   </span>
                 )}
               </div>

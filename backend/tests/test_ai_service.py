@@ -41,6 +41,7 @@ def _ollama_envelope(content_str: str) -> dict:
 def _good_inner(**overrides) -> dict:
     body = {
         "summary": "這段 SQL 的條件欄位使用了函數，建議調整寫法。",
+        "assessment_confidence_score": 88,
         "advice": [
             {
                 "title": "合併同欄位 OR 條件",
@@ -497,9 +498,9 @@ def test_system_prompt_keeps_r004_scope_and_derived_rewrite_list():
     assert "目前只有 SUBSTR 等於、同欄位 OR 串成" in prompt
     assert "超過 1000 個值不要合併成單一 IN" in prompt
     assert "不可直接合併成單一 IN" in prompt
-    assert "UNION／UNION ALL" in prompt
-    assert "條件是否重疊" in prompt
-    assert "重複列／去重對結果的影響" in prompt
+    assert "advice_contracts 含 cross_column_or" in prompt
+    assert "UNION／UNION ALL" not in prompt
+    assert "日期、狀態、年度、年份、類別" not in prompt
     assert "SUBSTR() 比對" in prompt
     assert "系統能確認的對應 LIKE 寫法" in prompt
 
@@ -511,14 +512,20 @@ def test_system_prompt_provided_example_is_derivable_and_advice_only_is_prose_fi
 
     provided_orig = "WHERE SUBSTR(A.CODE_COL,6,3) = '551' AND A.STATUS = :STR_001"
     provided_sugg = "WHERE A.CODE_COL LIKE '_____551%' AND A.STATUS = :STR_001"
-    advice_orig = "WHERE TRUNC(A.DATE_COL) = :STR_001 AND NVL(A.S,'N') = 'N'"
-    for fragment in (provided_orig, provided_sugg, advice_orig):
+    unsafe_advice_example = "WHERE TRUNC(A.DATE_COL) = :STR_001 AND NVL(A.S,'N') = 'N'"
+
+    # Only deterministic VERIFIED_REWRITE examples belong in the prompt.
+    # ADVICE_ONLY examples were deliberately removed after Live Gemma copied
+    # their concrete mechanics into prose despite being told not to.
+    for fragment in (provided_orig, provided_sugg):
         assert fragment in ai_service.SYSTEM_PROMPT
+    assert unsafe_advice_example not in ai_service.SYSTEM_PROMPT
 
     def tree(where: str):
         return parse_one(f"SELECT A.X FROM T A {where}", read="oracle")
 
     assert rewrite_rules.verify_predicate_changes(tree(provided_orig), tree(provided_sugg)) == (True, None)
+    assert "advice_contracts" in ai_service.SYSTEM_PROMPT
     assert "example 留空" in ai_service.SYSTEM_PROMPT
     assert "不知道就不要猜 SQL" in ai_service.SYSTEM_PROMPT
 
@@ -1671,6 +1678,7 @@ async def test_exact_cost_threshold_uses_server_owned_boundary_wording(settings,
     sql = "SELECT A.ID FROM PLAIN_TABLE A WHERE A.ID = :ID"
     inner = {
         "summary": "目前執行成本（COST）過高，不符合中心規範。",
+        "assessment_confidence_score": 94,
         "advice": [],
         "suggested_sql": {
             "available": False,
@@ -1702,6 +1710,10 @@ async def test_exact_cost_threshold_uses_server_owned_boundary_wording(settings,
 
     assert result.status == "ok"
     assert result.summary == "目前執行成本（COST）已達規範門檻 100,000，不符合中心規範。"
+    # The raw model called the exact threshold 「過高」, so the server had
+    # to correct formal policy meaning. The final answer stays correct, but
+    # overall AI confidence must not remain in the high band.
+    assert result.assessment_confidence_score == 79
     assert result.suggested_sql is not None
     assert result.suggested_sql.outcome == "not_needed"
     assert result.suggested_sql.confidence_score is None
@@ -1718,6 +1730,7 @@ async def test_above_cost_threshold_uses_server_owned_boundary_wording(settings,
     sql = "SELECT A.ID FROM PLAIN_TABLE A WHERE A.ID = :ID"
     inner = {
         "summary": "目前執行成本（COST）過高，不符合中心規範。",
+        "assessment_confidence_score": 94,
         "advice": [],
         "suggested_sql": {
             "available": False,
@@ -1781,6 +1794,7 @@ async def test_remote_gemma_parity_profile_keeps_same_short_ascii_literals_as_lo
                                     "text": json.dumps(
                                         {
                                             "summary": "目前未發現需要調整的寫法。",
+                                            "assessment_confidence_score": 91,
                                             "advice": [],
                                             "suggested_sql": {
                                                 "available": False,
@@ -2057,8 +2071,11 @@ def test_confidence_missing_fields_default_to_none():
 
 
 def test_response_schema_defines_bounded_integer_confidence():
+    assessment = ai_service.RESPONSE_SCHEMA["properties"]["assessment_confidence_score"]
     advice_props = ai_service.RESPONSE_SCHEMA["properties"]["advice"]["items"]["properties"]
     suggested_props = ai_service.RESPONSE_SCHEMA["properties"]["suggested_sql"]["properties"]
+    assert assessment == {"type": "integer", "minimum": 0, "maximum": 100}
+    assert "assessment_confidence_score" in ai_service.RESPONSE_SCHEMA["required"]
     for props in (advice_props, suggested_props):
         assert props["confidence_score"] == {"type": "integer", "minimum": 0, "maximum": 100}
 
@@ -2066,19 +2083,18 @@ def test_response_schema_defines_bounded_integer_confidence():
 def test_system_prompt_calibrates_confidence_without_turning_it_into_permission():
     prompt = ai_service.SYSTEM_PROMPT
     for phrase in (
-        "confidence_score",
-        "不是 correctness probability",
-        "performance improvement percentage",
-        "不是 server verification",
-        "90–100",
-        "80–89",
-        "60–79",
-        "0–59",
-        "低 confidence 是合法且有價值的輸出",
-        "confidence_score **不得超過 79**",
+        "assessment_confidence_score",
+        "每一次有效回覆",
         "欄位不得省略",
-        "suggested_sql 若 available=false",
-        "confidence_score **必須填 0**",
+        "80～100",
+        "60～79",
+        "0～59",
+        "目前未發現需要調整的寫法",
+        "不是 SQL 正確率",
+        "不得超過 79",
+        "suggested_sql.confidence_score 只在 available=true",
+        "可省略",
+        "高信心不等於可直接執行",
     ):
         assert phrase in prompt
 
@@ -2378,3 +2394,214 @@ async def test_suggested_sql_confidence_is_kept_only_for_validated_provided(
     expected_outcome_name, expected_confidence = expected_outcome
     assert result.suggested_sql.outcome == expected_outcome_name
     assert result.suggested_sql.confidence_score == expected_confidence
+
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-20 Post-PR20 quality hardening: overall confidence + ADVICE_ONLY
+# ---------------------------------------------------------------------------
+@respx.mock
+async def test_successful_ai_result_always_carries_overall_assessment_confidence(settings, chat_url):
+    inner = _good_inner(assessment_confidence_score=87)
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+
+    result = await _call(settings, _clean_select_statement())
+
+    assert result.status == "ok"
+    assert result.assessment_confidence_score == 87
+
+
+@respx.mock
+async def test_missing_overall_assessment_confidence_retries_then_degrades(settings, chat_url):
+    inner = _good_inner()
+    inner.pop("assessment_confidence_score")
+    route = respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+
+    result = await _call(settings, _clean_select_statement())
+
+    assert route.call_count == 2
+    assert result.status == "unavailable"
+    assert result.assessment_confidence_score is None
+
+
+@respx.mock
+async def test_clean_not_needed_assessment_can_keep_high_confidence(settings, chat_url):
+    sql = "SELECT A.ID FROM PLAIN_TABLE A WHERE A.ID = :ID"
+    inner = _good_inner(
+        summary="目前未發現需要調整的寫法。",
+        assessment_confidence_score=93,
+        advice=[],
+        suggested_sql={
+            "available": False,
+            "reason": "目前未發現需要調整的寫法。",
+            "rewrite_outcome": "not_needed",
+        },
+    )
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+
+    result = await ai_service.get_ai_result(
+        sql_text=sql,
+        cost=1000,
+        compliance_status="PASS",
+        findings=[],
+        statements=parse_sql_text(sql).statements,
+        settings=settings,
+    )
+
+    assert result.status == "ok"
+    assert result.suggested_sql is not None
+    assert result.suggested_sql.outcome == "not_needed"
+    assert result.assessment_confidence_score == 93
+
+
+@respx.mock
+async def test_assumption_dependent_result_caps_overall_confidence_at_medium(settings, chat_url):
+    sql = "SELECT A.ID FROM PLAIN_TABLE A WHERE TRUNC(A.TXN_DATE) = :D"
+    inner = _good_inner(
+        summary="這個日期條件可再確認。",
+        assessment_confidence_score=97,
+        advice=[
+            {
+                "title": "評估日期條件",
+                "explanation": "可改成當天 00:00 到次日 00:00 的日期範圍。",
+                "example": "",
+                "confidence_score": 95,
+            }
+        ],
+        suggested_sql={
+            "available": False,
+            "reason": "可改成當天 00:00 到次日 00:00 的日期範圍。",
+            "rewrite_outcome": "advice_only",
+        },
+    )
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+
+    result = await ai_service.get_ai_result(
+        sql_text=sql,
+        cost=1000,
+        compliance_status="PASS",
+        findings=[],
+        statements=parse_sql_text(sql).statements,
+        settings=settings,
+    )
+
+    assert result.status == "ok"
+    assert result.assessment_confidence_score == 79
+    assert result.advice[0].verification == "unverified"
+    assert "00:00" not in result.advice[0].explanation
+    assert result.suggested_sql is not None
+    assert "00:00" not in result.suggested_sql.reason
+
+
+@respx.mock
+async def test_to_char_year_value_is_hidden_from_model_but_format_role_remains(settings, chat_url):
+    sql = "SELECT A.ID FROM PLAIN_TABLE A WHERE TO_CHAR(A.TXN_DATE, 'YYYY') = '2024'"
+    route = respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
+    )
+
+    await ai_service.get_ai_result(
+        sql_text=sql,
+        cost=1000,
+        compliance_status="PASS",
+        findings=[],
+        statements=parse_sql_text(sql).statements,
+        settings=settings,
+    )
+
+    body = json.loads(route.calls[0].request.content)
+    user_message = next(m["content"] for m in body["messages"] if m["role"] == "user")
+    payload = json.loads(user_message.removeprefix("<SQL_DATA>\n").removesuffix("\n</SQL_DATA>"))
+    assert "'YYYY'" in payload["sanitized_sql"]
+    assert "'2024'" not in payload["sanitized_sql"]
+    year_hints = [h for h in payload["literal_hints"].values() if h.get("semantic_role") == "year_value"]
+    assert len(year_hints) == 1
+    assert year_hints[0]["shape"] == "digits"
+    ids = {item["id"] for item in payload["advice_contracts"]}
+    assert "to_char_condition" in ids
+
+
+@respx.mock
+async def test_cross_column_or_advice_only_reason_is_server_owned_and_never_mentions_union(settings, chat_url):
+    sql = "SELECT A.ID FROM PLAIN_TABLE A WHERE A.STATUS = 'A' OR A.TYPE = 'B'"
+    inner = _good_inner(
+        summary="這段 OR 需要再確認。",
+        assessment_confidence_score=72,
+        advice=[],
+        suggested_sql={
+            "available": False,
+            "reason": "可以考慮拆成 UNION 或 UNION ALL，再看哪個比較快。",
+            "rewrite_outcome": "advice_only",
+        },
+    )
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+
+    result = await ai_service.get_ai_result(
+        sql_text=sql,
+        cost=1000,
+        compliance_status="PASS",
+        findings=[],
+        statements=parse_sql_text(sql).statements,
+        settings=settings,
+    )
+
+    assert result.suggested_sql is not None
+    assert result.suggested_sql.outcome == "advice_only"
+    assert "UNION" not in result.suggested_sql.reason
+    assert result.suggested_sql.reason == ai_service._CROSS_COLUMN_OR_SAFE_COPY
+
+
+@respx.mock
+async def test_join_only_reason_does_not_invent_date_status_or_category_filters(settings, chat_url):
+    sql = "SELECT A.ID FROM T A JOIN U B ON A.K = B.K"
+    inner = _good_inner(
+        summary="主查詢目前只有 JOIN 條件，請確認是否符合中心作業要求。",
+        assessment_confidence_score=74,
+        advice=[],
+        suggested_sql={
+            "available": False,
+            "reason": "可增加日期、年度、狀態或類別條件來縮小資料範圍。",
+            "rewrite_outcome": "advice_only",
+        },
+    )
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+
+    result = await ai_service.get_ai_result(
+        sql_text=sql,
+        cost=1000,
+        compliance_status="REVIEW",
+        findings=[],
+        statements=parse_sql_text(sql).statements,
+        settings=settings,
+    )
+
+    assert result.suggested_sql is not None
+    assert result.suggested_sql.reason == ai_service._NO_MAIN_WHERE_SAFE_COPY
+    for invented in ("日期", "年度", "狀態", "類別"):
+        assert invented not in result.suggested_sql.reason
+    assert result.assessment_confidence_score <= 79
+
+
+def test_advice_contracts_use_server_owned_copy_and_medium_cap():
+    sql = "SELECT A.ID FROM T A WHERE TRUNC(A.D) = :D"
+    contracts = ai_service._build_advice_contracts(sql)
+
+    trunc = next(item for item in contracts if item["id"] == "trunc_condition")
+    assert trunc["classification"] == "ADVICE_ONLY"
+    assert trunc["required_explanation"] == (
+        "目前條件先用 TRUNC() 處理欄位再比對。若確認是日期欄位，可評估改用日期範圍；"
+        "調整前請先確認欄位型態與比對值是否包含時間。"
+    )
+    assert trunc["max_confidence_score"] == 79

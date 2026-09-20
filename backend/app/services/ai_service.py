@@ -40,13 +40,13 @@ from collections import Counter
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlglot import exp, parse_one
 
 from app.schemas import AdviceItem, AiResult, Finding, SuggestedSql, normalize_confidence_score
 from app.services import context_adapter, llm_provider, pattern_selector, rewrite_rules, rule_engine
 from app.services.cost_utils import classify_cost_relation, cost_formal_summary, cost_threshold_note
-from app.services.masking import mask_sql, scrub_invented_placeholders, unmask_sql
+from app.services.masking import MaskResult, mask_sql, scrub_invented_placeholders, unmask_sql
 from app.services.rule_engine import GLOBAL_STATEMENT_INDEX
 from app.services.sql_parser import ParsedStatement, parse_sql_text, structural_signature
 from app.settings import PROMPTS_DIR, Settings
@@ -157,6 +157,10 @@ RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "summary": {"type": "string"},
+        # Overall confidence in the whole AI assessment. This is intentionally
+        # separate from advice/rewrite confidence so a clean "no change needed"
+        # assessment still carries a confidence signal.
+        "assessment_confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
         "advice": {
             "type": "array",
             "maxItems": 3,
@@ -191,10 +195,13 @@ RESPONSE_SCHEMA: dict[str, Any] = {
                 # "SQL is already fine" and "needs a business assumption".
                 "rewrite_outcome": {"type": "string", "enum": ["provided", "not_needed", "advice_only"]},
             },
-            "required": ["available", "reason", "rewrite_outcome", "confidence_score"],
+            # Full-rewrite confidence is only meaningful when a rewrite is
+            # actually provided. Overall assessment confidence is always
+            # required at the response root instead.
+            "required": ["available", "reason", "rewrite_outcome"],
         },
     },
-    "required": ["summary", "advice", "suggested_sql"],
+    "required": ["summary", "assessment_confidence_score", "advice", "suggested_sql"],
 }
 
 
@@ -217,8 +224,19 @@ class _AiRawResponse(BaseModel):
     """Mirrors RESPONSE_SCHEMA for validating the model's raw JSON reply."""
 
     summary: str
+    # Missing or malformed overall confidence makes the model response
+    # incomplete. _request_ai will retry once, and only then degrade.
+    assessment_confidence_score: int
     advice: list[AdviceItem] = Field(default_factory=list)
     suggested_sql: _RawSuggestedSql
+
+    @field_validator("assessment_confidence_score", mode="before")
+    @classmethod
+    def _strict_assessment_confidence(cls, value: object) -> int:
+        normalized = normalize_confidence_score(value)
+        if normalized is None:
+            raise ValueError("assessment_confidence_score must be an integer from 0 to 100")
+        return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +383,7 @@ def _build_payload(
     structure_flags: list[str] | None = None,
     knowledge_context: list[dict[str, str]] | None = None,
     cost_context: dict[str, Any] | None = None,
+    advice_contracts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the de-identified <SQL_DATA> object sent to Gemma.
 
@@ -400,6 +419,10 @@ def _build_payload(
         # top-N + character budgets. Values are static catalog guidance, never
         # user SQL or literals.
         "knowledge_context": knowledge_context or [],
+        # Server-owned semantic contracts for high-risk ADVICE_ONLY patterns.
+        # The model may choose whether a suggestion is worth surfacing, but it
+        # may not invent executable details outside these bounded explanations.
+        "advice_contracts": advice_contracts or [],
     }
     if where_evidence is not None:
         payload["where_evidence"] = where_evidence
@@ -622,6 +645,150 @@ def _source_has_no_main_where(source_sql: str) -> bool:
         )
     except Exception:
         return False
+
+
+def _build_advice_contracts(source_sql: str) -> list[dict[str, Any]]:
+    """Return deterministic, SQL-free output contracts for known ADVICE_ONLY traps.
+
+    These are not new compliance rules. They only bound how the model may
+    explain patterns whose safe rewrite depends on schema/business facts that
+    SQLCheck cannot observe.
+    """
+    contracts: list[dict[str, Any]] = []
+
+    if rewrite_rules.has_cross_column_or(source_sql):
+        contracts.append(
+            {
+                "id": "cross_column_or",
+                "classification": "ADVICE_ONLY",
+                "required_explanation": _CROSS_COLUMN_OR_SAFE_COPY,
+                "max_confidence_score": 79,
+            }
+        )
+
+    if _source_has_no_main_where(source_sql):
+        contracts.append(
+            {
+                "id": "no_main_where",
+                "classification": "ADVICE_ONLY",
+                "required_explanation": _NO_MAIN_WHERE_SAFE_COPY,
+                "max_confidence_score": 79,
+            }
+        )
+
+    for guard_id, source_re, _advice_re, safe_copy in _ADVICE_ONLY_PROSE_GUARDS:
+        if source_re.search(source_sql):
+            contracts.append(
+                {
+                    "id": guard_id,
+                    "classification": "ADVICE_ONLY",
+                    "required_explanation": safe_copy,
+                    "max_confidence_score": 79,
+                }
+            )
+    return contracts
+
+
+def _server_owned_advice_only_reason(source_sql: str) -> str | None:
+    """Canonical reason for ADVICE_ONLY cases that previously leaked details.
+
+    The same safe copy is used for advice explanations and for the
+    suggested_sql.reason field so a model cannot bypass the prose guard by
+    moving UNION/date/filter examples into another field.
+    """
+    if rewrite_rules.has_cross_column_or(source_sql):
+        return _CROSS_COLUMN_OR_SAFE_COPY
+    if _source_has_no_main_where(source_sql):
+        return _NO_MAIN_WHERE_SAFE_COPY
+    for _guard_id, source_re, _advice_re, safe_copy in _ADVICE_ONLY_PROSE_GUARDS:
+        if source_re.search(source_sql):
+            return safe_copy
+    return None
+
+
+_TO_CHAR_YEAR_VALUE_RE = re.compile(
+    r"(?P<prefix>\bTO_CHAR\s*\([^)]*,\s*'YYYY'\s*\)\s*=\s*)"
+    r"(?P<literal>'[0-9]{4}')",
+    re.IGNORECASE,
+)
+
+
+def _mask_to_char_year_value(mask_result: MaskResult) -> MaskResult:
+    """Hide a short year value that would otherwise bypass short-ASCII masking.
+
+    The format mask ('YYYY') remains visible so Gemma can recognize the
+    pattern, while the concrete year is replaced with the same neutral
+    placeholder mechanism used by masking.py. This removes the raw material
+    Gemma used to synthesize year-start/year-end date literals in TC07.
+    """
+    existing = [
+        int(m.group(1))
+        for key in mask_result.reverse_map
+        if (m := re.fullmatch(r":STR_(\d+)", key, flags=re.IGNORECASE))
+    ]
+    next_index = max(existing, default=0)
+    reverse_map = dict(mask_result.reverse_map)
+    literal_hints = dict(mask_result.literal_hints)
+
+    def repl(match: re.Match[str]) -> str:
+        nonlocal next_index
+        next_index += 1
+        placeholder = f":STR_{next_index:03d}"
+        literal = match.group("literal")
+        inner = literal[1:-1]
+        reverse_map[placeholder] = literal
+        literal_hints[placeholder] = {
+            "kind": "string",
+            "length": len(inner),
+            "wildcard": "none",
+            "shape": "digits",
+            "semantic_role": "year_value",
+        }
+        return match.group("prefix") + placeholder
+
+    masked_sql = _TO_CHAR_YEAR_VALUE_RE.sub(repl, mask_result.masked_sql)
+    return MaskResult(
+        masked_sql=masked_sql,
+        reverse_map=reverse_map,
+        literal_hints=literal_hints,
+    )
+
+
+def _calibrate_assessment_confidence(
+    raw_score: int,
+    advice: list[AdviceItem],
+    suggested_sql: SuggestedSql,
+    representative: ParsedStatement | None,
+    *,
+    policy_corrected_summary: bool = False,
+    dropped_advice: bool = False,
+) -> int:
+    """Apply evidence-aware caps without turning confidence into permission.
+
+    High confidence is allowed for direct SQL-text/deterministic evidence,
+    including a clean "no static change found" assessment. When the final
+    result still depends on assumptions or a server gate, the displayed
+    confidence cannot exceed the medium band. A rejected rewrite or parse
+    uncertainty is capped to low.
+    """
+    score = raw_score
+    if representative is None or representative.parse_status != "ok":
+        return min(score, 59)
+    if suggested_sql.outcome == "rejected" or dropped_advice:
+        # If the server had to reject/drop a material model claim, a high or
+        # medium confidence label would describe an assessment that did not
+        # survive safety review.
+        return min(score, 59)
+    if policy_corrected_summary:
+        # A deterministic policy correction (for example exact COST boundary
+        # wording) means the final statement is not exactly the model's own
+        # assessment. Keep the signal, but never present it as high confidence.
+        score = min(score, 79)
+    if suggested_sql.outcome in {"advice_only", "gated"} or any(
+        item.verification == "unverified" for item in advice
+    ):
+        return min(score, 79)
+    return score
 
 
 def _guard_unverified_advice_prose(source_sql: str, title: str, explanation: str) -> tuple[str, str | None]:
@@ -1185,7 +1352,16 @@ def _finalize_suggested_sql(
         available = False
         outcome = "advice_only"
 
-    if outcome == "advice_only":
+    source_sql = representative.raw_sql if representative is not None else ""
+    policy_reason = _server_owned_advice_only_reason(source_sql)
+    if not available and policy_reason is not None and outcome not in {"gated", "rejected"}:
+        # A known ADVICE_ONLY pattern cannot become "not_needed" merely
+        # because the model overlooked it. The server already knows this
+        # pattern requires a confirmation-first explanation.
+        outcome = "advice_only"
+        reason = policy_reason
+        confidence_score = None
+    elif outcome == "advice_only":
         reason = _tidy_advice_only_reason(reason)
     elif outcome == "not_needed":
         cost_reason = _cost_block_not_needed_reason(cost, rules_config)
@@ -1245,7 +1421,9 @@ def _finalize(
     vocab = ai_guard_cfg.get("vocabulary_replacements", {})
 
     summary: str | None = _sanitize_user_prose(raw.summary, vocab, literal_hints)
+    sanitized_summary = summary
     summary = _normalize_cost_threshold_summary(summary, cost, rules_config)
+    policy_corrected_summary = summary != sanitized_summary
     if _contains_forbidden(summary, forbidden):
         logger.info("ai_service: summary discarded on forbidden-phrase match")
         summary = None
@@ -1320,11 +1498,22 @@ def _finalize(
         pct,
     )
 
+    assessment_confidence_score = _calibrate_assessment_confidence(
+        raw.assessment_confidence_score,
+        advice,
+        suggested_sql,
+        representative,
+        policy_corrected_summary=policy_corrected_summary,
+        dropped_advice=len(advice) < min(len(raw.advice), 3),
+    )
+
     # Still "ok" even if advice ended up empty after filtering — the model
-    # did respond and validate; there is no separate "degraded but ok" state.
+    # did respond and validate. A successful AI response always carries an
+    # overall assessment confidence, including the not_needed path.
     return AiResult(
         status="ok",
         summary=summary,
+        assessment_confidence_score=assessment_confidence_score,
         advice=advice,
         suggested_sql=suggested_sql,
         estimated_improvement_pct=pct,
@@ -1626,6 +1815,12 @@ async def get_ai_result(
                 else 0,
             )
 
+        # TC07 hardening: short ASCII years normally stay visible for useful
+        # code reasoning, but a TO_CHAR(...,'YYYY') comparison is an
+        # ADVICE_ONLY pattern where exposing the concrete year repeatedly
+        # caused Gemma to synthesize unsafe date boundaries.
+        mask_result = _mask_to_char_year_value(mask_result)
+
         sql_tokens = _estimate_tokens(mask_result.masked_sql)
         candidate_allowed, decline_code = _compute_gates(
             statements, settings.ai_gate, sql_tokens=sql_tokens, num_predict=settings.llm.max_output_tokens
@@ -1691,6 +1886,9 @@ async def get_ai_result(
                 structure_flags=sorted(representative.complexity_flags) if representative else [],
                 knowledge_context=knowledge_context,
                 cost_context=_cost_context(cost, settings.rules_config),
+                advice_contracts=_build_advice_contracts(
+                    representative.raw_sql if representative is not None else sql_text
+                ),
             )
 
         payload = build(candidate_allowed)

@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 30
     env:
       SQLCHECK_LLM_PROVIDER: ollama_cloud
-      OLLAMA_API_KEY: ${{ secrets.openrouter }}
+      OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
       OLLAMA_CLOUD_MODEL: gemma4:31b
       SQLCHECK_ARCHIVE_ENABLED: "false"
       RUN_ROOT: data/cloud_e2e_smoke_${{ github.run_id }}
@@ -49,10 +49,10 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${OLLAMA_API_KEY:-}" ]; then
-            echo "::error::GitHub secret 'openrouter' did not resolve into OLLAMA_API_KEY."
+            echo "::error::GitHub secret 'OLLAMA_API_KEY' did not resolve into OLLAMA_API_KEY."
             exit 20
           fi
-          echo "secret_alias=openrouter -> OLLAMA_API_KEY (present; value not printed)"             >> "$RUN_ROOT/environment.txt"
+          echo "secret_alias=OLLAMA_API_KEY -> OLLAMA_API_KEY (present; value not printed)"             >> "$RUN_ROOT/environment.txt"
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5

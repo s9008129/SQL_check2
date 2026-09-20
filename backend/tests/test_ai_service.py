@@ -2012,6 +2012,7 @@ def test_prompt_requires_advice_only_to_be_prose_only_without_forbidden_sql_prim
     assert "ADVICE_ONLY／INFORMATIONAL 的 explanation 只能描述**概念方向**" in prompt
     assert "不得輸出任何" in prompt
     assert "新的日期、數字或業務常數" in prompt
+    assert "summary 必須**逐字使用** cost_context.formal_message" in prompt
     # Do not teach a smaller model the exact forbidden predicate/literals
     # while asking it not to repeat them.
     assert "(A.STATUS = 'N' OR A.STATUS IS NULL)" not in prompt
@@ -2075,6 +2076,7 @@ def test_system_prompt_calibrates_confidence_without_turning_it_into_permission(
         "0–59",
         "低 confidence 是合法且有價值的輸出",
         "confidence_score **不得超過 79**",
+        "欄位不得省略",
         "suggested_sql 若 available=false",
         "confidence_score **必須填 0**",
     ):

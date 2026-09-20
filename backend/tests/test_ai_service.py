@@ -41,6 +41,7 @@ def _ollama_envelope(content_str: str) -> dict:
 def _good_inner(**overrides) -> dict:
     body = {
         "summary": "這段 SQL 的條件欄位使用了函數，建議調整寫法。",
+        "assessment_confidence_score": 88,
         "advice": [
             {
                 "title": "合併同欄位 OR 條件",
@@ -1671,6 +1672,7 @@ async def test_exact_cost_threshold_uses_server_owned_boundary_wording(settings,
     sql = "SELECT A.ID FROM PLAIN_TABLE A WHERE A.ID = :ID"
     inner = {
         "summary": "目前執行成本（COST）過高，不符合中心規範。",
+        "assessment_confidence_score": 94,
         "advice": [],
         "suggested_sql": {
             "available": False,
@@ -1718,6 +1720,7 @@ async def test_above_cost_threshold_uses_server_owned_boundary_wording(settings,
     sql = "SELECT A.ID FROM PLAIN_TABLE A WHERE A.ID = :ID"
     inner = {
         "summary": "目前執行成本（COST）過高，不符合中心規範。",
+        "assessment_confidence_score": 94,
         "advice": [],
         "suggested_sql": {
             "available": False,
@@ -1781,6 +1784,7 @@ async def test_remote_gemma_parity_profile_keeps_same_short_ascii_literals_as_lo
                                     "text": json.dumps(
                                         {
                                             "summary": "目前未發現需要調整的寫法。",
+                                            "assessment_confidence_score": 91,
                                             "advice": [],
                                             "suggested_sql": {
                                                 "available": False,

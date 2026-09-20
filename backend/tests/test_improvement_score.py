@@ -47,6 +47,12 @@ def test_score_never_exceeds_max(rules_cfg, tables_cfg):
     assert result.score <= 100
 
 
+def test_improvement_index_governance_is_formally_finalized(rules_cfg):
+    # 2026-09-20 owner decision: keep the existing weights/algorithm and
+    # close the provisional business-decision item.
+    assert rules_cfg["improvement_score"]["provisional"] is False
+
+
 def test_index_is_fully_deterministic_and_has_no_ai_component(rules_cfg, tables_cfg):
     # 2026-09-17 user decision: the 0-100 index is computed from deterministic
     # facts only. There is no AI parameter on compute(), no `ai_adjustment`

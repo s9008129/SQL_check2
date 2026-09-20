@@ -99,16 +99,23 @@ def test_verified_substr_rewrite_can_be_correlated_with_filter_evidence():
     assert item.step_id == 1
 
 
-def test_sql_developer_csv_grid_export_is_supported():
-    csv_text = """Id,Operation,Name,Rows,Cost (%CPU),Time
-0,SELECT STATEMENT,,25,14 (0),00:00:01
-1,TABLE ACCESS FULL,TAX_CASE,25,14 (0),00:00:01
+def test_sql_developer_csv_grid_export_supports_plan_table_columns():
+    csv_text = """Id,Operation,Options,Object_Name,Cardinality,Cost,Access_Predicates,Filter_Predicates
+0,SELECT STATEMENT,,,25,14,,
+1,TABLE ACCESS,FULL,TAX_CASE,25,14,,TRUNC(A.CASE_DATE)=DATE_VALUE
 """
     result = execution_plan.analyze(csv_text, expected_cost=14)
     assert result.recognized is True
     assert result.source == "estimated"
-    assert result.steps[1].object_name == "TAX_CASE"
+    step1 = result.steps[1]
+    assert step1.operation == "TABLE ACCESS"
+    assert step1.options == "FULL"
+    assert step1.object_name == "TAX_CASE"
+    assert step1.estimated_rows == 25
+    assert step1.filter_predicates == ["TRUNC(A.CASE_DATE)=DATE_VALUE"]
     assert result.plan_cost == 14
+    assert any(item.code == "TABLE_ACCESS_FULL" and item.step_id == 1 for item in result.observations)
+    assert any(item.code == "FUNCTION_FILTER_PREDICATE" and item.step_id == 1 for item in result.observations)
 
 
 def test_sql_developer_tab_copy_is_supported():

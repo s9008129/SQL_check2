@@ -17,6 +17,8 @@ from app.schemas import (
     AiResult,
     AnalyzeRequest,
     AnalyzeResponse,
+    ExecutionPlanAnalysis,
+    ExtractPlanResponse,
     ExtractSqlResponse,
     HealthResponse,
     StatementSummary,
@@ -24,6 +26,7 @@ from app.schemas import (
 )
 from app.services import (
     ai_service,
+    execution_plan,
     file_extract,
     improvement_score,
     rewrite_rules,
@@ -41,6 +44,8 @@ router = APIRouter()
 _AI_UNAVAILABLE_MESSAGE = "智慧改善建議目前暫時無法使用，仍可依上方規則檢核結果進行確認。"
 _ANALYZE_FAILED_MESSAGE = "系統暫時無法完成檢核，請稍後再試一次。"
 _EXTRACT_FAILED_MESSAGE = "附件內容無法辨識，請確認檔案內容，或直接貼上 SQL。"
+_PLAN_EXTRACT_FAILED_MESSAGE = "執行計畫附件無法讀取，請改貼文字，或使用 SQL Developer 匯出的 TXT／CSV。"
+_PLAN_UPLOAD_EXTENSIONS = frozenset({".txt", ".csv"})
 
 _VERIFIED_REWRITE_METADATA = {
     "or_eq_to_in": ("R006", "同欄位 OR 改為 IN"),
@@ -131,6 +136,46 @@ async def extract_sql(file: Annotated[UploadFile, File(...)]) -> ExtractSqlRespo
     )
 
 
+@router.post("/extract-plan", response_model=ExtractPlanResponse)
+async def extract_plan(file: Annotated[UploadFile, File(...)]) -> ExtractPlanResponse:
+    """Extract SQL Developer plan text without trying to interpret it as SQL.
+
+    TXT/CSV are intentionally the only upload formats in v1. SQL Developer
+    users can always copy/paste plan text directly; keeping plan uploads
+    text-only avoids OCR and ambiguous screenshot parsing.
+    """
+    settings = get_settings()
+    filename = file.filename or "execution-plan.txt"
+    if _ext_of(filename) not in _PLAN_UPLOAD_EXTENSIONS:
+        await file.close()
+        raise HTTPException(
+            status_code=400,
+            detail="執行計畫附件請使用 SQL Developer 匯出的 TXT 或 CSV，或直接貼上文字。",
+        )
+
+    content = await file.read()
+    try:
+        extracted = file_extract.extract_text(filename, content, settings)
+    except AttachmentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - never leak uploaded plan text through tracebacks
+        _log_exception_type_only("execution-plan attachment extraction failed", exc)
+        raise HTTPException(status_code=500, detail=_PLAN_EXTRACT_FAILED_MESSAGE) from None
+    finally:
+        await file.close()
+
+    message = "已讀取執行計畫文字，可確認內容後開始檢核。"
+    if extracted.truncated:
+        message = "執行計畫內容較長，已依系統上限截取前段文字；建議改貼單一 SQL 的計畫。"
+    return ExtractPlanResponse(
+        status="ok",
+        filename=filename,
+        plan_text=extracted.text,
+        truncated=extracted.truncated,
+        message=message,
+    )
+
+
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
     settings = get_settings()
@@ -149,6 +194,20 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
         raise HTTPException(status_code=500, detail=_ANALYZE_FAILED_MESSAGE) from None
 
     verified_rewrites = _find_verified_rewrites(parsed)
+
+    plan_analysis: ExecutionPlanAnalysis | None = None
+    if payload.execution_plan:
+        try:
+            plan_analysis = execution_plan.analyze(
+                payload.execution_plan,
+                expected_cost=payload.cost,
+                verified_rewrites=verified_rewrites,
+            )
+        except Exception as exc:  # noqa: BLE001 - plan evidence must never break SQL review
+            _log_exception_type_only("execution_plan.analyze raised unexpectedly", exc)
+            plan_analysis = execution_plan.unrecognized(
+                "執行計畫內容暫時無法解析；SQL 規則檢核仍可正常使用。"
+            )
 
     if payload.include_ai:
         try:
@@ -216,6 +275,7 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
         findings=findings,
         statements=statements_summary,
         verified_rewrites=verified_rewrites,
+        execution_plan=plan_analysis,
         parse_message=parsed.parse_message,
         ai=ai_result,
     )

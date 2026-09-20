@@ -112,3 +112,15 @@ Pull requests should explain the user-visible outcome, list verification command
 Copy from `.env.example` or `.env.mac.example`; never commit `.env`, API keys, identifiable case data, or production SQL. The application must not connect to Oracle or claim measured execution plans, indexes, scans, or performance gains without evidence.
 
 Current owner decisions (2026-09-20): Balanced cloud privacy is closed as-is; SQL Archive retention stays as-is; R008 is disabled because important tables are reminders only (R007 remains); the existing 改善指數 weights/algorithm are final; Ollama 11434 firewall hardening is owner-managed infrastructure, not an application backlog item. See `docs/document-status.md` before treating an older PRD/Handoff/report as current requirements.
+
+### SQL Developer Execution-Plan Evidence
+
+SQLCheck may now receive execution-plan text explicitly supplied from the **test environment**. Treat this as a separate evidence channel, not as permission to become a production DBA tool.
+
+- Prefer SQL Developer **Autotrace (F6)** when the test environment permits actual execution; F10 Explain Plan remains useful but is estimated evidence.
+- The application does not connect to Oracle. It only parses text/CSV the reviewer pasted or uploaded.
+- Raw execution-plan text must not be written to `data/sql_archive/` and must not be sent to the cloud LLM. The deterministic plan parser owns plan facts.
+- A test-machine plan never proves the production plan. Always label its source as test evidence.
+- `TABLE ACCESS FULL`, HASH JOIN, SORT, etc. are observable plan facts, not automatic defects.
+- Execution-plan evidence does **not** change center compliance or the existing 改善指數 unless the owner separately reopens that governance decision.
+- Runtime statistics such as A-Rows, Starts, Buffers and Autotrace statistics may be compared when actually supplied, but never fabricate missing values or post-change improvements.

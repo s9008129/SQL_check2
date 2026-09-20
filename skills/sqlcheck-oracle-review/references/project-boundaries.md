@@ -111,3 +111,25 @@ reviewed PR authorizes them:
 A `family_signal` must first gain a specific deterministic detector (and the
 catalog entry must be updated) before it can ever be treated as matched model
 knowledge.
+
+
+## Test-environment execution-plan evidence
+
+The 2026-09-20 execution-plan feature adds one explicit evidence channel without
+changing the authority order above:
+
+- The reviewer may paste/upload Oracle SQL Developer plan output collected in
+  the **test environment**.
+- `backend/app/services/execution_plan.py` parses that evidence
+  deterministically. It may state only facts present in the supplied plan,
+  such as operations, object names, predicates, estimated/actual rows,
+  Starts, Buffers, Reads and supported Autotrace statistics.
+- F6 Autotrace / DBMS_XPLAN runtime statistics are stronger evidence than F10
+  Explain Plan for what happened in that test execution, but neither proves
+  what production will do.
+- Plan evidence does not override the formal rule engine, deterministic rewrite
+  rules, Pattern Catalog classifications, candidate gates, or 改善指數.
+- Raw plan text is kept out of the SQL archive and out of cloud-model context.
+  The UI receives the deterministic structured analysis instead.
+- Seeing `TABLE ACCESS FULL`, a join method, or a high row count is not by
+  itself authorization to recommend an index or call the plan defective.

@@ -104,3 +104,5 @@ HISTORICAL 文件
 > 平常用便宜、穩定的自動測試；真的改到 AI 核心時，再手動按一次「用真正 Gemma 跑完整體檢」。
 
 這樣能保留真實模型驗證，又不讓每個 README 或 CSS 修改都浪費雲端 API。
+
+- `docs/sql-developer-execution-plan.md` — CURRENT：SQL Developer 執行計畫證據使用說明。

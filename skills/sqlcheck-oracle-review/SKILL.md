@@ -31,8 +31,12 @@ and the compliance/optimization boundary. Then:
 
 ## Five things to hold in your head
 
-1. **SQLCheck 是 Oracle-focused，但不是 Oracle DBA 工具。** No CREATE INDEX,
-   no execution plan reasoning, no "this will be faster" — see
+1. **SQLCheck 是 Oracle-focused，但不是 Oracle DBA 工具。** No CREATE INDEX
+   and no invented plan/index/runtime claims. When a reviewer explicitly
+   supplies a SQL Developer execution plan from the test environment, the
+   deterministic plan parser may state facts visible in that evidence
+   (operation, predicate, E-Rows/A-Rows, buffers, etc.), but it still must not
+   infer the production plan or promise "this will be faster" — see
    `references/forbidden-claims.md`.
 2. **`pattern_catalog.yaml` 才是 optimization pattern 的 Source of Truth.**
    Not this SKILL.md, not `docs/sql-optimization-skill-applicability.md`

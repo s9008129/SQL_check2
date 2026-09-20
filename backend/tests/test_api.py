@@ -69,6 +69,20 @@ async def test_health_survives_ai_check_raising(client, monkeypatch):
 # ---------------------------------------------------------------------------
 # /api/analyze
 # ---------------------------------------------------------------------------
+ESTIMATED_PLAN_TEXT = """
+Plan hash value: 77
+---------------------------------------------------------------
+| Id | Operation          | Name | Rows | Cost (%CPU) | Time     |
+---------------------------------------------------------------
+|  0 | SELECT STATEMENT   |      |   10 |    68 (0)   | 00:00:01 |
+|* 1 | TABLE ACCESS FULL  | T    |   10 |    68 (0)   | 00:00:01 |
+---------------------------------------------------------------
+Predicate Information (identified by operation id):
+---------------------------------------------------
+   1 - filter("A"."Y"=1)
+"""
+
+
 async def test_analyze_clean_sql_passes_without_ai(client):
     body = {
         "application_no": "115000218",
@@ -82,6 +96,44 @@ async def test_analyze_clean_sql_passes_without_ai(client):
     assert data["compliance"]["status"] == "PASS"
     assert data["cost"] == 68420
     assert data["ai"]["status"] == "pending"
+    assert data["execution_plan"] is None
+
+
+async def test_analyze_accepts_sql_developer_plan_without_changing_compliance_or_score(client):
+    body = {
+        "application_no": "115000218",
+        "cost": 68,
+        "sql": "SELECT A.X FROM T A WHERE A.Y = 1",
+        "execution_plan": ESTIMATED_PLAN_TEXT,
+        "include_ai": False,
+    }
+    with_plan = await client.post("/api/analyze", json=body)
+    without_plan = await client.post("/api/analyze", json={**body, "execution_plan": None})
+    assert with_plan.status_code == 200
+    data = with_plan.json()
+    assert data["execution_plan"]["recognized"] is True
+    assert data["execution_plan"]["source"] == "estimated"
+    assert data["execution_plan"]["plan_hash_value"] == "77"
+    assert data["execution_plan"]["cost_matches_input"] is True
+    assert data["compliance"] == without_plan.json()["compliance"]
+    assert data["improvement"] == without_plan.json()["improvement"]
+
+
+async def test_analyze_unrecognized_plan_keeps_sql_review_available(client):
+    resp = await client.post(
+        "/api/analyze",
+        json={
+            "application_no": "A1",
+            "cost": 1000,
+            "sql": "SELECT 1 FROM DUAL",
+            "execution_plan": "not a plan",
+            "include_ai": False,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["execution_plan"]["recognized"] is False
+    assert data["compliance"]["status"] == "PASS"
 
 
 async def test_analyze_without_ai_returns_deterministic_verified_rewrites(client):
@@ -345,3 +397,30 @@ async def test_extract_sql_does_not_write_any_temp_file(client):
     assert resp.status_code == 200
     after = set(os.listdir(tmp_dir))
     assert after == before, f"extract-sql left new files in {tmp_dir}: {after - before}"
+
+
+# ---------------------------------------------------------------------------
+# /api/extract-plan
+# ---------------------------------------------------------------------------
+async def test_extract_plan_reads_sql_developer_txt_without_sql_detection(client):
+    files = {"file": ("plan.txt", ESTIMATED_PLAN_TEXT.encode(), "text/plain")}
+    resp = await client.post("/api/extract-plan", files=files)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert "TABLE ACCESS FULL" in data["plan_text"]
+    assert data["truncated"] is False
+
+
+async def test_extract_plan_accepts_csv_export(client):
+    files = {"file": ("plan.csv", b"Id,Operation,Name\n0,SELECT STATEMENT,", "text/csv")}
+    resp = await client.post("/api/extract-plan", files=files)
+    assert resp.status_code == 200
+    assert "SELECT STATEMENT" in resp.json()["plan_text"]
+
+
+async def test_extract_plan_rejects_non_text_export(client):
+    files = {"file": ("plan.pdf", b"%PDF-1.4", "application/pdf")}
+    resp = await client.post("/api/extract-plan", files=files)
+    assert resp.status_code == 400
+    assert "TXT" in resp.json()["detail"]

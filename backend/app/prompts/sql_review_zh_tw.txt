@@ -65,9 +65,13 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
   欄位）、cartesian_join（缺少 JOIN 條件，務必提醒）、correlated_subquery、window_function、
   connect_by、set_operation、rownum。
 - advice_contracts：系統針對已知的 ADVICE_ONLY 情境提供的**正式輸出契約**。每項包含
-  id、classification、required_explanation、max_confidence_score。只要你的 advice 涉及該 pattern，
-  explanation 必須逐字使用 required_explanation，不得自行補上日期邊界、UNION、業務欄位或其他
-  替代寫法；該項 advice 的 confidence_score 也不得超過 max_confidence_score。
+  id、classification、required_explanation、max_confidence_score；其中最多一項會另外帶有
+  use_as_suggested_sql_reason=true。只要你的 advice 涉及該 pattern，explanation 必須逐字使用
+  required_explanation，不得自行增補契約文字以外的例子、括號或延伸說明；該項 advice 的
+  confidence_score 也不得超過 max_confidence_score。若某項契約有
+  use_as_suggested_sql_reason=true，且這次沒有提供系統可驗證的完整改寫，
+  suggested_sql.reason 也必須**逐字等於**該項 required_explanation，不得加前綴、後綴、
+  例子或同義改寫。這段 required_explanation 是完整答案，不是讓你繼續補充內容的提示。
 - knowledge_context：系統從 Pattern Catalog 中依 **確定性 exact match** 挑出的少量靜態知識，
   最多只會提供幾項，且只針對目前送給你的代表性 SQL。它不是新的規則判決，也不是資料庫
   實測結果；其權威性仍低於 findings／規則引擎與系統的 deterministic rewrite 驗證。
@@ -121,7 +125,10 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
 - 缺少 WHERE、缺少 JOIN 關聯條件、需要未知資料型態才能成立的改寫，都屬於「先說明方向、
   再請同仁確認」的情況；不要為了看起來具體而硬生 SQL。
 - 主查詢沒有 WHERE 時，不要自行想像任何原 SQL 未出現的業務欄位或篩選維度。若
-  advice_contracts 含 no_main_where，直接逐字使用 required_explanation，不要自行補充例子。
+  advice_contracts 含 no_main_where，相關 advice 的 explanation 直接逐字使用
+  required_explanation；若該契約同時有 use_as_suggested_sql_reason=true，
+  suggested_sql.reason 也必須逐字使用同一段 required_explanation。兩個欄位都不得再加
+  契約文字以外的例子、括號或補充句。
 
 【畫面呈現風格：短、白話、不重複】
 - 這些文字會放在儀表板卡片上。請讓非資訊背景同仁能在幾秒內看懂，不要寫成技術報告。
@@ -207,11 +214,13 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
        完整改寫，也不提供可直接複製的片段；example／before 一律留空，只在 explanation
        說明方向。
      不要把「其實沒東西可改」說成 advice_only，也不要把「需要假設」說成 not_needed。
-     **advice_only 的 reason 寫法**：用同仁看得懂的白話寫 1～2 句，直接點出「需要業務確認
-     的是哪一件事」以及「若不確認就改會發生什麼」，例如：「移除 DISTINCT 前，請先確認
-     JOIN 後的資料是否已經唯一；若不是，拿掉 DISTINCT 會改變查詢結果。」不要先鋪陳
-     已檢查過的項目（那是 not_needed 才需要的），也不要在句尾加「故不自動產生建議寫法」
-     「本次不改寫」這類結語——畫面已經會說明這次只提供方向。
+     **advice_only 的 reason 寫法**：先看 advice_contracts。若其中有
+     use_as_suggested_sql_reason=true，reason 必須逐字等於該契約的 required_explanation，
+     以下一般寫法規則不適用，也不要再自行補任何一句。只有沒有這個 flag 時，才用同仁看得懂
+     的白話寫 1～2 句，直接點出「需要業務確認的是哪一件事」以及「若不確認就改會發生什麼」，
+     例如：「移除 DISTINCT 前，請先確認 JOIN 後的資料是否已經唯一；若不是，拿掉 DISTINCT
+     會改變查詢結果。」不要先鋪陳已檢查過的項目（那是 not_needed 才需要的），也不要在句尾
+     加「故不自動產生建議寫法」「本次不改寫」這類結語——畫面已經會說明這次只提供方向。
    - 若 candidate_allowed 為 false 且原因是 SQL 內容過長，只有 deterministic rewrite
      可驗證的局部改寫才能放在 advice 的 before／example；其餘 advice_only 仍只用
      explanation 說明方向，不要輸出整段 SQL。

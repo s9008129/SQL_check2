@@ -533,8 +533,17 @@ def test_system_prompt_provided_example_is_derivable_and_advice_only_is_prose_fi
 def test_system_prompt_tells_model_how_to_word_advice_only_reason():
     # 2026-09-17 user feedback: plain language, state the fact to confirm,
     # no 「故不自動產生建議寫法」 closing clause (the UI already says that).
-    assert "advice_only 的 reason 寫法" in ai_service.SYSTEM_PROMPT
-    assert "故不自動產生建議寫法" in ai_service.SYSTEM_PROMPT
+    prompt = ai_service.SYSTEM_PROMPT
+    assert "advice_only 的 reason 寫法" in prompt
+    assert "故不自動產生建議寫法" in prompt
+    # Post-PR21 live evidence: no_main_where advice respected the contract,
+    # but suggested_sql.reason occasionally appended invented business
+    # examples. The prompt must make the server-owned reason an exact-copy
+    # contract when the payload marks it as canonical.
+    assert "use_as_suggested_sql_reason=true" in prompt
+    assert "suggested_sql.reason 也必須**逐字等於**" in prompt
+    assert "這段 required_explanation 是完整答案" in prompt
+    assert "不得再加" in prompt
 
 
 def test_cross_column_or_advice_is_normalized_without_union_or_performance_claim():
@@ -2605,3 +2614,16 @@ def test_advice_contracts_use_server_owned_copy_and_medium_cap():
         "調整前請先確認欄位型態與比對值是否包含時間。"
     )
     assert trunc["max_confidence_score"] == 79
+    assert trunc["use_as_suggested_sql_reason"] is True
+
+
+def test_no_main_where_contract_owns_raw_suggested_sql_reason():
+    sql = "SELECT A.ID FROM T A JOIN U B ON A.K = B.K"
+    contracts = ai_service._build_advice_contracts(sql)
+
+    no_where = next(item for item in contracts if item["id"] == "no_main_where")
+    assert no_where["required_explanation"] == ai_service._NO_MAIN_WHERE_SAFE_COPY
+    assert no_where["use_as_suggested_sql_reason"] is True
+    # Exactly one contract owns the raw reason. This keeps the model contract
+    # unambiguous when a statement matches more than one ADVICE_ONLY pattern.
+    assert sum(item.get("use_as_suggested_sql_reason") is True for item in contracts) == 1

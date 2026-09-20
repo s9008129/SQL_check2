@@ -12,8 +12,9 @@
   數據，真正的執行效能仍需交由資料庫實際執行才能得知，請避免講得太絕對。
 - COST 與規範門檻的關係不需要你計算。<SQL_DATA> 的 cost_context 已由系統依正式
   R001 設定算好 threshold、relation（below／equal／above）與 formal_message。
-  只要 summary 需要說明 COST 規範結果，直接使用 cost_context.formal_message 的語意，
-  不要自行重算、猜測或改寫 equal／above 的關係。
+  當 R001 是目前唯一的 BLOCK 時，summary 必須**逐字使用** cost_context.formal_message，
+  不得增刪、同義改寫或自行重算 equal／above 的關係。若還有其他規則需要摘要，也仍以
+  cost_context.relation 為 COST 關係的唯一事實來源。
 - 不要把 COST 偏高的原因歸因於你看不到的資料量、資料分布、統計資訊、索引設定或其他
   資料庫環境因素，也不要自行要求 DBA 針對這些未觀測項目處理。若 SQL 文字本身沒有
   系統可安全改寫的地方，只需說明「是否能降低 COST 仍需搭配實際資料庫環境確認」。
@@ -83,8 +84,8 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
   請確認是否符合中心作業要求」，不可宣稱「已符合 WHERE 規範」。
 
 【AI 信心（confidence_score）】
-- 每一項 advice 都要輸出 confidence_score；suggested_sql 也要輸出 confidence_score。只能輸出
-  0 到 100 的整數，不要輸出 confidence_level；高／中／低由系統依固定門檻計算。
+- 每一項 advice 都要輸出 confidence_score；suggested_sql 也要輸出 confidence_score，**欄位不得省略**。
+  只能輸出 0 到 100 的整數，不要輸出 confidence_level；高／中／低由系統依固定門檻計算。
 - confidence_score 是你根據目前看得到的 sanitized_sql、findings、knowledge_context、
   structure_flags 與其他 <SQL_DATA> 資訊，對「這項改善建議適用於目前 SQL」的自評把握程度。
   完整改寫的分數則只描述你對該完整 AI 改寫適用性的自評。

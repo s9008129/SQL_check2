@@ -21,6 +21,7 @@ def test_cost_pass_below_threshold(cfg):
     compliance, rows, findings = rule_engine.evaluate(parsed, 68420, rules_cfg, tables_cfg)
     r001 = _row(rows, "R001")
     assert r001.status == "PASS"
+    assert r001.note == "低於規範門檻 100,000"
     assert compliance.status == "PASS"
 
 
@@ -30,8 +31,9 @@ def test_cost_block_at_threshold(cfg):
     compliance, rows, findings = rule_engine.evaluate(parsed, 100000, rules_cfg, tables_cfg)
     r001 = _row(rows, "R001")
     assert r001.status == "BLOCK"
-    # Exactly-at-threshold must not read as 「超過」 (2026-09-17 blind-spot test).
-    assert r001.note == "達到或超過規範門檻 100,000"
+    # Exact equality is a BLOCK because the policy is COST < threshold, but
+    # the wording must not imply the value is already above the threshold.
+    assert r001.note == "已達規範門檻 100,000"
     assert compliance.status == "BLOCK"
     assert compliance.label == "不符合中心規範"
     assert any(f.rule_id == "R001" and f.statement_index == -1 for f in findings)
@@ -41,7 +43,20 @@ def test_cost_pass_just_below_threshold(cfg):
     rules_cfg, tables_cfg = cfg
     parsed = parse_sql_text("SELECT * FROM T A WHERE A.X=1")
     compliance, rows, _ = rule_engine.evaluate(parsed, 99999, rules_cfg, tables_cfg)
-    assert _row(rows, "R001").status == "PASS"
+    r001 = _row(rows, "R001")
+    assert r001.status == "PASS"
+    assert r001.note == "低於規範門檻 100,000"
+
+
+def test_cost_block_just_above_threshold(cfg):
+    rules_cfg, tables_cfg = cfg
+    parsed = parse_sql_text("SELECT * FROM T A WHERE A.X=1")
+    compliance, rows, findings = rule_engine.evaluate(parsed, 100001, rules_cfg, tables_cfg)
+    r001 = _row(rows, "R001")
+    assert r001.status == "BLOCK"
+    assert r001.note == "已高於規範門檻 100,000"
+    assert compliance.status == "BLOCK"
+    assert any(f.rule_id == "R001" and f.statement_index == -1 for f in findings)
 
 
 def test_where_missing_is_block(cfg):

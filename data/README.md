@@ -2,6 +2,10 @@
 
 此目錄不是一般原始碼目錄。除本說明與 `.gitkeep` 外，內容預設不進 Git。
 
+## Manual Live Cloud E2E
+
+真正 Ollama Cloud / Gemma 的永久入口是 GitHub Actions 的 `Manual Live Cloud E2E`。它是手動執行，不會每次 PR 自動跑；workflow 產生的 evidence 仍需遵守本文件的資料最小化與證據有效性原則。
+
 ## E2E / 回歸測試
 
 每一次獨立測試請建立自己的子目錄：

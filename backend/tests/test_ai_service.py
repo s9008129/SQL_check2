@@ -512,14 +512,20 @@ def test_system_prompt_provided_example_is_derivable_and_advice_only_is_prose_fi
 
     provided_orig = "WHERE SUBSTR(A.CODE_COL,6,3) = '551' AND A.STATUS = :STR_001"
     provided_sugg = "WHERE A.CODE_COL LIKE '_____551%' AND A.STATUS = :STR_001"
-    advice_orig = "WHERE TRUNC(A.DATE_COL) = :STR_001 AND NVL(A.S,'N') = 'N'"
-    for fragment in (provided_orig, provided_sugg, advice_orig):
+    unsafe_advice_example = "WHERE TRUNC(A.DATE_COL) = :STR_001 AND NVL(A.S,'N') = 'N'"
+
+    # Only deterministic VERIFIED_REWRITE examples belong in the prompt.
+    # ADVICE_ONLY examples were deliberately removed after Live Gemma copied
+    # their concrete mechanics into prose despite being told not to.
+    for fragment in (provided_orig, provided_sugg):
         assert fragment in ai_service.SYSTEM_PROMPT
+    assert unsafe_advice_example not in ai_service.SYSTEM_PROMPT
 
     def tree(where: str):
         return parse_one(f"SELECT A.X FROM T A {where}", read="oracle")
 
     assert rewrite_rules.verify_predicate_changes(tree(provided_orig), tree(provided_sugg)) == (True, None)
+    assert "advice_contracts" in ai_service.SYSTEM_PROMPT
     assert "example 留空" in ai_service.SYSTEM_PROMPT
     assert "不知道就不要猜 SQL" in ai_service.SYSTEM_PROMPT
 
@@ -2079,7 +2085,7 @@ def test_system_prompt_calibrates_confidence_without_turning_it_into_permission(
         "80～100",
         "60～79",
         "0～59",
-        "不需要改寫",
+        "目前未發現需要調整的寫法",
         "不是 SQL 正確率",
         "不代表可以直接執行",
         "不得超過 79",

@@ -10,6 +10,7 @@ SQLCheck AI 主要協助同仁：
 
 - 檢查 COST、WHERE、Parallel Hint 等既有規範。
 - 找出 LIKE、條件欄位函數、OR、重要資料表等需要留意的寫法。
+- 可選擇貼上或上傳 SQL Developer 測試機執行計畫，將 COST 拆成可觀察的 Plan 證據。
 - 以「改善指數」呈現值得優先檢視的程度。
 - 在系統能證明安全時提供改寫對照；無法證明時只提供方向，不猜測業務條件。
 - 使用 AI 產生白話說明，但合規判定與可否採用改寫仍由系統規則決定。
@@ -68,6 +69,7 @@ SQLCheck AI 網頁
   ↓
 FastAPI 後端
   ├─ SQL / 附件解析
+  ├─ SQL Developer 執行計畫解析（選填）
   ├─ 規則引擎
   ├─ 改善指數
   ├─ 確定性改寫驗證
@@ -76,7 +78,7 @@ FastAPI 後端
       Gemma 4 31B
 ```
 
-正式環境中，SQLCheck 不連 Oracle、不執行 SQL，也不取得 Execution Plan、Index 或正式資料內容。
+正式環境中，SQLCheck 不連 Oracle、不執行 SQL；執行計畫只分析使用者從測試機 SQL Developer 主動貼上／上傳的文字證據，不會自行向正式資料庫取得 Plan、Index 或資料內容。
 
 ## 文件
 

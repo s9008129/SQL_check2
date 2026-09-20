@@ -1,6 +1,7 @@
 import type {
   AnalyzeRequest,
   AnalyzeResponse,
+  ExtractPlanResponse,
   ExtractSqlResponse,
   HealthResponse,
 } from "../types/api";
@@ -63,6 +64,17 @@ export async function extractSql(file: File, signal?: AbortSignal): Promise<Extr
     signal,
   });
   return parseJsonOrThrow<ExtractSqlResponse>(res);
+}
+
+export async function extractPlan(file: File, signal?: AbortSignal): Promise<ExtractPlanResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${API_BASE}/extract-plan`, {
+    method: "POST",
+    body: form,
+    signal,
+  });
+  return parseJsonOrThrow<ExtractPlanResponse>(res);
 }
 
 export async function analyze(

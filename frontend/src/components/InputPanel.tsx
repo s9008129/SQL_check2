@@ -1,3 +1,4 @@
+import ExecutionPlanInput from "./ExecutionPlanInput";
 import FileUpload from "./FileUpload";
 import SqlEditor from "./SqlEditor";
 
@@ -9,6 +10,8 @@ export interface InputPanelProps {
   onCostBlur: () => void;
   sql: string;
   onSqlChange: (value: string) => void;
+  executionPlan: string;
+  onExecutionPlanChange: (value: string) => void;
   onFileExtracted: (sql: string, message: string) => void;
   onSubmit: () => void;
   onClear: () => void;
@@ -25,6 +28,8 @@ export default function InputPanel({
   onCostBlur,
   sql,
   onSqlChange,
+  executionPlan,
+  onExecutionPlanChange,
   onFileExtracted,
   onSubmit,
   onClear,
@@ -89,6 +94,13 @@ export default function InputPanel({
       </div>
 
       <FileUpload onExtracted={onFileExtracted} disabled={submitting} />
+
+      <div className="plan-divider" aria-hidden="true" />
+      <ExecutionPlanInput
+        value={executionPlan}
+        onChange={onExecutionPlanChange}
+        disabled={submitting}
+      />
 
       {validationError && <div className="validation-error">{validationError}</div>}
 

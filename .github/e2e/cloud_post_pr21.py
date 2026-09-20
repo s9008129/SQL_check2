@@ -137,6 +137,45 @@ def full_raw_text(raw: dict[str, Any]) -> str:
     return json.dumps(raw, ensure_ascii=False, sort_keys=True)
 
 
+def raw_prose_text(raw: dict[str, Any]) -> str:
+    parts: list[str] = []
+    summary = raw.get("summary")
+    if isinstance(summary, str):
+        parts.append(summary)
+    for item in raw.get("advice") or []:
+        if isinstance(item, dict):
+            for key in ("title", "explanation"):
+                value = item.get(key)
+                if isinstance(value, str):
+                    parts.append(value)
+    suggested = raw.get("suggested_sql") or {}
+    if isinstance(suggested, dict):
+        reason = suggested.get("reason")
+        if isinstance(reason, str):
+            parts.append(reason)
+    return "\n".join(parts)
+
+
+def final_ai_prose_text(final: dict[str, Any]) -> str:
+    ai = final.get("ai") or {}
+    parts: list[str] = []
+    summary = ai.get("summary")
+    if isinstance(summary, str):
+        parts.append(summary)
+    for item in ai.get("advice") or []:
+        if isinstance(item, dict):
+            for key in ("title", "explanation"):
+                value = item.get(key)
+                if isinstance(value, str):
+                    parts.append(value)
+    suggested = ai.get("suggested_sql") or {}
+    if isinstance(suggested, dict):
+        reason = suggested.get("reason")
+        if isinstance(reason, str):
+            parts.append(reason)
+    return "\n".join(parts)
+
+
 def final_text(final: dict[str, Any]) -> str:
     return json.dumps(final.get("ai") or {}, ensure_ascii=False, sort_keys=True)
 
@@ -181,7 +220,11 @@ def evaluate_capture(capture: dict[str, Any], final: dict[str, Any]) -> dict[str
             if isinstance(advice, dict):
                 score = advice.get("confidence_score")
                 advice_confidences.append(score)
-                if case_id in ASSUMPTION_CASES and type(score) is int and score > 79:
+                assumption_dependent_item = case_id in ASSUMPTION_CASES
+                if case_id == "TC14":
+                    item_text = f"{advice.get('title') or ''}\n{advice.get('explanation') or ''}"
+                    assumption_dependent_item = bool(re.search(r"TRUNC|日期|時間", item_text, re.IGNORECASE))
+                if assumption_dependent_item and type(score) is int and score > 79:
                     flags["M11"] = 1
 
         suggested = raw.get("suggested_sql") or {}
@@ -220,7 +263,7 @@ def evaluate_capture(capture: dict[str, Any], final: dict[str, Any]) -> dict[str
             if UNION_RE.search(raw_all):
                 flags["M17"] = 1
         elif case_id in {"TC11", "TC12"}:
-            if INVENTED_DIM_RE.search(raw_all):
+            if INVENTED_DIM_RE.search(raw_prose_text(raw)):
                 flags["M18"] = 1
         elif case_id == "TC14":
             if TIME_RE.search(raw_all) or DATE_LITERAL_RE.search(raw_all) or re.search(r"TXN_DATE\s*(?:>=|>|<=|<)", code, re.I):
@@ -263,7 +306,7 @@ def evaluate_capture(capture: dict[str, Any], final: dict[str, Any]) -> dict[str
 
     if case_id == "TC09" and UNION_RE.search(final_text(final)):
         flags["M17"] = 1
-    if case_id in {"TC11", "TC12"} and INVENTED_DIM_RE.search(final_text(final)):
+    if case_id in {"TC11", "TC12"} and INVENTED_DIM_RE.search(final_ai_prose_text(final)):
         flags["M18"] = 1
     if case_id == "TC17" and TC17_FORBIDDEN_RE.search(final_text(final)):
         flags["M12"] = 1
@@ -528,10 +571,16 @@ async def main(out: Path) -> int:
             writer.writerows(confidence_rows)
 
     forbidden_hits: list[str] = []
+    final_unsafe_db_re = re.compile(
+        r"Full\s*Table\s*Scan|全表掃描|索引失效|已使用索引|未使用索引|Execution\s*Plan|執行計畫|"
+        r"統計(?:資料|資訊)|基數|cardinality|改善後\s*COST",
+        re.IGNORECASE,
+    )
     for path in sorted((out / "final_api").glob("*.json")):
-        text = path.read_text(encoding="utf-8")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        text = final_ai_prose_text(payload)
         for label, regex in [
-            ("unsupported_db_claim", DB_CLAIM_RE),
+            ("unsupported_db_claim", final_unsafe_db_re),
             ("union", UNION_RE),
             ("date_literal", DATE_LITERAL_RE),
             ("midnight", TIME_RE),

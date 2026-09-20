@@ -8,7 +8,7 @@
 `run_golden.py` checks the live SQLCheck stack (this codebase's own
 `sql_parser` / `rule_engine` / `ai_service`, not a re-implementation) against
 a REAL live LLM provider instance. It can run against either the formal-host
-Ollama/Gemma provider or a Mac development machine configured for Gemini API.
+Ollama/Gemma provider or the project’s Ollama Cloud profile used for development validation.
 
 ## Run
 
@@ -55,20 +55,21 @@ behaviour — one explicit AI expectation. Keep per-advice `impact` a
 *recorded* observation, not an assertion: it is reference material only and
 never feeds the deterministic improvement score or potential level.
 
-## Mac / Gemini
+## Mac / Ollama Cloud
 
 Mac 不需要安裝地端模型。先在 Repo 根目錄：
 
 ```bash
 cp .env.mac.example .env
-# 填入 GEMINI_API_KEY
+# 填入 OLLAMA_API_KEY
 set -a; source .env; set +a
 cd backend
-uv run python tests/golden/run_golden.py -v
+SQLCHECK_LLM_PROVIDER=ollama_cloud uv run python tests/golden/run_golden.py -v
 ```
 
-`SQLCHECK_LLM_PROVIDER=gemini` 時，runner 走與網頁完全相同的
-`ai_service -> llm_provider` 路徑。正式機改回 `ollama` 即可，不需要改測試案例。
+也可以不在本機執行，直接到 GitHub Actions 手動啟動 **Manual Live Cloud E2E**：
 
-請只用 synthetic / 已去識別化 SQL 做雲端驗證；真實 production archive 不要上傳到 Gemini。
+- `smoke`：執行 live golden cases。
+- `full`：執行較完整的 model/API E2E。
 
+雲端測試只使用 synthetic 或已去識別化 SQL；不要把 production archive 或原始案件 SQL 送到雲端。

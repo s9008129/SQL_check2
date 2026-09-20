@@ -40,13 +40,13 @@ from collections import Counter
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlglot import exp, parse_one
 
 from app.schemas import AdviceItem, AiResult, Finding, SuggestedSql, normalize_confidence_score
 from app.services import context_adapter, llm_provider, pattern_selector, rewrite_rules, rule_engine
 from app.services.cost_utils import classify_cost_relation, cost_formal_summary, cost_threshold_note
-from app.services.masking import mask_sql, scrub_invented_placeholders, unmask_sql
+from app.services.masking import MaskResult, mask_sql, scrub_invented_placeholders, unmask_sql
 from app.services.rule_engine import GLOBAL_STATEMENT_INDEX
 from app.services.sql_parser import ParsedStatement, parse_sql_text, structural_signature
 from app.settings import PROMPTS_DIR, Settings
@@ -157,6 +157,10 @@ RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "summary": {"type": "string"},
+        # Overall confidence in the whole AI assessment. This is intentionally
+        # separate from advice/rewrite confidence so a clean "no change needed"
+        # assessment still carries a confidence signal.
+        "assessment_confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
         "advice": {
             "type": "array",
             "maxItems": 3,
@@ -191,10 +195,13 @@ RESPONSE_SCHEMA: dict[str, Any] = {
                 # "SQL is already fine" and "needs a business assumption".
                 "rewrite_outcome": {"type": "string", "enum": ["provided", "not_needed", "advice_only"]},
             },
-            "required": ["available", "reason", "rewrite_outcome", "confidence_score"],
+            # Full-rewrite confidence is only meaningful when a rewrite is
+            # actually provided. Overall assessment confidence is always
+            # required at the response root instead.
+            "required": ["available", "reason", "rewrite_outcome"],
         },
     },
-    "required": ["summary", "advice", "suggested_sql"],
+    "required": ["summary", "assessment_confidence_score", "advice", "suggested_sql"],
 }
 
 
@@ -217,8 +224,19 @@ class _AiRawResponse(BaseModel):
     """Mirrors RESPONSE_SCHEMA for validating the model's raw JSON reply."""
 
     summary: str
+    # Missing or malformed overall confidence makes the model response
+    # incomplete. _request_ai will retry once, and only then degrade.
+    assessment_confidence_score: int
     advice: list[AdviceItem] = Field(default_factory=list)
     suggested_sql: _RawSuggestedSql
+
+    @field_validator("assessment_confidence_score", mode="before")
+    @classmethod
+    def _strict_assessment_confidence(cls, value: object) -> int:
+        normalized = normalize_confidence_score(value)
+        if normalized is None:
+            raise ValueError("assessment_confidence_score must be an integer from 0 to 100")
+        return normalized
 
 
 # ---------------------------------------------------------------------------

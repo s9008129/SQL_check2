@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: post-pr21-cloud-e2e-\${{ github.ref }}
+  group: post-pr21-cloud-e2e-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -21,14 +21,14 @@ jobs:
     timeout-minutes: 45
     env:
       SQLCHECK_LLM_PROVIDER: ollama_cloud
-      OLLAMA_API_KEY: \${{ secrets.OLLAMA_API_KEY }}
+      OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
       OLLAMA_CLOUD_MODEL: gemma4:31b
       SQLCHECK_ARCHIVE_ENABLED: "false"
-      RUN_ID: cloud_post_pr21_\${{ github.run_id }}_\${{ github.run_attempt }}
-      RUN_ROOT: data/cloud_post_pr21_\${{ github.run_id }}_\${{ github.run_attempt }}
-      TMPDIR: \${{ github.workspace }}/data/cloud_post_pr21_\${{ github.run_id }}_\${{ github.run_attempt }}/tmp
-      TMP: \${{ github.workspace }}/data/cloud_post_pr21_\${{ github.run_id }}_\${{ github.run_attempt }}/tmp
-      TEMP: \${{ github.workspace }}/data/cloud_post_pr21_\${{ github.run_id }}_\${{ github.run_attempt }}/tmp
+      RUN_ID: cloud_post_pr21_${{ github.run_id }}_${{ github.run_attempt }}
+      RUN_ROOT: data/cloud_post_pr21_${{ github.run_id }}_${{ github.run_attempt }}
+      TMPDIR: ${{ github.workspace }}/data/cloud_post_pr21_${{ github.run_id }}_${{ github.run_attempt }}/tmp
+      TMP: ${{ github.workspace }}/data/cloud_post_pr21_${{ github.run_id }}_${{ github.run_attempt }}/tmp
+      TEMP: ${{ github.workspace }}/data/cloud_post_pr21_${{ github.run_id }}_${{ github.run_attempt }}/tmp
 
     steps:
       - name: Checkout
@@ -157,12 +157,13 @@ jobs:
       - name: Run Post-PR21 live model/API E2E
         id: live_e2e
         continue-on-error: true
+        working-directory: backend
         shell: bash
         run: |
           set -o pipefail
           uv run --frozen --python 3.12 \
-            python .github/e2e/cloud_post_pr21.py --out "$RUN_ROOT" \
-            2>&1 | tee "$RUN_ROOT/logs/live_e2e_console.txt"
+            python ../.github/e2e/cloud_post_pr21.py --out "../$RUN_ROOT" \
+            2>&1 | tee "../$RUN_ROOT/logs/live_e2e_console.txt"
 
       - name: Record git state and manifest
         if: always()
@@ -197,7 +198,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: post-pr21-cloud-e2e-\${{ github.run_id }}-\${{ github.run_attempt }}
+          name: post-pr21-cloud-e2e-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             data/${{ env.RUN_ID }}.zip
             data/${{ env.RUN_ID }}.zip.sha256
@@ -209,7 +210,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "\${{ steps.live_e2e.outcome }}" != "success" ]; then
+          if [ "${{ steps.live_e2e.outcome }}" != "success" ]; then
             echo "::error::Post-PR21 cloud model/API E2E did not meet acceptance targets. See uploaded REPORT.md and CSV evidence."
             exit 2
           fi

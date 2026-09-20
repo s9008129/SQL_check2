@@ -274,6 +274,8 @@ mark.legend{margin:0 3px}
 .confidence-badge{background:#f3efff;color:#5f4bc8}
 .evidence-explanation{margin:-1px 0 8px;color:#16784a;font-size:13px;font-weight:750;line-height:1.5}
 .confidence-disclaimer{display:block;margin-top:4px;font-weight:650}
+.assessment-confidence-badge{background:#ece7ff;color:#493aa7;border:1px solid #d7ceff}
+.assessment-confidence-note{margin:0 0 14px;padding:11px 13px;border-radius:12px;background:#f7f4ff;border:1px solid #e6dfff;color:#554b73;font-size:13px;line-height:1.6;font-weight:650}
 .ai-note{font-size:13px;color:var(--muted)}
 .card-estimate .ai-note,.card-compare .ai-note{font-size:14px}
 .label{font-size:13px;color:#4b5565}

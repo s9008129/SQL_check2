@@ -321,7 +321,20 @@ _LONG_DIGIT_RUN_RE = re.compile(r"(?<!\w)\d{8,}(?!\w)")
 DEIDENTIFY_FAILED_MARKER = "[DEIDENTIFY_FAILED]"
 
 
-def _strip_non_hint_comments(text: str) -> str:
+def strip_non_hint_comments(text: str) -> str:
+    """Remove ordinary SQL comments while preserving Oracle optimizer hints.
+
+    Privacy boundary for cloud AI requests: free-text SQL comments frequently
+    contain case notes, names, phone numbers, addresses, or prompt-injection
+    text. Those comments are not needed by the model because deterministic
+    findings already carry the rule-engine facts. Oracle hint comments
+    (/*+ ... */ and --+ ...) are preserved because they are executable SQL
+    structure rather than human notes.
+
+    Call this *after* literal masking. That ordering ensures comment-like
+    punctuation inside string literals cannot be mistaken for an actual
+    comment by these deliberately small regexes.
+    """
     text = _BLOCK_COMMENT_NON_HINT_RE.sub(" ", text)
     text = _LINE_COMMENT_NON_HINT_RE.sub("", text)
     return text
@@ -338,7 +351,7 @@ def deidentify_sql(raw_sql: str) -> str:
         return raw_sql
     try:
         masked = mask_sql(raw_sql).masked_sql
-        stripped = _strip_non_hint_comments(masked)
+        stripped = strip_non_hint_comments(masked)
         stripped = _TW_ID_LIKE_RE.sub("[REDACTED]", stripped)
         stripped = _EMAIL_RE.sub("[REDACTED]", stripped)
         stripped = _LONG_DIGIT_RUN_RE.sub("[REDACTED]", stripped)

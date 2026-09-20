@@ -11,6 +11,7 @@ export function makeAi(overrides: Partial<AiResult> = {}): AiResult {
   return {
     status: "ok",
     summary: "目前符合中心規範，另有 2 項改善建議。",
+    assessment_confidence_score: 86,
     advice: [
       {
         title: "日期條件可再簡化",

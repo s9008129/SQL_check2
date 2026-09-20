@@ -1,0 +1,223 @@
+name: PII Privacy + Post-PR22 Cloud E2E
+
+on:
+  push:
+    branches:
+      - fix/ai-pii-comment-deidentification-20260920
+    paths:
+      - "backend/app/services/masking.py"
+      - "backend/app/services/ai_service.py"
+      - "backend/tests/test_masking.py"
+      - "backend/tests/test_ai_service.py"
+      - ".github/e2e/pii_privacy_e2e.py"
+      - ".github/e2e/cloud_post_pr22.py"
+      - ".github/workflows/pii-privacy-cloud-e2e.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pii-privacy-cloud-e2e-\${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      SQLCHECK_LLM_PROVIDER: ollama_cloud
+      OLLAMA_API_KEY: \${{ secrets.OLLAMA_API_KEY }}
+      OLLAMA_CLOUD_MODEL: gemma4:31b
+      SQLCHECK_ARCHIVE_ENABLED: "false"
+      RUN_ID: pii_privacy_post_pr22_\${{ github.run_id }}_\${{ github.run_attempt }}
+      RUN_ROOT: data/pii_privacy_post_pr22_\${{ github.run_id }}_\${{ github.run_attempt }}
+      TMPDIR: \${{ github.workspace }}/data/pii_privacy_post_pr22_\${{ github.run_id }}_\${{ github.run_attempt }}/tmp
+      TMP: \${{ github.workspace }}/data/pii_privacy_post_pr22_\${{ github.run_id }}_\${{ github.run_attempt }}/tmp
+      TEMP: \${{ github.workspace }}/data/pii_privacy_post_pr22_\${{ github.run_id }}_\${{ github.run_attempt }}/tmp
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUN_ROOT/logs" "$RUN_ROOT/tmp" "$RUN_ROOT/privacy" "$RUN_ROOT/post_pr22"
+          {
+            echo "workflow=PII Privacy + Post-PR22 Cloud E2E"
+            echo "sha=$GITHUB_SHA"
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+            echo "runner_os=$RUNNER_OS"
+            echo "browser_scope=excluded_by_design"
+            echo "print_scope=excluded_by_design"
+          } > "$RUN_ROOT/environment.txt"
+
+      - name: Verify Ollama Cloud secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$OLLAMA_API_KEY" ]; then
+            echo "::error::GitHub secret OLLAMA_API_KEY is unavailable."
+            exit 20
+          fi
+          echo "ollama_api_key_present=true" >> "$RUN_ROOT/environment.txt"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install --disable-pip-version-check "uv==0.12.5"
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Validate harness syntax
+        run: |
+          python -m py_compile .github/e2e/pii_privacy_e2e.py
+          python -m py_compile .github/e2e/cloud_post_pr22.py
+
+      - name: Backend regression
+        working-directory: backend
+        env:
+          SQLCHECK_LLM_PROVIDER: ollama
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run --frozen --python 3.12 pytest -p no:cacheprovider -q \
+            2>&1 | tee "../$RUN_ROOT/logs/backend_pytest.txt"
+
+      - name: Ruff
+        working-directory: backend
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run --frozen --python 3.12 ruff check . \
+            2>&1 | tee "../$RUN_ROOT/logs/ruff.txt"
+
+      - name: Frontend install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Frontend regression
+        working-directory: frontend
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test -- --run 2>&1 | tee "../$RUN_ROOT/logs/frontend_tests.txt"
+
+      - name: Frontend build
+        working-directory: frontend
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee "../$RUN_ROOT/logs/frontend_build.txt"
+
+      - name: Ollama Cloud preflight
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --frozen --python 3.12 python - <<'PY' \
+            > "../$RUN_ROOT/logs/provider_preflight.txt" 2>&1
+          import asyncio
+          from app.settings import get_settings
+          from app.services import llm_provider
+          s = get_settings().llm
+          print(f"provider={s.provider}")
+          print(f"provider_type={s.provider_type}")
+          print(f"remote={s.remote}")
+          print(f"base_url={s.base_url}")
+          print(f"model={s.model}")
+          print(f"api_key_present={bool(s.api_key)}")
+          print(f"provider_available={asyncio.run(llm_provider.check_available(s))}")
+          if s.provider != "ollama_cloud" or s.base_url != "https://ollama.com" or s.model != "gemma4:31b":
+              raise SystemExit("provider configuration mismatch")
+          if not s.api_key or not asyncio.run(llm_provider.check_available(s)):
+              raise SystemExit("Ollama Cloud unavailable")
+          PY
+
+      - name: Run 10-case PII privacy Live E2E
+        id: privacy_e2e
+        continue-on-error: true
+        working-directory: backend
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run --frozen --python 3.12 \
+            python ../.github/e2e/pii_privacy_e2e.py --out "../$RUN_ROOT/privacy" \
+            2>&1 | tee "../$RUN_ROOT/logs/privacy_e2e_console.txt"
+
+      - name: Run Post-PR22 59-call Live E2E
+        id: post_pr22_e2e
+        continue-on-error: true
+        working-directory: backend
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run --frozen --python 3.12 \
+            python ../.github/e2e/cloud_post_pr22.py --out "../$RUN_ROOT/post_pr22" \
+            2>&1 | tee "../$RUN_ROOT/logs/post_pr22_console.txt"
+
+      - name: Record git state and manifest
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            git status --short
+          } > "$RUN_ROOT/git_state.txt"
+          if grep -R -n -E 'Authorization:[[:space:]]*Bearer|Bearer[[:space:]]+[A-Za-z0-9._-]{20,}' \
+            "$RUN_ROOT" --exclude='secret_scan.txt' > "$RUN_ROOT/secret_scan.txt"; then
+            echo "::error::Potential credential material detected in evidence."
+            exit 31
+          else
+            echo "NO_CREDENTIAL_PATTERN_HITS" > "$RUN_ROOT/secret_scan.txt"
+          fi
+          find "$RUN_ROOT" -type f ! -path '*/tmp/*' -printf '%P\t%s bytes\n' | sort > "$RUN_ROOT/manifest.txt"
+
+      - name: Package evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUN_ROOT/tmp"
+          ZIP_PATH="data/$RUN_ID.zip"
+          zip -qr "$ZIP_PATH" "$RUN_ROOT"
+          unzip -t "$ZIP_PATH" > "$RUN_ROOT/logs/zip_test.txt"
+          sha256sum "$ZIP_PATH" > "$ZIP_PATH.sha256"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pii-privacy-post-pr22-\${{ github.run_id }}-\${{ github.run_attempt }}
+          path: |
+            data/\${{ env.RUN_ID }}.zip
+            data/\${{ env.RUN_ID }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Enforce verdicts
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "privacy_outcome=\${{ steps.privacy_e2e.outcome }}"
+          echo "post_pr22_outcome=\${{ steps.post_pr22_e2e.outcome }}"
+          if [ "\${{ steps.privacy_e2e.outcome }}" != "success" ]; then
+            echo "::error::PII privacy Live E2E failed."
+            exit 2
+          fi
+          if [ "\${{ steps.post_pr22_e2e.outcome }}" != "success" ]; then
+            echo "::error::Post-PR22 full Live E2E failed."
+            exit 3
+          fi

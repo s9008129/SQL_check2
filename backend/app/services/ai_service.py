@@ -1341,9 +1341,17 @@ def _finalize_suggested_sql(
         available = False
         outcome = "advice_only"
 
-    if outcome == "advice_only":
-        source_sql = representative.raw_sql if representative is not None else ""
-        reason = _server_owned_advice_only_reason(source_sql) or _tidy_advice_only_reason(reason)
+    source_sql = representative.raw_sql if representative is not None else ""
+    policy_reason = _server_owned_advice_only_reason(source_sql)
+    if not available and policy_reason is not None and outcome not in {"gated", "rejected"}:
+        # A known ADVICE_ONLY pattern cannot become "not_needed" merely
+        # because the model overlooked it. The server already knows this
+        # pattern requires a confirmation-first explanation.
+        outcome = "advice_only"
+        reason = policy_reason
+        confidence_score = None
+    elif outcome == "advice_only":
+        reason = _tidy_advice_only_reason(reason)
     elif outcome == "not_needed":
         cost_reason = _cost_block_not_needed_reason(cost, rules_config)
         if cost_reason is not None:

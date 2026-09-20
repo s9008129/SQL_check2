@@ -43,6 +43,13 @@ data/<same-run-name>.zip
 
 ZIP 必須可正常解壓、包含完整報告與 manifest，並作為交付給獨立 reviewer 的唯一附件。
 
+## 證據有效性
+
+- `browser_dom/*.json` 必須保存**實際 DOM 查詢結果**與 assertion outcome；不能只把預期文字寫進 JSON。
+- `screenshots/TCxx.png` 若不是 SQLCheck 該案例的實際畫面（例如桌布、terminal、錯誤視窗），該案例 UI 不得標 PASS。
+- `print/TCxx.png` 只有真正的 Chrome native Print Preview 才能作為 print PASS。Computer Use error、terminal 或普通網頁截圖都只能標示 NOT PROVEN / FAIL。
+- 測試工具故障時，報告要保留 failure evidence，不得用 API PASS 推論 UI / Print 也 PASS。
+
 ## 重要界線
 
 - 不要使用 `/tmp` 或 `/var/tmp` 保存測試資料。

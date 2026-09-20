@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pii-privacy-cloud-e2e-\${{ github.ref }}
+  group: pii-privacy-cloud-e2e-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -26,14 +26,14 @@ jobs:
     timeout-minutes: 55
     env:
       SQLCHECK_LLM_PROVIDER: ollama_cloud
-      OLLAMA_API_KEY: \${{ secrets.OLLAMA_API_KEY }}
+      OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
       OLLAMA_CLOUD_MODEL: gemma4:31b
       SQLCHECK_ARCHIVE_ENABLED: "false"
-      RUN_ID: pii_privacy_post_pr22_\${{ github.run_id }}_\${{ github.run_attempt }}
-      RUN_ROOT: data/pii_privacy_post_pr22_\${{ github.run_id }}_\${{ github.run_attempt }}
-      TMPDIR: \${{ github.workspace }}/data/pii_privacy_post_pr22_\${{ github.run_id }}_\${{ github.run_attempt }}/tmp
-      TMP: \${{ github.workspace }}/data/pii_privacy_post_pr22_\${{ github.run_id }}_\${{ github.run_attempt }}/tmp
-      TEMP: \${{ github.workspace }}/data/pii_privacy_post_pr22_\${{ github.run_id }}_\${{ github.run_attempt }}/tmp
+      RUN_ID: pii_privacy_post_pr22_${{ github.run_id }}_${{ github.run_attempt }}
+      RUN_ROOT: data/pii_privacy_post_pr22_${{ github.run_id }}_${{ github.run_attempt }}
+      TMPDIR: ${{ github.workspace }}/data/pii_privacy_post_pr22_${{ github.run_id }}_${{ github.run_attempt }}/tmp
+      TMP: ${{ github.workspace }}/data/pii_privacy_post_pr22_${{ github.run_id }}_${{ github.run_attempt }}/tmp
+      TEMP: ${{ github.workspace }}/data/pii_privacy_post_pr22_${{ github.run_id }}_${{ github.run_attempt }}/tmp
 
     steps:
       - name: Checkout
@@ -199,10 +199,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pii-privacy-post-pr22-\${{ github.run_id }}-\${{ github.run_attempt }}
+          name: pii-privacy-post-pr22-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            data/\${{ env.RUN_ID }}.zip
-            data/\${{ env.RUN_ID }}.zip.sha256
+            data/${{ env.RUN_ID }}.zip
+            data/${{ env.RUN_ID }}.zip.sha256
           if-no-files-found: error
           retention-days: 7
 
@@ -211,13 +211,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "privacy_outcome=\${{ steps.privacy_e2e.outcome }}"
-          echo "post_pr22_outcome=\${{ steps.post_pr22_e2e.outcome }}"
-          if [ "\${{ steps.privacy_e2e.outcome }}" != "success" ]; then
+          echo "privacy_outcome=${{ steps.privacy_e2e.outcome }}"
+          echo "post_pr22_outcome=${{ steps.post_pr22_e2e.outcome }}"
+          if [ "${{ steps.privacy_e2e.outcome }}" != "success" ]; then
             echo "::error::PII privacy Live E2E failed."
             exit 2
           fi
-          if [ "\${{ steps.post_pr22_e2e.outcome }}" != "success" ]; then
+          if [ "${{ steps.post_pr22_e2e.outcome }}" != "success" ]; then
             echo "::error::Post-PR22 full Live E2E failed."
             exit 3
           fi

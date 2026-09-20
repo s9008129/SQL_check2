@@ -82,6 +82,8 @@ jobs:
       - name: Backend regression
         working-directory: backend
         shell: bash
+        env:
+          SQLCHECK_LLM_PROVIDER: ollama
         run: |
           set -o pipefail
           uv run --frozen --python 3.12 pytest -p no:cacheprovider -q \
@@ -197,8 +199,8 @@ jobs:
         with:
           name: post-pr21-cloud-e2e-\${{ github.run_id }}-\${{ github.run_attempt }}
           path: |
-            data/\${{ env.RUN_ID }}.zip
-            data/\${{ env.RUN_ID }}.zip.sha256
+            data/${{ env.RUN_ID }}.zip
+            data/${{ env.RUN_ID }}.zip.sha256
           if-no-files-found: error
           retention-days: 7
 

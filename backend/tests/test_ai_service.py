@@ -1710,6 +1710,10 @@ async def test_exact_cost_threshold_uses_server_owned_boundary_wording(settings,
 
     assert result.status == "ok"
     assert result.summary == "目前執行成本（COST）已達規範門檻 100,000，不符合中心規範。"
+    # The raw model called the exact threshold 「過高」, so the server had
+    # to correct formal policy meaning. The final answer stays correct, but
+    # overall AI confidence must not remain in the high band.
+    assert result.assessment_confidence_score == 79
     assert result.suggested_sql is not None
     assert result.suggested_sql.outcome == "not_needed"
     assert result.suggested_sql.confidence_score is None

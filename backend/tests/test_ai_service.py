@@ -2382,3 +2382,214 @@ async def test_suggested_sql_confidence_is_kept_only_for_validated_provided(
     expected_outcome_name, expected_confidence = expected_outcome
     assert result.suggested_sql.outcome == expected_outcome_name
     assert result.suggested_sql.confidence_score == expected_confidence
+
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-20 Post-PR20 quality hardening: overall confidence + ADVICE_ONLY
+# ---------------------------------------------------------------------------
+@respx.mock
+async def test_successful_ai_result_always_carries_overall_assessment_confidence(settings, chat_url):
+    inner = _good_inner(assessment_confidence_score=87)
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+
+    result = await _call(settings, _clean_select_statement())
+
+    assert result.status == "ok"
+    assert result.assessment_confidence_score == 87
+
+
+@respx.mock
+async def test_missing_overall_assessment_confidence_retries_then_degrades(settings, chat_url):
+    inner = _good_inner()
+    inner.pop("assessment_confidence_score")
+    route = respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+
+    result = await _call(settings, _clean_select_statement())
+
+    assert route.call_count == 2
+    assert result.status == "unavailable"
+    assert result.assessment_confidence_score is None
+
+
+@respx.mock
+async def test_clean_not_needed_assessment_can_keep_high_confidence(settings, chat_url):
+    sql = "SELECT A.ID FROM PLAIN_TABLE A WHERE A.ID = :ID"
+    inner = _good_inner(
+        summary="目前未發現需要調整的寫法。",
+        assessment_confidence_score=93,
+        advice=[],
+        suggested_sql={
+            "available": False,
+            "reason": "目前未發現需要調整的寫法。",
+            "rewrite_outcome": "not_needed",
+        },
+    )
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+
+    result = await ai_service.get_ai_result(
+        sql_text=sql,
+        cost=1000,
+        compliance_status="PASS",
+        findings=[],
+        statements=parse_sql_text(sql).statements,
+        settings=settings,
+    )
+
+    assert result.status == "ok"
+    assert result.suggested_sql is not None
+    assert result.suggested_sql.outcome == "not_needed"
+    assert result.assessment_confidence_score == 93
+
+
+@respx.mock
+async def test_assumption_dependent_result_caps_overall_confidence_at_medium(settings, chat_url):
+    sql = "SELECT A.ID FROM PLAIN_TABLE A WHERE TRUNC(A.TXN_DATE) = :D"
+    inner = _good_inner(
+        summary="這個日期條件可再確認。",
+        assessment_confidence_score=97,
+        advice=[
+            {
+                "title": "評估日期條件",
+                "explanation": "可改成當天 00:00 到次日 00:00 的日期範圍。",
+                "example": "",
+                "confidence_score": 95,
+            }
+        ],
+        suggested_sql={
+            "available": False,
+            "reason": "可改成當天 00:00 到次日 00:00 的日期範圍。",
+            "rewrite_outcome": "advice_only",
+        },
+    )
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+
+    result = await ai_service.get_ai_result(
+        sql_text=sql,
+        cost=1000,
+        compliance_status="PASS",
+        findings=[],
+        statements=parse_sql_text(sql).statements,
+        settings=settings,
+    )
+
+    assert result.status == "ok"
+    assert result.assessment_confidence_score == 79
+    assert result.advice[0].verification == "unverified"
+    assert "00:00" not in result.advice[0].explanation
+    assert result.suggested_sql is not None
+    assert "00:00" not in result.suggested_sql.reason
+
+
+@respx.mock
+async def test_to_char_year_value_is_hidden_from_model_but_format_role_remains(settings, chat_url):
+    sql = "SELECT A.ID FROM PLAIN_TABLE A WHERE TO_CHAR(A.TXN_DATE, 'YYYY') = '2024'"
+    route = respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
+    )
+
+    await ai_service.get_ai_result(
+        sql_text=sql,
+        cost=1000,
+        compliance_status="PASS",
+        findings=[],
+        statements=parse_sql_text(sql).statements,
+        settings=settings,
+    )
+
+    body = json.loads(route.calls[0].request.content)
+    user_message = next(m["content"] for m in body["messages"] if m["role"] == "user")
+    payload = json.loads(user_message.removeprefix("<SQL_DATA>\n").removesuffix("\n</SQL_DATA>"))
+    assert "'YYYY'" in payload["sanitized_sql"]
+    assert "'2024'" not in payload["sanitized_sql"]
+    year_hints = [h for h in payload["literal_hints"].values() if h.get("semantic_role") == "year_value"]
+    assert len(year_hints) == 1
+    assert year_hints[0]["shape"] == "digits"
+    ids = {item["id"] for item in payload["advice_contracts"]}
+    assert "to_char_condition" in ids
+
+
+@respx.mock
+async def test_cross_column_or_advice_only_reason_is_server_owned_and_never_mentions_union(settings, chat_url):
+    sql = "SELECT A.ID FROM PLAIN_TABLE A WHERE A.STATUS = 'A' OR A.TYPE = 'B'"
+    inner = _good_inner(
+        summary="這段 OR 需要再確認。",
+        assessment_confidence_score=72,
+        advice=[],
+        suggested_sql={
+            "available": False,
+            "reason": "可以考慮拆成 UNION 或 UNION ALL，再看哪個比較快。",
+            "rewrite_outcome": "advice_only",
+        },
+    )
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+
+    result = await ai_service.get_ai_result(
+        sql_text=sql,
+        cost=1000,
+        compliance_status="PASS",
+        findings=[],
+        statements=parse_sql_text(sql).statements,
+        settings=settings,
+    )
+
+    assert result.suggested_sql is not None
+    assert result.suggested_sql.outcome == "advice_only"
+    assert "UNION" not in result.suggested_sql.reason
+    assert result.suggested_sql.reason == ai_service._CROSS_COLUMN_OR_SAFE_COPY
+
+
+@respx.mock
+async def test_join_only_reason_does_not_invent_date_status_or_category_filters(settings, chat_url):
+    sql = "SELECT A.ID FROM T A JOIN U B ON A.K = B.K"
+    inner = _good_inner(
+        summary="主查詢目前只有 JOIN 條件，請確認是否符合中心作業要求。",
+        assessment_confidence_score=74,
+        advice=[],
+        suggested_sql={
+            "available": False,
+            "reason": "可增加日期、年度、狀態或類別條件來縮小資料範圍。",
+            "rewrite_outcome": "advice_only",
+        },
+    )
+    respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
+    )
+
+    result = await ai_service.get_ai_result(
+        sql_text=sql,
+        cost=1000,
+        compliance_status="REVIEW",
+        findings=[],
+        statements=parse_sql_text(sql).statements,
+        settings=settings,
+    )
+
+    assert result.suggested_sql is not None
+    assert result.suggested_sql.reason == ai_service._NO_MAIN_WHERE_SAFE_COPY
+    for invented in ("日期", "年度", "狀態", "類別"):
+        assert invented not in result.suggested_sql.reason
+    assert result.assessment_confidence_score <= 79
+
+
+def test_advice_contracts_use_server_owned_copy_and_medium_cap():
+    sql = "SELECT A.ID FROM T A WHERE TRUNC(A.D) = :D"
+    contracts = ai_service._build_advice_contracts(sql)
+
+    trunc = next(item for item in contracts if item["id"] == "trunc_condition")
+    assert trunc["classification"] == "ADVICE_ONLY"
+    assert trunc["required_explanation"] == (
+        "目前條件先用 TRUNC() 處理欄位再比對。若確認是日期欄位，可評估改用日期範圍；"
+        "調整前請先確認欄位型態與比對值是否包含時間。"
+    )
+    assert trunc["max_confidence_score"] == 79

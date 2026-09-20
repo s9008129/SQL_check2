@@ -36,7 +36,7 @@ def test_find_static_dir_matches_dockerfile_production_layout():
 
         result = _find_static_dir(fake_main_py)
 
-        assert result == static_dir
+        assert result == static_dir.resolve()
         assert (result / "index.html").is_file()
 
 
@@ -59,7 +59,7 @@ def test_find_static_dir_falls_back_to_frontend_dist_for_local_dev():
 
         result = _find_static_dir(fake_main_py)
 
-        assert result == frontend_dist
+        assert result == frontend_dist.resolve()
 
 
 def test_find_static_dir_returns_none_when_nothing_built():

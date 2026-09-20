@@ -759,6 +759,9 @@ def _calibrate_assessment_confidence(
     advice: list[AdviceItem],
     suggested_sql: SuggestedSql,
     representative: ParsedStatement | None,
+    *,
+    policy_corrected_summary: bool = False,
+    dropped_advice: bool = False,
 ) -> int:
     """Apply evidence-aware caps without turning confidence into permission.
 
@@ -771,7 +774,10 @@ def _calibrate_assessment_confidence(
     score = raw_score
     if representative is None or representative.parse_status != "ok":
         return min(score, 59)
-    if suggested_sql.outcome == "rejected":
+    if suggested_sql.outcome == "rejected" or dropped_advice or policy_corrected_summary:
+        # If the server had to reject/drop a material model claim or correct
+        # the formal policy meaning in the summary, a high confidence label
+        # would describe an assessment the model did not actually get right.
         return min(score, 59)
     if suggested_sql.outcome in {"advice_only", "gated"} or any(
         item.verification == "unverified" for item in advice
@@ -1410,7 +1416,9 @@ def _finalize(
     vocab = ai_guard_cfg.get("vocabulary_replacements", {})
 
     summary: str | None = _sanitize_user_prose(raw.summary, vocab, literal_hints)
+    sanitized_summary = summary
     summary = _normalize_cost_threshold_summary(summary, cost, rules_config)
+    policy_corrected_summary = summary != sanitized_summary
     if _contains_forbidden(summary, forbidden):
         logger.info("ai_service: summary discarded on forbidden-phrase match")
         summary = None
@@ -1490,6 +1498,8 @@ def _finalize(
         advice,
         suggested_sql,
         representative,
+        policy_corrected_summary=policy_corrected_summary,
+        dropped_advice=len(advice) < min(len(raw.advice), 3),
     )
 
     # Still "ok" even if advice ended up empty after filtering — the model

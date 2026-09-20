@@ -75,7 +75,7 @@ jobs:
           }
           REPEATS = 12
           INVENTED = re.compile(
-              r"日期|狀態|年度|年份|類別|\\bdate\\b|\\bstatus\\b|\\byear\\b|\\bcategory\\b",
+              r"日期|狀態|年度|年份|類別|\bdate\b|\bstatus\b|\byear\b|\bcategory\b",
               re.IGNORECASE,
           )
           original_generate = llm_provider.generate_structured_json
@@ -83,8 +83,8 @@ jobs:
           captures = []
 
           def parse_payload(user_content):
-              prefix = "<SQL_DATA>\\n"
-              suffix = "\\n</SQL_DATA>"
+              prefix = "<SQL_DATA>\n"
+              suffix = "\n</SQL_DATA>"
               if not user_content.startswith(prefix) or not user_content.endswith(suffix):
                   return {}
               return json.loads(user_content[len(prefix):-len(suffix)])
@@ -141,7 +141,7 @@ jobs:
                       }
                       deterministic_equal = base_projection == final_projection
                       reason = str((raw.get("suggested_sql") or {}).get("reason") or "")
-                      advice_prose = "\\n".join(
+                      advice_prose = "\n".join(
                           str(item.get("explanation") or "")
                           for item in (raw.get("advice") or [])
                           if isinstance(item, dict)
@@ -172,7 +172,7 @@ jobs:
                           "deterministic_equal": deterministic_equal,
                           "owner_flag": owner,
                           "raw_reason_exact": reason == expected_reason,
-                          "raw_invented_dimension": bool(INVENTED.search(reason + "\\n" + advice_prose)),
+                          "raw_invented_dimension": bool(INVENTED.search(reason + "\n" + advice_prose)),
                           "raw_assessment_confidence": raw_score,
                           "final_assessment_confidence": final_score,
                           "final_reason_exact": final_reason == ai_service._NO_MAIN_WHERE_SAFE_COPY,
@@ -185,7 +185,7 @@ jobs:
                           problems.append(f"{case_id} r{run_index}: canonical reason flag missing")
                       if reason != expected_reason:
                           problems.append(f"{case_id} r{run_index}: raw reason not exact server-owned copy")
-                      if INVENTED.search(reason + "\\n" + advice_prose):
+                      if INVENTED.search(reason + "\n" + advice_prose):
                           problems.append(f"{case_id} r{run_index}: raw invented business dimension")
                       if type(raw_score) is not int or not 0 <= raw_score <= 79:
                           problems.append(f"{case_id} r{run_index}: raw overall confidence invalid/high")
@@ -197,7 +197,7 @@ jobs:
               out = Path("../data") / f"no_main_where_live_{__import__('os').environ['GITHUB_RUN_ID']}"
               out.mkdir(parents=True, exist_ok=True)
               (out / "evidence.json").write_text(
-                  json.dumps({"evidence": evidence, "problems": problems}, ensure_ascii=False, indent=2) + "\\n",
+                  json.dumps({"evidence": evidence, "problems": problems}, ensure_ascii=False, indent=2) + "\n",
                   encoding="utf-8",
               )
               print(f"Focused Live Gemma calls: {len(evidence)}")

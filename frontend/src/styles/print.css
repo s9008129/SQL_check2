@@ -109,7 +109,9 @@
   }
   .evidence-explanation,
   .card-compare .card-desc,
-  .confidence-badge {
+  .confidence-badge,
+  .assessment-confidence-badge,
+  .assessment-confidence-note {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }

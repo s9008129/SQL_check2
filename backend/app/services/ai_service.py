@@ -50,7 +50,13 @@ from sqlglot import exp, parse_one
 from app.schemas import AdviceItem, AiResult, Finding, SuggestedSql, normalize_confidence_score
 from app.services import context_adapter, llm_provider, pattern_selector, rewrite_rules, rule_engine
 from app.services.cost_utils import classify_cost_relation, cost_formal_summary, cost_threshold_note
-from app.services.masking import MaskResult, mask_sql, scrub_invented_placeholders, strip_non_hint_comments, unmask_sql
+from app.services.masking import (
+    MaskResult,
+    mask_sql,
+    scrub_invented_placeholders,
+    strip_non_hint_comments,
+    unmask_sql,
+)
 from app.services.rule_engine import GLOBAL_STATEMENT_INDEX
 from app.services.sql_parser import ParsedStatement, parse_sql_text, structural_signature
 from app.settings import PROMPTS_DIR, Settings

@@ -27,6 +27,10 @@ here because every function below exists to defend one of these):
   `masking.mask_sql()` runs on the representative statement's SQL text
   before it is ever placed in the prompt, regardless of whether a candidate
   rewrite will be produced (PRD: sanitized_sql is used for explanation too).
+- Free-text SQL comments never reach the cloud model. After literal masking,
+  ordinary `-- ...` / `/* ... */` comments are removed; Oracle optimizer
+  hints (`--+ ...` / `/*+ ... */`) are preserved because they are executable
+  SQL structure rather than human case notes.
 """
 
 from __future__ import annotations
@@ -46,7 +50,13 @@ from sqlglot import exp, parse_one
 from app.schemas import AdviceItem, AiResult, Finding, SuggestedSql, normalize_confidence_score
 from app.services import context_adapter, llm_provider, pattern_selector, rewrite_rules, rule_engine
 from app.services.cost_utils import classify_cost_relation, cost_formal_summary, cost_threshold_note
-from app.services.masking import MaskResult, mask_sql, scrub_invented_placeholders, unmask_sql
+from app.services.masking import (
+    MaskResult,
+    mask_sql,
+    scrub_invented_placeholders,
+    strip_non_hint_comments,
+    unmask_sql,
+)
 from app.services.rule_engine import GLOBAL_STATEMENT_INDEX
 from app.services.sql_parser import ParsedStatement, parse_sql_text, structural_signature
 from app.settings import PROMPTS_DIR, Settings
@@ -1828,6 +1838,17 @@ async def get_ai_result(
         # ADVICE_ONLY pattern where exposing the concrete year repeatedly
         # caused Gemma to synthesize unsafe date boundaries.
         mask_result = _mask_to_char_year_value(mask_result)
+
+        # Privacy boundary for cloud AI: human-written SQL comments can carry
+        # names, phone numbers, addresses, case notes, or prompt-injection
+        # text. Strip those only from the model-facing SQL while preserving
+        # Oracle optimizer hints and the reversible literal maps used by the
+        # server-side rewrite validator.
+        mask_result = MaskResult(
+            masked_sql=strip_non_hint_comments(mask_result.masked_sql),
+            reverse_map=mask_result.reverse_map,
+            literal_hints=mask_result.literal_hints,
+        )
 
         sql_tokens = _estimate_tokens(mask_result.masked_sql)
         candidate_allowed, decline_code = _compute_gates(

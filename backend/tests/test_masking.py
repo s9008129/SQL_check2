@@ -3,6 +3,7 @@ from app.services.masking import (
     deidentify_sql,
     mask_sql,
     scrub_invented_placeholders,
+    strip_non_hint_comments,
     unmask_sql,
 )
 
@@ -207,6 +208,36 @@ def test_placeholder_numbering_has_no_gap_from_kept_short_literals():
     assert ":STR_001" in result.masked_sql
     assert ":STR_002" not in result.masked_sql
     assert result.reverse_map[":STR_001"] == "'王小明'"
+
+
+# ---------------------------------------------------------------------------
+# Cloud-AI comment minimization
+# ---------------------------------------------------------------------------
+def test_strip_non_hint_comments_removes_free_text_and_preserves_optimizer_hints():
+    sql = (
+        "SELECT /*+ INDEX(A IDX_TEST) */ A.ID FROM T A "
+        "/* 承辦備註：測試甲 */ WHERE A.STATUS = '55' "
+        "-- 一般註解：0900-000-001\n"
+        "--+ LEADING(A)\n"
+    )
+    masked = mask_sql(sql)
+    stripped = strip_non_hint_comments(masked.masked_sql)
+
+    assert "承辦備註" not in stripped
+    assert "0900-000-001" not in stripped
+    assert "/*+ INDEX(A IDX_TEST) */" in stripped
+    assert "--+ LEADING(A)" in stripped
+    assert "'55'" in stripped
+
+
+def test_strip_non_hint_comments_runs_after_masking_so_comment_markers_inside_literals_are_safe():
+    sql = "SELECT A.ID FROM T A WHERE A.NOTE = 'abc--def/*ghi*/'"
+    masked = mask_sql(sql)
+    assert ":STR_001" in masked.masked_sql
+
+    stripped = strip_non_hint_comments(masked.masked_sql)
+    assert ":STR_001" in stripped
+    assert stripped == masked.masked_sql
 
 
 # ---------------------------------------------------------------------------

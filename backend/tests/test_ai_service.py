@@ -498,9 +498,9 @@ def test_system_prompt_keeps_r004_scope_and_derived_rewrite_list():
     assert "目前只有 SUBSTR 等於、同欄位 OR 串成" in prompt
     assert "超過 1000 個值不要合併成單一 IN" in prompt
     assert "不可直接合併成單一 IN" in prompt
-    assert "UNION／UNION ALL" in prompt
-    assert "條件是否重疊" in prompt
-    assert "重複列／去重對結果的影響" in prompt
+    assert "advice_contracts 含 cross_column_or" in prompt
+    assert "UNION／UNION ALL" not in prompt
+    assert "日期、狀態、年度、年份、類別" not in prompt
     assert "SUBSTR() 比對" in prompt
     assert "系統能確認的對應 LIKE 寫法" in prompt
 

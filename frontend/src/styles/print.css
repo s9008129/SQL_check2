@@ -159,3 +159,43 @@
     display: none !important;
   }
 }
+
+
+/* 2026-09-22 Visual Storytelling v2 print contract. */
+@media print {
+  .section-nav,
+  .empty-state {
+    display: none !important;
+  }
+
+  .decision-hero {
+    box-shadow: none !important;
+    border: 1px solid #d7dde6 !important;
+    margin-bottom: 14px !important;
+    break-inside: avoid;
+  }
+
+  .story-section {
+    margin-top: 18px !important;
+  }
+
+  .section-header {
+    margin-bottom: 10px !important;
+  }
+
+  .rule-details > summary {
+    display: none !important;
+  }
+
+  .rule-details:not([open]) > .rule-list {
+    display: block !important;
+  }
+
+  .rule-priority-summary,
+  .rule-priority-list,
+  .score-track,
+  .decision-side {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}

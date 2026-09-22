@@ -77,7 +77,9 @@ export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
     <section className="card card-ai">
       <div className="card-head">
         <div>
+          <div className="section-eyebrow">AI-assisted Explanation</div>
           <div className="card-title"><span className="ai-spark" aria-hidden="true">✦</span> 智慧改善建議</div>
+          <div className="card-desc">AI 只整理說明與改善方向；是否能直接改寫，仍看系統驗證標示。</div>
         </div>
         {ai.status === "ok" && (
           <div className="advice-badges">
@@ -112,7 +114,7 @@ export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
             {ai.advice.length === 0 ? (
               <div className="ai-note">{ai.summary?.trim() || "目前沒有額外的改善建議。"}</div>
             ) : (
-              <div className="advice-grid">
+              <div className="advice-list">
                 {ai.advice.map((item, index) => {
                   const evidence = EVIDENCE_META[adviceEvidenceLevel(item)];
                   return (

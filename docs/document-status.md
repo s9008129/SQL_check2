@@ -44,7 +44,8 @@ HISTORICAL 文件
 | `skills/sqlcheck-oracle-review/references/advice-only-patterns.md` | CURRENT | 只能提供方向的 pattern。 |
 | `skills/sqlcheck-oracle-review/references/forbidden-claims.md` | CURRENT | AI / agent 禁止宣稱的內容。 |
 | `skills/sqlcheck-oracle-review/references/methodology.md` | CURRENT | Detect → Classify → Verify → Explain 方法。 |
-| `docs/sql-developer-execution-plan.md` | CURRENT | SQL Developer 執行計畫證據使用說明（測試機證據層）。 |\n| `docs/frontend-visual-storytelling-v2.md` | CURRENT | SQLCheck 前端資訊層級、視覺語言與 responsive / accessibility 實作規格。 |
+| `docs/sql-developer-execution-plan.md` | CURRENT | SQL Developer 執行計畫證據使用說明（測試機證據層）。 |
+| `docs/frontend-visual-storytelling-v2.md` | CURRENT | SQLCheck 前端資訊層級、視覺語言與 responsive / accessibility 實作規格。 |
 
 ## REFERENCE — 仍可參考，但不是現況唯一依據
 

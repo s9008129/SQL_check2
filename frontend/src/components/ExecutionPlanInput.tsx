@@ -41,13 +41,13 @@ export default function ExecutionPlanInput({
   }
 
   return (
-    <div className="plan-input">
-      <div className="label plan-input-label">
-        <span>SQL Developer 執行計畫（選填）</span>
-        <span className="plan-optional">測試機證據</span>
-      </div>
-
-      <div className="plan-guidance">
+    <details className="plan-input-details" defaultOpen={value.trim().length > 0}>
+      <summary className="plan-input-summary">
+        <span>加入 SQL Developer 執行計畫</span>
+        <span className="plan-optional">選填 · 測試機證據</span>
+      </summary>
+      <div className="plan-input">
+        <div className="plan-guidance">
         <strong>建議優先使用 F6 Autotrace</strong>
         <span>：會真正執行 SQL，可取得 runtime statistics 與 actual plan。</span>
         <br />
@@ -97,7 +97,8 @@ export default function ExecutionPlanInput({
       <div className="upload-help">
         SQLCheck 不會連線 Oracle；原始 Plan 不寫入 SQL Archive，也不送往雲端 AI。
       </div>
-      {status && <div className={`upload-status upload-status-${status.tone}`}>{status.text}</div>}
-    </div>
+        {status && <div className={`upload-status upload-status-${status.tone}`}>{status.text}</div>}
+      </div>
+    </details>
   );
 }

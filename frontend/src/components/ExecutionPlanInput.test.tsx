@@ -69,3 +69,14 @@ test("shows the backend's own message when the upload is rejected", async () => 
   );
   expect(onChange).not.toHaveBeenCalled();
 });
+
+
+test("keeps optional plan evidence collapsed until the user asks for it", () => {
+  render(<ExecutionPlanInput value="" onChange={vi.fn()} />);
+  const details = document.querySelector("details.plan-input-details") as HTMLDetailsElement;
+  expect(details).not.toBeNull();
+  expect(details.open).toBe(false);
+
+  fireEvent.click(screen.getByText("加入 SQL Developer 執行計畫"));
+  expect(details.open).toBe(true);
+});

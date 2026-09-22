@@ -109,3 +109,22 @@ describe("ComplianceTable", () => {
     expect(screen.getByText("建議")).toBeTruthy();
   });
 });
+
+
+it("surfaces non-pass rules before the complete rule disclosure", () => {
+  const result = makeResult({
+    rules: [
+      { rule_id: "R001", name: "COST", status: "PASS", evidence: "42,000", note: "符合" },
+      { rule_id: "R004", name: "LIKE 前置萬用字元", status: "NOTICE", evidence: "1 處", note: "提醒" },
+    ],
+    compliance: { status: "PASS", label: "符合中心規範", notice_count: 1, block_count: 0 },
+  });
+  const { container } = render(
+    <ComplianceTable rules={result.rules} compliance={result.compliance} parseMessage={null} />,
+  );
+
+  expect(screen.getByText("優先查看 1 項")).toBeTruthy();
+  expect(screen.getByText("1 項符合")).toBeTruthy();
+  expect(screen.getByText("需確認")).toBeTruthy();
+  expect((container.querySelector("details.rule-details") as HTMLDetailsElement).open).toBe(false);
+});

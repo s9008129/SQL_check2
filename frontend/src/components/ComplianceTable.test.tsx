@@ -42,7 +42,7 @@ describe("ComplianceTable", () => {
     expect(screen.getAllByText("建議")).toHaveLength(2);
     expect(screen.getByText("2 項建議")).toBeTruthy();
     expect(screen.queryByText("提醒")).toBeNull();
-    expect(screen.queryByText("需確認")).toBeNull();
+    expect(screen.getAllByText("需確認")).toHaveLength(2);
   });
 
   it("maps BLOCK to red 不符合 and hides NA rows", () => {

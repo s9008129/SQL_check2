@@ -16,6 +16,7 @@ export default function ExecutionPlanInput({
 }: ExecutionPlanInputProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(value.trim().length > 0);
   const [status, setStatus] = useState<{ text: string; tone: StatusTone } | null>(null);
 
   async function handleFiles(files: FileList | null) {
@@ -41,7 +42,7 @@ export default function ExecutionPlanInput({
   }
 
   return (
-    <details className="plan-input-details" defaultOpen={value.trim().length > 0}>
+    <details className="plan-input-details" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className="plan-input-summary">
         <span>加入 SQL Developer 執行計畫</span>
         <span className="plan-optional">選填 · 測試機證據</span>

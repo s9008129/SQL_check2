@@ -1,0 +1,63 @@
+:root {
+  --bg-canvas: #f7f8fa;
+  --bg-surface: #ffffff;
+  --bg-subtle: #f1f3f5;
+  --text-primary: #1d1d1f;
+  --text-secondary: #5f6672;
+  --text-tertiary: #7d8490;
+  --border-subtle: #e6e8eb;
+  --border-strong: #d4d7dc;
+
+  --primary: #2f5d7c;
+  --primary-soft: #edf4f8;
+  --positive: #2e7d5b;
+  --positive-soft: #edf7f1;
+  --warning: #a66c13;
+  --warning-soft: #fff7e5;
+  --critical: #b94a48;
+  --critical-soft: #fdf0ef;
+  --neutral: #6b7280;
+  --neutral-soft: #f3f4f6;
+  --informational: #416d8c;
+  --informational-soft: #edf4f8;
+
+  --container-max: 1480px;
+  --reading-max: 760px;
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-pill: 999px;
+  --shadow-card: 0 1px 2px rgba(0,0,0,.025), 0 8px 24px rgba(0,0,0,.035);
+  --shadow-card-hover: 0 2px 4px rgba(0,0,0,.03), 0 14px 36px rgba(0,0,0,.055);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* Existing components still use these aliases. */
+  --bg: var(--bg-canvas);
+  --surface: var(--bg-surface);
+  --text: var(--text-primary);
+  --muted: var(--text-secondary);
+  --line: var(--border-subtle);
+  --blue: var(--primary);
+  --blue-soft: var(--primary-soft);
+  --green: var(--positive);
+  --green-soft: var(--positive-soft);
+  --yellow: var(--warning);
+  --yellow-soft: var(--warning-soft);
+  --red: var(--critical);
+  --red-soft: var(--critical-soft);
+  --purple: var(--informational);
+  --purple-soft: var(--informational-soft);
+  --shadow: var(--shadow-card);
+  --radius: var(--radius-lg);
+}

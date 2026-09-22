@@ -230,3 +230,11 @@ it("uses the requested summary vocabulary for all-pass and block-plus-suggestion
   );
   expect(screen.getByText("1 項不符合 · 1 項建議")).toBeTruthy();
 });
+
+
+it("renders an accessible benchmark track for the finalized improvement score", () => {
+  render(<SummaryCards result={makeResult()} />);
+  expect(
+    screen.getByRole("img", { name: /改善指數 68 分；60 分起為建議改善，80 分起為優先改善/ }),
+  ).toBeTruthy();
+});

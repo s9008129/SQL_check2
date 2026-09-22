@@ -11,7 +11,6 @@ import { analyze, ApiError } from "./api/client";
 import type { AiResult, AnalyzeResponse } from "./types/api";
 import { formatCostInputOnBlur } from "./lib/cost";
 import { validateAnalyzeInput } from "./lib/validate";
-import { complianceIcon, complianceStateLabel, complianceTone } from "./lib/status";
 import { AI_UNAVAILABLE_MESSAGE, GENERIC_NETWORK_ERROR } from "./lib/copy";
 
 type Phase = "idle" | "loading-initial" | "loading-ai" | "done" | "error";
@@ -147,86 +146,49 @@ export default function App() {
       <header className="topbar no-print">
         <div className="topbar-inner">
           <div className="brand">
-            <div className="brand-mark">SQL</div>
+            <div className="brand-mark" aria-hidden="true">SQL</div>
             <div>
               <div className="brand-title">SQLCheck AI</div>
               <div className="brand-sub">SQL 智慧檢核與改善助手</div>
             </div>
           </div>
-          <div className="top-actions">
-            <button className="ghost-btn" type="button" onClick={scrollToInput}>
-              回到輸入區
-            </button>
-            <button className="print-btn" type="button" onClick={() => window.print()}>
-              列印 / 存成 PDF
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <main className="layout">
-        <aside className="sidebar no-print" id="inputArea" ref={inputSectionRef}>
-          <InputPanel
-            applicationNo={applicationNo}
-            onApplicationNoChange={setApplicationNo}
-            costText={costText}
-            onCostTextChange={setCostText}
-            onCostBlur={handleCostBlur}
-            sql={sql}
-            onSqlChange={setSql}
-            executionPlan={executionPlan}
-            onExecutionPlanChange={setExecutionPlan}
-            onFileExtracted={handleFileExtracted}
-            onSubmit={handleSubmit}
-            onClear={handleClear}
-            submitting={submitting}
-            validationError={validationError}
-          />
-        </aside>
-
-        <section className="main" id="resultArea" ref={resultSectionRef}>
-          {phase === "error" && (
-            <div className="error-banner" role="alert">
-              <strong>無法完成檢核</strong>
-              <p>{errorMessage}</p>
-            </div>
-          )}
-
-          {!result && phase !== "error" && (
-            <div className="empty-hint">
-              請於左側輸入申請單號、COST 與 SQL，並點選「開始檢核」查看結果。
-            </div>
-          )}
 
           {result && (
             <>
-              <div className="hero">
-                <div>
-                  <div className="eyebrow">
-                    申請單號 <span>{result.application_no}</span>
-                  </div>
-                  <h1>SQL 效能檢核結果</h1>
-                  <p>先看中心規範結果，再看改善建議與改寫對照。</p>
-                </div>
-                <span className={`status-pill status-pill-${complianceTone(result.compliance.status)}`}>
-                  {complianceIcon(result.compliance.status)} {complianceStateLabel(result.compliance.status)}
-                </span>
-              </div>
-
               <ResultOverview result={result} />
               <SummaryCards result={result} />
-              <ExecutionPlanCard plan={result.execution_plan} />
-              <ImprovementAdvice ai={result.ai} />
-              <SqlCompare
-                originalSql={submittedSql}
-                ai={result.ai}
-                verifiedRewrites={result.verified_rewrites}
-              />
-              <ComplianceTable
-                rules={result.rules}
-                compliance={result.compliance}
-                parseMessage={result.parse_message}
-              />
+
+              <section id="evidence" className="story-section" aria-labelledby="evidence-title">
+                <header className="section-header">
+                  <div className="section-eyebrow">Evidence</div>
+                  <h2 id="evidence-title">判定依據</h2>
+                  <p>先看確定性規則；有提供 SQL Developer Plan 時，再補上測試機執行證據。</p>
+                </header>
+                <ComplianceTable
+                  rules={result.rules}
+                  compliance={result.compliance}
+                  parseMessage={result.parse_message}
+                />
+                <ExecutionPlanCard plan={result.execution_plan} />
+              </section>
+
+              <section id="improvements" className="story-section" aria-labelledby="improvements-title">
+                <header className="section-header">
+                  <div className="section-eyebrow">Interpretation</div>
+                  <h2 id="improvements-title">改善方向</h2>
+                  <p>把規則與 SQL 結構轉成白話建議；可否直接改寫仍以系統驗證結果為準。</p>
+                </header>
+                <ImprovementAdvice ai={result.ai} />
+              </section>
+
+              <div id="details" className="story-section story-section-compact">
+                <SqlCompare
+                  originalSql={submittedSql}
+                  ai={result.ai}
+                  verifiedRewrites={result.verified_rewrites}
+                />
+              </div>
+
               <PrintFooter applicationNo={result.application_no} onScrollToInput={scrollToInput} />
             </>
           )}

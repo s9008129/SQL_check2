@@ -31,6 +31,7 @@ export default function ExecutionPlanCard({ plan }: ExecutionPlanCardProps) {
       <section className="card card-plan card-plan-unrecognized">
         <div className="card-head">
           <div>
+            <div className="section-eyebrow">Evidence · SQL Developer</div>
             <div className="card-title">測試機執行計畫</div>
             <div className="card-desc">SQL Developer 證據解析</div>
           </div>
@@ -50,7 +51,8 @@ export default function ExecutionPlanCard({ plan }: ExecutionPlanCardProps) {
     <section className="card card-plan">
       <div className="card-head">
         <div>
-          <div className="card-title">測試機執行計畫</div>
+          <div className="section-eyebrow">Evidence · SQL Developer</div>
+            <div className="card-title">測試機執行計畫</div>
           <div className="card-desc">把 COST 拆成可觀察的 Plan 證據，不讓 AI 猜原因。</div>
         </div>
         <span className={`badge ${plan.source === "actual" ? "green" : "blue"}`}>

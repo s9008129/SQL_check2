@@ -130,6 +130,7 @@ export interface ExecutionPlanMetric {
 export interface ExecutionPlanStep {
   id: number;
   operation: string;
+  options: string | null;
   object_name: string | null;
   estimated_rows: number | null;
   actual_rows: number | null;

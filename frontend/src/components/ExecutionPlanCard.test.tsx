@@ -18,6 +18,7 @@ const plan: ExecutionPlanAnalysis = {
     {
       id: 0,
       operation: "SELECT STATEMENT",
+      options: null,
       object_name: null,
       estimated_rows: null,
       actual_rows: 1000,
@@ -32,6 +33,7 @@ const plan: ExecutionPlanAnalysis = {
     {
       id: 1,
       operation: "TABLE ACCESS FULL",
+      options: null,
       object_name: "TAX_CASE",
       estimated_rows: 10,
       actual_rows: 1000,
@@ -84,4 +86,45 @@ test("renders a safe unrecognized state", () => {
 
   expect(screen.getByText("格式待確認")).toBeInTheDocument();
   expect(screen.getByText(/SQL 規則檢核仍然有效/)).toBeInTheDocument();
+});
+
+// SQL Developer's PLAN_TABLE grid / CSV export splits the access path into
+// OPERATION ("TABLE ACCESS") and OPTIONS ("FULL"); the backend merges them for
+// detection, and the UI must show the same single observable operation.
+test("renders SQL Developer OPERATION + OPTIONS as one merged operation", () => {
+  render(
+    <ExecutionPlanCard
+      plan={{
+        ...plan,
+        steps: [
+          plan.steps[0],
+          {
+            ...plan.steps[1],
+            operation: "TABLE ACCESS",
+            options: "FULL",
+          },
+        ],
+      }}
+    />,
+  );
+
+  const mergedCell = screen.getByText("TABLE ACCESS FULL");
+  expect(mergedCell.textContent).toBe("TABLE ACCESS FULL");
+
+  const selectStatementCell = screen.getByText("SELECT STATEMENT");
+  expect(selectStatementCell.textContent).toBe("SELECT STATEMENT");
+  expect(screen.queryByText("null")).toBeNull();
+});
+
+test("merges INDEX + RANGE SCAN without inventing extra text", () => {
+  render(
+    <ExecutionPlanCard
+      plan={{
+        ...plan,
+        steps: [{ ...plan.steps[1], operation: "INDEX", options: "RANGE SCAN" }],
+      }}
+    />,
+  );
+
+  expect(screen.getByText("INDEX RANGE SCAN")).toBeInTheDocument();
 });

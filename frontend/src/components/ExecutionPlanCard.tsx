@@ -1,4 +1,4 @@
-import type { ExecutionPlanAnalysis, ExecutionPlanObservation } from "../types/api";
+import type { ExecutionPlanAnalysis, ExecutionPlanObservation, ExecutionPlanStep } from "../types/api";
 
 export interface ExecutionPlanCardProps {
   plan: ExecutionPlanAnalysis | null;
@@ -6,6 +6,15 @@ export interface ExecutionPlanCardProps {
 
 function formatNumber(value: number | null): string {
   return value == null ? "—" : value.toLocaleString("en-US");
+}
+
+/** SQL Developer PLAN_TABLE exports split the access path into OPERATION and
+ * OPTIONS columns (e.g. "TABLE ACCESS" + "FULL"). Reviewers read the two as a
+ * single phrase, so the table shows exactly what the plan states — combined,
+ * never invented — and stays clean when OPTIONS is empty. */
+function formatOperation(step: ExecutionPlanStep): string {
+  const options = step.options?.trim();
+  return options ? `${step.operation} ${options}` : step.operation;
 }
 
 function observationClass(item: ExecutionPlanObservation): string {
@@ -129,7 +138,7 @@ export default function ExecutionPlanCard({ plan }: ExecutionPlanCardProps) {
                 {plan.steps.map((step) => (
                   <tr key={step.id}>
                     <td>{step.id}</td>
-                    <td>{step.operation}</td>
+                    <td>{formatOperation(step)}</td>
                     <td>{step.object_name ?? "—"}</td>
                     <td>{formatNumber(step.estimated_rows)}</td>
                     <td>{formatNumber(step.actual_rows)}</td>

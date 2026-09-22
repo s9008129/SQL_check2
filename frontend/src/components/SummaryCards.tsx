@@ -66,7 +66,13 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
   const improvementColor = improvementTone(improvement.color);
 
   return (
-    <section className="summary" aria-label="檢核摘要">
+    <section id="signals" className="signal-section" aria-label="檢核摘要">
+      <header className="section-header section-header-compact">
+        <div className="section-eyebrow">Key Signals</div>
+        <h2>一眼掌握重點</h2>
+        <p>先看規範、COST、改善指數與 AI 建議狀態；需要驗證時再往下看證據。</p>
+      </header>
+      <div className="summary">
       <Metric
         tone={complianceTone(compliance.status)}
         icon={compliance.status === "PASS" ? "✓" : compliance.status === "BLOCK" ? "✕" : "?"}
@@ -98,6 +104,21 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
           <div className={`m-value${improvementColor === "red" ? " m-value-bad" : ""}`}>{improvement.score} / 100</div>
         </div>
         <div className="m-sub">分數越高，越需要優先檢視</div>
+        <div
+          className="score-track"
+          role="img"
+          aria-label={"改善指數 " + improvement.score + " 分；60 分起為建議改善，80 分起為優先改善"}
+        >
+          <span
+            className="score-track-fill"
+            style={{ width: String(Math.min(100, Math.max(0, improvement.score))) + "%" }}
+          />
+          <span className="score-track-threshold score-track-threshold-60" aria-hidden="true" />
+          <span className="score-track-threshold score-track-threshold-80" aria-hidden="true" />
+        </div>
+        <div className="score-track-labels" aria-hidden="true">
+          <span>0</span><span>60</span><span>80</span><span>100</span>
+        </div>
         {improvement.breakdown.length > 0 && (
           <>
             <button
@@ -141,6 +162,7 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
               : (ai.advice[0]?.title ?? "目前沒有額外建議")
         }
       />
+      </div>
     </section>
   );
 }

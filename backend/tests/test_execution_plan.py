@@ -126,6 +126,91 @@ def test_sql_developer_tab_copy_is_supported():
     assert result.steps[0].actual_rows == 12
 
 
+def test_tab_delimited_plan_table_split_operation_options_are_merged_for_detection():
+    tab_text = (
+        "Id\tOperation\tOptions\tObject_Name\tCardinality\tCost\tFilter_Predicates\n"
+        "0\tSELECT STATEMENT\t\t\t25\t14\t\n"
+        "1\tTABLE ACCESS\tFULL\tTAX_CASE\t25\t14\tTRUNC(A.CASE_DATE)=DATE_VALUE"
+    )
+    result = execution_plan.analyze(tab_text, expected_cost=14)
+    assert result.recognized is True
+    step1 = result.steps[1]
+    assert step1.operation == "TABLE ACCESS"
+    assert step1.options == "FULL"
+    assert any(item.code == "TABLE_ACCESS_FULL" and item.step_id == 1 for item in result.observations)
+
+
+def test_plan_table_predicate_columns_and_predicate_section_are_deduplicated():
+    # A SQL Developer PLAN_TABLE export carries the predicate in its own
+    # column; DBMS_XPLAN text repeats the same predicate under "Predicate
+    # Information". The same predicate must not be reported twice. The
+    # predicate field is RFC4180-escaped, exactly as a CSV export writes a
+    # value that itself contains double quotes.
+    text = (
+        "Id,Operation,Options,Object_Name,Cardinality,Cost,Access_Predicates,Filter_Predicates\n"
+        "0,SELECT STATEMENT,,,25,14,,\n"
+        '1,TABLE ACCESS,FULL,TAX_CASE,25,14,,"""A"".""TAX_ID""=1"\n'
+        "\n"
+        "Predicate Information (identified by operation id):\n"
+        "---------------------------------------------------\n"
+        '   1 - filter("A"."TAX_ID"=1)\n'
+    )
+    result = execution_plan.analyze(text, expected_cost=14)
+    step1 = result.steps[1]
+    assert step1.filter_predicates == ['"A"."TAX_ID"=1']
+    assert step1.access_predicates == []
+
+
+def test_estimated_plan_never_reports_a_cardinality_gap_without_actual_rows():
+    plan_without_actuals = """
+---------------------------------------------------------------
+| Id | Operation          | Name | Rows | Cost (%CPU) | Time     |
+---------------------------------------------------------------
+|  0 | SELECT STATEMENT   |      |   10 |    68 (0)   | 00:00:01 |
+|* 1 | TABLE ACCESS FULL  | T    |   10 |    68 (0)   | 00:00:01 |
+---------------------------------------------------------------
+Predicate Information (identified by operation id):
+---------------------------------------------------
+   1 - filter("A"."Y"=1)
+"""
+    result = execution_plan.analyze(plan_without_actuals, expected_cost=68)
+    assert result.source == "estimated"
+    assert result.has_runtime_stats is False
+    assert [item.code for item in result.observations] == ["TABLE_ACCESS_FULL"]
+
+
+def test_root_cost_falls_back_to_first_row_when_no_step_zero_is_present():
+    text = "Id,Operation,Options,Object_Name,Cardinality,Cost\n1,TABLE ACCESS,FULL,T,5,9"
+    result = execution_plan.analyze(text, expected_cost=9)
+    assert result.plan_cost == 9
+    assert result.cost_matches_input is True
+
+
+def test_full_scan_evidence_never_becomes_an_index_recommendation():
+    text = (
+        "Id,Operation,Options,Object_Name,Cardinality,Cost\n"
+        "0,SELECT STATEMENT,,,25,14\n"
+        "1,TABLE ACCESS,FULL,TAX_CASE,25,14"
+    )
+    result = execution_plan.analyze(text, expected_cost=14)
+    full_scan = next(item for item in result.observations if item.code == "TABLE_ACCESS_FULL")
+    assert full_scan.level == "fact"
+    assert "CREATE INDEX" not in full_scan.detail
+    assert "建議建立" not in full_scan.detail
+    assert "正式機" not in full_scan.detail
+    # The observation states the plan fact and explicitly disclaims it being a
+    # defect; it never tells the reviewer to add an index.
+    assert "不代表" in full_scan.detail
+
+
+def test_cardinality_gap_evidence_does_not_claim_broken_statistics():
+    result = execution_plan.analyze(ACTUAL_PLAN, expected_cost=88)
+    gap = next(item for item in result.observations if item.code == "CARDINALITY_GAP")
+    assert gap.level == "review"
+    assert "錯誤" not in gap.detail
+    assert "10" in gap.detail
+
+
 def test_unrecognized_text_fails_closed_without_inventing_plan_facts():
     result = execution_plan.analyze("這不是執行計畫", expected_cost=100)
     assert result.recognized is False

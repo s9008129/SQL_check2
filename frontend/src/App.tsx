@@ -15,17 +15,6 @@ import { AI_UNAVAILABLE_MESSAGE, GENERIC_NETWORK_ERROR } from "./lib/copy";
 
 type Phase = "idle" | "loading-initial" | "loading-ai" | "done" | "error";
 
-// Client-side watchdog on the second (include_ai:true) /api/analyze call —
-// if Ollama/Gemma is slow or stuck, degrade locally instead of hanging.
-// 2026-09-16: raised from 150s to 200s alongside backend's
-// OLLAMA_TIMEOUT_SECONDS going from 120s to 180s (app.yaml's num_predict
-// was tripled to 3072, so the longest real replies take longer) — this
-// must stay comfortably above the backend's own timeout, or the frontend
-// would give up and show "unavailable" before the backend's second retry
-// attempt even had a chance to finish.
-// 2026-09-17: the backend now enforces ONE overall deadline of
-// OLLAMA_TIMEOUT_SECONDS (180s) per analysis, retries included, so this
-// watchdog only needs to stay above that single number.
 const AI_TIMEOUT_MS = 200_000;
 
 function degradedAi(): AiResult {
@@ -76,8 +65,6 @@ export default function App() {
       execution_plan: executionPlanValue.trim() || null,
     };
 
-    // Step 1: fast, deterministic-only pass. Rendered in full immediately —
-    // compliance/cost/improvement/rules/findings never change after this.
     let first: AnalyzeResponse;
     try {
       first = await analyze({ ...baseBody, include_ai: false });
@@ -91,19 +78,12 @@ export default function App() {
     setPhase("loading-ai");
     resultSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
 
-    // Step 2: fires automatically, no user action. On success the whole
-    // result is replaced — never a partial merge. 2026-09-17: the AI pass no
-    // longer changes improvement.score/breakdown at all (the index is fully
-    // deterministic); only the AI-dependent sections (advice, suggested SQL,
-    // improvement potential) differ from the first response.
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
     try {
       const second = await analyze({ ...baseBody, include_ai: true }, controller.signal);
       setResult(second);
     } catch {
-      // Network error or our own watchdog abort: keep step 1's result, only
-      // degrade the ai-dependent sections locally.
       setResult((prev) => (prev ? { ...prev, ai: degradedAi() } : prev));
     } finally {
       window.clearTimeout(timer);
@@ -154,6 +134,68 @@ export default function App() {
           </div>
 
           {result && (
+            <nav className="section-nav" aria-label="結果區段導覽">
+              <a href="#decision">結論</a>
+              <a href="#signals">摘要</a>
+              <a href="#evidence">證據</a>
+              <a href="#improvements">改善</a>
+              <a href="#details">明細</a>
+            </nav>
+          )}
+
+          <div className="top-actions">
+            <button className="ghost-btn" type="button" onClick={scrollToInput}>
+              回到輸入區
+            </button>
+            <button className="print-btn" type="button" onClick={() => window.print()}>
+              列印 / 存成 PDF
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="layout">
+        <aside className="sidebar no-print" id="inputArea" ref={inputSectionRef}>
+          <InputPanel
+            applicationNo={applicationNo}
+            onApplicationNoChange={setApplicationNo}
+            costText={costText}
+            onCostTextChange={setCostText}
+            onCostBlur={handleCostBlur}
+            sql={sql}
+            onSqlChange={setSql}
+            executionPlan={executionPlan}
+            onExecutionPlanChange={setExecutionPlan}
+            onFileExtracted={handleFileExtracted}
+            onSubmit={handleSubmit}
+            onClear={handleClear}
+            submitting={submitting}
+            validationError={validationError}
+          />
+        </aside>
+
+        <section className="main" id="resultArea" ref={resultSectionRef}>
+          {phase === "error" && (
+            <div className="error-banner" role="alert">
+              <strong>無法完成檢核</strong>
+              <p>{errorMessage}</p>
+            </div>
+          )}
+
+          {!result && phase !== "error" && (
+            <section className="empty-state" aria-label="開始使用 SQLCheck">
+              <div className="section-eyebrow">SQL Analysis Workbench</div>
+              <h1>先輸入 SQL，再由系統把結論、證據與改善方向整理好。</h1>
+              <p>必填只有申請單號、COST 與 SQL；SQL Developer 執行計畫是選填的測試機證據。</p>
+              <div className="empty-steps" aria-label="分析流程">
+                <div><strong>01</strong><span>規則先判定</span><small>中心規範由確定性規則引擎負責</small></div>
+                <div><strong>02</strong><span>證據再展開</span><small>需要時檢視規則與測試機 Plan</small></div>
+                <div><strong>03</strong><span>最後看改善</span><small>AI 只負責白話解釋與建議</small></div>
+              </div>
+            </section>
+          )}
+
+          {result && (
             <>
               <ResultOverview result={result} />
               <SummaryCards result={result} />
@@ -164,6 +206,7 @@ export default function App() {
                   <h2 id="evidence-title">判定依據</h2>
                   <p>先看確定性規則；有提供 SQL Developer Plan 時，再補上測試機執行證據。</p>
                 </header>
+
                 <ComplianceTable
                   rules={result.rules}
                   compliance={result.compliance}
@@ -178,6 +221,7 @@ export default function App() {
                   <h2 id="improvements-title">改善方向</h2>
                   <p>把規則與 SQL 結構轉成白話建議；可否直接改寫仍以系統驗證結果為準。</p>
                 </header>
+
                 <ImprovementAdvice ai={result.ai} />
               </section>
 

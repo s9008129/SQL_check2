@@ -1,5 +1,5 @@
 import type { AnalyzeResponse } from "../types/api";
-import { complianceSummaryText } from "../lib/status";
+import { complianceStateLabel, complianceSummaryText, complianceTone } from "../lib/status";
 
 export interface ResultOverviewProps {
   result: AnalyzeResponse;
@@ -8,9 +8,9 @@ export interface ResultOverviewProps {
 export default function ResultOverview({ result }: ResultOverviewProps) {
   const adviceCount = result.ai.status === "ok" ? result.ai.advice.length : 0;
   const complianceText = complianceSummaryText(result.rules);
+  const title = complianceStateLabel(result.compliance.status);
 
   let tone = result.compliance.status === "BLOCK" ? "red" : result.compliance.status === "REVIEW" ? "yellow" : "green";
-  let title = complianceText;
   let detail = "目前未發現需要修正的中心規範項目。";
 
   if (result.compliance.status === "BLOCK") {
@@ -30,10 +30,23 @@ export default function ResultOverview({ result }: ResultOverviewProps) {
   }
 
   return (
-    <section className={`result-overview result-overview-${tone}`} aria-label="檢核結論">
-      <div className="result-overview-kicker">先看結論</div>
-      <div className="result-overview-title">{title}</div>
-      <div className="result-overview-detail">{detail}</div>
+    <section id="decision" className={`decision-hero decision-hero-${tone}`} aria-label="檢核結論">
+      <div className="decision-copy">
+        <div className="decision-kicker">
+          <span>SQLCheck 分析結果</span>
+          <span>申請單號 {result.application_no}</span>
+        </div>
+        <h1>{title}</h1>
+        <p>{detail}</p>
+      </div>
+
+      <div className="decision-side">
+        <span className={`status-pill status-pill-${complianceTone(result.compliance.status)}`}>
+          規則引擎判定
+        </span>
+        <strong className="decision-signal">{complianceText}</strong>
+        <span className="decision-signal-label">中心規範摘要</span>
+      </div>
     </section>
   );
 }

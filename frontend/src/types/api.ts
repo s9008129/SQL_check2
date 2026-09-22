@@ -44,6 +44,14 @@ export interface ExtractSqlResponse {
   message: string;
 }
 
+export interface ExtractPlanResponse {
+  status: "ok";
+  filename: string;
+  plan_text: string;
+  truncated: boolean;
+  message: string;
+}
+
 // ---------------------------------------------------------------------------
 // POST /api/analyze — request
 // ---------------------------------------------------------------------------
@@ -51,6 +59,7 @@ export interface AnalyzeRequest {
   application_no: string;
   cost: string | number;
   sql: string;
+  execution_plan: string | null;
   include_ai: boolean;
 }
 
@@ -110,6 +119,52 @@ export interface VerifiedRewrite {
   title: string;
   before: string;
   after: string;
+}
+
+export interface ExecutionPlanMetric {
+  key: string;
+  label: string;
+  value: number;
+}
+
+export interface ExecutionPlanStep {
+  id: number;
+  operation: string;
+  options: string | null;
+  object_name: string | null;
+  estimated_rows: number | null;
+  actual_rows: number | null;
+  starts: number | null;
+  cost: number | null;
+  buffers: number | null;
+  reads: number | null;
+  actual_time: string | null;
+  access_predicates: string[];
+  filter_predicates: string[];
+}
+
+export interface ExecutionPlanObservation {
+  code: string;
+  level: "fact" | "review" | "opportunity";
+  title: string;
+  detail: string;
+  step_id: number | null;
+}
+
+export interface ExecutionPlanAnalysis {
+  recognized: boolean;
+  source: "actual" | "estimated" | "unknown";
+  source_label: string;
+  plan_hash_value: string | null;
+  sql_id: string | null;
+  step_count: number;
+  plan_cost: number | null;
+  cost_matches_input: boolean | null;
+  has_runtime_stats: boolean;
+  runtime_metrics: ExecutionPlanMetric[];
+  steps: ExecutionPlanStep[];
+  observations: ExecutionPlanObservation[];
+  message: string;
 }
 
 export interface AdviceItem {
@@ -184,6 +239,7 @@ export interface AnalyzeResponse {
    * undefined means legacy payload fallback is allowed.
    */
   verified_rewrites?: VerifiedRewrite[];
+  execution_plan: ExecutionPlanAnalysis | null;
   parse_message: string | null;
   ai: AiResult;
 }

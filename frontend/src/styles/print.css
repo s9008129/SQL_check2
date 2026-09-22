@@ -144,3 +144,18 @@
     print-color-adjust: exact;
   }
 }
+
+
+@media print {
+  .card-plan,
+  .plan-message,
+  .plan-observation,
+  .plan-runtime-item,
+  .plan-summary-item {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .plan-steps-details {
+    display: none !important;
+  }
+}

@@ -4,6 +4,7 @@ import SummaryCards from "./components/SummaryCards";
 import ResultOverview from "./components/ResultOverview";
 import ComplianceTable from "./components/ComplianceTable";
 import ImprovementAdvice from "./components/ImprovementAdvice";
+import ExecutionPlanCard from "./components/ExecutionPlanCard";
 import SqlCompare from "./components/SqlCompare";
 import PrintFooter from "./components/PrintFooter";
 import { analyze, ApiError } from "./api/client";
@@ -43,6 +44,7 @@ export default function App() {
   const [applicationNo, setApplicationNo] = useState("");
   const [costText, setCostText] = useState("");
   const [sql, setSql] = useState("");
+  const [executionPlan, setExecutionPlan] = useState("");
   const [submittedSql, setSubmittedSql] = useState("");
 
   const [phase, setPhase] = useState<Phase>("idle");
@@ -57,13 +59,23 @@ export default function App() {
     inputSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  async function runAnalysis(applicationNoValue: string, costValue: string, sqlValue: string) {
+  async function runAnalysis(
+    applicationNoValue: string,
+    costValue: string,
+    sqlValue: string,
+    executionPlanValue: string,
+  ) {
     setPhase("loading-initial");
     setErrorMessage(null);
     setResult(null);
     setSubmittedSql(sqlValue);
 
-    const baseBody = { application_no: applicationNoValue, cost: costValue, sql: sqlValue };
+    const baseBody = {
+      application_no: applicationNoValue,
+      cost: costValue,
+      sql: sqlValue,
+      execution_plan: executionPlanValue.trim() || null,
+    };
 
     // Step 1: fast, deterministic-only pass. Rendered in full immediately —
     // compliance/cost/improvement/rules/findings never change after this.
@@ -104,13 +116,14 @@ export default function App() {
     const error = validateAnalyzeInput({ applicationNo, cost: costText, sql });
     setValidationError(error);
     if (error) return;
-    void runAnalysis(applicationNo.trim(), costText, sql);
+    void runAnalysis(applicationNo.trim(), costText, sql, executionPlan);
   }
 
   function handleClear() {
     setApplicationNo("");
     setCostText("");
     setSql("");
+    setExecutionPlan("");
     setSubmittedSql("");
     setResult(null);
     setPhase("idle");
@@ -161,6 +174,8 @@ export default function App() {
             onCostBlur={handleCostBlur}
             sql={sql}
             onSqlChange={setSql}
+            executionPlan={executionPlan}
+            onExecutionPlanChange={setExecutionPlan}
             onFileExtracted={handleFileExtracted}
             onSubmit={handleSubmit}
             onClear={handleClear}
@@ -200,6 +215,7 @@ export default function App() {
 
               <ResultOverview result={result} />
               <SummaryCards result={result} />
+              <ExecutionPlanCard plan={result.execution_plan} />
               <ImprovementAdvice ai={result.ai} />
               <SqlCompare
                 originalSql={submittedSql}

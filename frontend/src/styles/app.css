@@ -418,3 +418,50 @@ mark.legend{margin:0 3px}
   .card-title{font-size:21px}
   .m-label{font-size:14px}
 }
+
+
+/* 2026-09-20 SQL Developer execution-plan evidence. */
+.plan-divider{height:1px;background:#e8edf4;margin:20px 0}
+.plan-input{margin-top:2px}
+.plan-input-label{margin-bottom:8px}
+.plan-optional{font-size:12px;font-weight:750;color:#0b6fd8;background:#eef6ff;border-radius:999px;padding:3px 7px}
+.plan-guidance{font-size:12px;line-height:1.65;color:#4f5d70;background:#f8fafc;border:1px solid #e7ebf1;border-radius:12px;padding:10px 11px;margin-bottom:9px}
+.plan-guidance strong{color:#245c3f}
+.plan-textarea{width:100%;min-height:150px;resize:vertical;border:1px solid #dbe1ea;background:#fbfcff;color:#172033;border-radius:13px;outline:none;padding:11px 12px;font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:11px;line-height:1.55;transition:.18s border,.18s box-shadow}
+.plan-textarea:focus{border-color:#8cc7ff;box-shadow:0 0 0 4px rgba(10,132,255,.09)}
+.plan-textarea:disabled{opacity:.65}
+.plan-upload-row{display:flex;align-items:center;gap:8px;margin-top:9px;flex-wrap:wrap}
+.plan-clear-btn{border:0;background:transparent;color:#667085;padding:8px 6px;font-size:12px;font-weight:720}
+.card-plan{border-color:#d9e7f6}
+.card-plan .card-head{background:linear-gradient(90deg,#f5faff,#fff)}
+.card-plan-unrecognized{border-color:#efd98f}
+.plan-message{padding:12px 14px;border-radius:13px;background:#eef6ff;border:1px solid #d9ebff;color:#36536f;font-size:14px;line-height:1.6;margin-bottom:14px}
+.plan-message-review{background:#fff8e1;border-color:#f0dc9a;color:#795000}
+.plan-summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:18px}
+.plan-summary-item{border:1px solid #e5eaf0;border-radius:13px;background:#fbfcfe;padding:12px}
+.plan-summary-item span{display:block;font-size:12px;color:#657186;font-weight:720}
+.plan-summary-item strong{display:block;margin-top:3px;font-size:17px;color:#1f2937;word-break:break-word}
+.plan-section-title{font-size:14px;font-weight:800;color:#344054;margin:17px 0 9px}
+.plan-runtime-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.plan-runtime-item{border:1px solid #d9eee2;background:#f3fbf6;border-radius:12px;padding:9px 10px}
+.plan-runtime-item span{display:block;font-size:11px;color:#3e7055}
+.plan-runtime-item strong{font-size:15px;color:#16633e}
+.plan-observation-list{display:flex;flex-direction:column;gap:9px}
+.plan-observation{border:1px solid;border-radius:13px;padding:11px 13px;border-left-width:4px}
+.plan-observation-fact{background:#f7f9fc;border-color:#dce3ec;border-left-color:#7b8798}
+.plan-observation-review{background:#fff8e1;border-color:#f0dc9a;border-left-color:#d59b18}
+.plan-observation-opportunity{background:#eef6ff;border-color:#d9ebff;border-left-color:#0a84ff}
+.plan-observation-title{font-size:14px;font-weight:800;color:#27364a}
+.plan-observation-detail{margin-top:3px;font-size:13px;color:#4f5d70;line-height:1.6}
+.plan-empty{font-size:13px;color:#667085;padding:12px 14px;border:1px dashed #d6dde8;border-radius:12px}
+.plan-steps-details{margin-top:16px;border-top:1px solid #edf0f4;padding-top:4px}
+.plan-steps-details summary{cursor:pointer;padding:11px 0;font-size:14px;font-weight:780;color:#315b83}
+.plan-table-wrap{overflow:auto;border:1px solid #e5eaf0;border-radius:12px}
+.plan-table{width:100%;border-collapse:collapse;min-width:760px;font-size:12px}
+.plan-table th,.plan-table td{padding:8px 9px;border-bottom:1px solid #edf0f4;text-align:left;white-space:nowrap}
+.plan-table th{background:#f7f9fc;color:#536075;font-weight:800;position:sticky;top:0}
+.plan-table td{color:#27364a}
+.plan-table tr:last-child td{border-bottom:0}
+.plan-disclaimer{margin-top:14px;padding:11px 13px;border-radius:12px;background:#f8fafc;border:1px solid #e7ebf1;color:#5b6577;font-size:12px;line-height:1.6}
+@media(max-width:900px){.plan-summary-grid,.plan-runtime-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:520px){.plan-summary-grid,.plan-runtime-grid{grid-template-columns:1fr}}

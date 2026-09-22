@@ -70,6 +70,7 @@ export function makeResult(overrides: Partial<AnalyzeResponse> = {}): AnalyzeRes
     ],
     findings: [],
     statements: [{ index: 0, statement_type: "SELECT", parse_status: "ok", tables: ["HOUT120"] }],
+    execution_plan: null,
     parse_message: null,
     ai: makeAi(),
     ...overrides,

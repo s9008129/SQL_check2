@@ -1,6 +1,6 @@
 # SQLCheck AI 文件狀態總覽
 
-> 更新日期：2026-09-20  
+> 更新日期：2026-09-22  
 > 目的：避免舊 PRD、舊 E2E 報告或交接文件被誤當成目前系統規格。
 
 ## 判讀原則
@@ -44,6 +44,7 @@ HISTORICAL 文件
 | `skills/sqlcheck-oracle-review/references/advice-only-patterns.md` | CURRENT | 只能提供方向的 pattern。 |
 | `skills/sqlcheck-oracle-review/references/forbidden-claims.md` | CURRENT | AI / agent 禁止宣稱的內容。 |
 | `skills/sqlcheck-oracle-review/references/methodology.md` | CURRENT | Detect → Classify → Verify → Explain 方法。 |
+| `docs/sql-developer-execution-plan.md` | CURRENT | SQL Developer 執行計畫證據使用說明（測試機證據層）。 |
 
 ## REFERENCE — 仍可參考，但不是現況唯一依據
 
@@ -88,7 +89,7 @@ HISTORICAL 文件
 - **R008 禁止操作矩陣**：實務沒有禁止操作；保留 R007 重要資料表提醒，R008 正式停用。
 - **改善指數**：現行 UI 正式名稱確認為「改善指數」；既有權重、分級與演算法正式定版。
 - **Ollama 11434 Firewall hardening**：由專案 owner 人工處理，專案不再追蹤。
-- **Execution Plan**：暫緩，不列入目前開發範圍。
+- **Execution Plan**：2026-09-20 暫緩；2026-09-22 由 owner 重新開啟，範圍限定為「使用者主動從測試機 Oracle SQL Developer 提供的執行計畫證據」。仍不連 Oracle、不推論正式機行為、不改變 compliance 與「改善指數」。目前實作見 `docs/sql-developer-execution-plan.md`。
 
 ## Live Cloud E2E 現行做法
 

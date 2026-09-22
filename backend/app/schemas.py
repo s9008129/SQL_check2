@@ -55,6 +55,16 @@ class ExtractSqlResponse(BaseModel):
     message: str
 
 
+class ExtractPlanResponse(BaseModel):
+    """Text extracted from a SQL Developer execution-plan export."""
+
+    status: Literal["ok"] = "ok"
+    filename: str
+    plan_text: str
+    truncated: bool = False
+    message: str
+
+
 # ---------------------------------------------------------------------------
 # /api/analyze — request
 # ---------------------------------------------------------------------------
@@ -62,6 +72,10 @@ class AnalyzeRequest(BaseModel):
     application_no: str = Field(min_length=1, max_length=50)
     cost: str | int
     sql: str = Field(min_length=1)
+    # Optional SQL Developer / DBMS_XPLAN text. The raw text is parsed
+    # deterministically, is not persisted by sql_archive, and is not sent to
+    # the cloud model. 300k matches the attachment extraction ceiling.
+    execution_plan: str | None = Field(default=None, max_length=300_000)
     include_ai: bool = False
 
     @field_validator("application_no")
@@ -84,6 +98,14 @@ class AnalyzeRequest(BaseModel):
         if not v:
             raise ValueError("請輸入 SQL。")
         return v
+
+    @field_validator("execution_plan")
+    @classmethod
+    def _strip_execution_plan(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        stripped = v.strip()
+        return stripped or None
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +171,58 @@ class StatementSummary(BaseModel):
     statement_type: str
     parse_status: Literal["ok", "failed"]
     tables: list[str]
+
+
+class ExecutionPlanMetric(BaseModel):
+    key: str
+    label: str
+    value: int
+
+
+class ExecutionPlanStep(BaseModel):
+    id: int
+    operation: str
+    options: str | None = None
+    object_name: str | None = None
+    estimated_rows: int | None = None
+    actual_rows: int | None = None
+    starts: int | None = None
+    cost: int | None = None
+    buffers: int | None = None
+    reads: int | None = None
+    actual_time: str | None = None
+    access_predicates: list[str] = Field(default_factory=list)
+    filter_predicates: list[str] = Field(default_factory=list)
+
+
+class ExecutionPlanObservation(BaseModel):
+    code: str
+    level: Literal["fact", "review", "opportunity"]
+    title: str
+    detail: str
+    step_id: int | None = None
+
+
+class ExecutionPlanAnalysis(BaseModel):
+    """Deterministic interpretation of user-supplied SQL Developer plan text.
+
+    This is test-environment evidence. It never changes compliance or the
+    改善指數, and it is deliberately separate from the LLM response.
+    """
+
+    recognized: bool
+    source: Literal["actual", "estimated", "unknown"]
+    source_label: str
+    plan_hash_value: str | None = None
+    sql_id: str | None = None
+    step_count: int = 0
+    plan_cost: int | None = None
+    cost_matches_input: bool | None = None
+    has_runtime_stats: bool = False
+    runtime_metrics: list[ExecutionPlanMetric] = Field(default_factory=list)
+    steps: list[ExecutionPlanStep] = Field(default_factory=list)
+    observations: list[ExecutionPlanObservation] = Field(default_factory=list)
+    message: str
 
 
 class AdviceItem(BaseModel):
@@ -257,5 +331,6 @@ class AnalyzeResponse(BaseModel):
     findings: list[Finding]
     statements: list[StatementSummary]
     verified_rewrites: list[VerifiedRewrite] = Field(default_factory=list)
+    execution_plan: ExecutionPlanAnalysis | None = None
     parse_message: str | None = None
     ai: AiResult

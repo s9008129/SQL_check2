@@ -6,6 +6,9 @@ reachable — see tests/test_ai_service.py for ai_service.py's own unit tests.
 
 from __future__ import annotations
 
+import dataclasses
+import json
+import logging
 import os
 import tempfile
 
@@ -15,6 +18,7 @@ import pytest
 from app import api as api_module
 from app.main import app
 from app.schemas import AdviceItem, AiResult, SuggestedSql
+from app.settings import get_settings
 from tests import make_fixtures as fx
 
 
@@ -69,6 +73,20 @@ async def test_health_survives_ai_check_raising(client, monkeypatch):
 # ---------------------------------------------------------------------------
 # /api/analyze
 # ---------------------------------------------------------------------------
+ESTIMATED_PLAN_TEXT = """
+Plan hash value: 77
+---------------------------------------------------------------
+| Id | Operation          | Name | Rows | Cost (%CPU) | Time     |
+---------------------------------------------------------------
+|  0 | SELECT STATEMENT   |      |   10 |    68 (0)   | 00:00:01 |
+|* 1 | TABLE ACCESS FULL  | T    |   10 |    68 (0)   | 00:00:01 |
+---------------------------------------------------------------
+Predicate Information (identified by operation id):
+---------------------------------------------------
+   1 - filter("A"."Y"=1)
+"""
+
+
 async def test_analyze_clean_sql_passes_without_ai(client):
     body = {
         "application_no": "115000218",
@@ -82,6 +100,44 @@ async def test_analyze_clean_sql_passes_without_ai(client):
     assert data["compliance"]["status"] == "PASS"
     assert data["cost"] == 68420
     assert data["ai"]["status"] == "pending"
+    assert data["execution_plan"] is None
+
+
+async def test_analyze_accepts_sql_developer_plan_without_changing_compliance_or_score(client):
+    body = {
+        "application_no": "115000218",
+        "cost": 68,
+        "sql": "SELECT A.X FROM T A WHERE A.Y = 1",
+        "execution_plan": ESTIMATED_PLAN_TEXT,
+        "include_ai": False,
+    }
+    with_plan = await client.post("/api/analyze", json=body)
+    without_plan = await client.post("/api/analyze", json={**body, "execution_plan": None})
+    assert with_plan.status_code == 200
+    data = with_plan.json()
+    assert data["execution_plan"]["recognized"] is True
+    assert data["execution_plan"]["source"] == "estimated"
+    assert data["execution_plan"]["plan_hash_value"] == "77"
+    assert data["execution_plan"]["cost_matches_input"] is True
+    assert data["compliance"] == without_plan.json()["compliance"]
+    assert data["improvement"] == without_plan.json()["improvement"]
+
+
+async def test_analyze_unrecognized_plan_keeps_sql_review_available(client):
+    resp = await client.post(
+        "/api/analyze",
+        json={
+            "application_no": "A1",
+            "cost": 1000,
+            "sql": "SELECT 1 FROM DUAL",
+            "execution_plan": "not a plan",
+            "include_ai": False,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["execution_plan"]["recognized"] is False
+    assert data["compliance"]["status"] == "PASS"
 
 
 async def test_analyze_without_ai_returns_deterministic_verified_rewrites(client):
@@ -282,6 +338,131 @@ async def test_analyze_archive_failure_does_not_affect_response(client, monkeypa
 
 
 # ---------------------------------------------------------------------------
+# SQL Developer execution-plan evidence: privacy / authority boundaries
+# (2026-09-22). Plan text is test-environment evidence only: it must stay out
+# of the cloud-model call, out of the SQL archive, and out of logs even when
+# the deterministic parser raises. It must never change compliance either.
+# ---------------------------------------------------------------------------
+PLAN_SENTINEL = "SUPER_SECRET_PLAN_SENTINEL"
+
+SENTINEL_PLAN_TEXT = f"""
+Plan hash value: 77
+---------------------------------------------------------------
+| Id | Operation          | Name | Rows | Cost (%CPU) | Time     |
+---------------------------------------------------------------
+|  0 | SELECT STATEMENT   |      |   10 |    68 (0)   | 00:00:01 |
+|* 1 | TABLE ACCESS FULL  | T    |   10 |    68 (0)   | 00:00:01 |
+---------------------------------------------------------------
+Predicate Information (identified by operation id):
+---------------------------------------------------
+   1 - filter("A"."NAME"='{PLAN_SENTINEL}')
+"""
+
+
+async def test_analyze_never_sends_raw_execution_plan_to_ai(client, monkeypatch):
+    captured: list[dict] = []
+
+    async def _spy(**kwargs):
+        captured.append(kwargs)
+        return AiResult(status="unavailable", message="測試用")
+
+    monkeypatch.setattr(api_module.ai_service, "get_ai_result", _spy)
+    resp = await client.post(
+        "/api/analyze",
+        json={
+            "application_no": "A1",
+            "cost": 68,
+            "sql": "SELECT A.X FROM T A WHERE A.NAME = 'TEST'",
+            "execution_plan": SENTINEL_PLAN_TEXT,
+            "include_ai": True,
+        },
+    )
+    assert resp.status_code == 200
+    assert len(captured) == 1
+
+    # Every keyword the AI service received — including findings and parsed
+    # statements — must be free of the raw plan text.
+    serialized_call = json.dumps(captured[0], default=str, ensure_ascii=False)
+    assert PLAN_SENTINEL not in serialized_call
+    assert "Plan hash value" not in serialized_call
+    assert "TABLE ACCESS FULL" not in serialized_call
+
+    # ...and so must the AI section the frontend renders.
+    serialized_ai = json.dumps(resp.json()["ai"], default=str, ensure_ascii=False)
+    assert PLAN_SENTINEL not in serialized_ai
+    assert "Plan hash value" not in serialized_ai
+
+
+async def test_analyze_never_archives_raw_execution_plan(client, monkeypatch, tmp_path):
+    settings = get_settings()
+    archived_settings = dataclasses.replace(
+        settings,
+        archive=dataclasses.replace(settings.archive, enabled=True, dir=tmp_path / "archive"),
+    )
+    monkeypatch.setattr(api_module, "get_settings", lambda: archived_settings)
+
+    async def _ai_stub(**_kwargs):
+        return AiResult(status="unavailable", message="測試用")
+
+    monkeypatch.setattr(api_module.ai_service, "get_ai_result", _ai_stub)
+    resp = await client.post(
+        "/api/analyze",
+        json={
+            "application_no": "A1",
+            "cost": 68,
+            "sql": "SELECT A.X FROM PLAN_ARCHIVE_PROOF_TABLE A WHERE A.Y = 1",
+            "execution_plan": SENTINEL_PLAN_TEXT,
+            "include_ai": True,
+        },
+    )
+    assert resp.status_code == 200
+
+    files = list((tmp_path / "archive").glob("*.jsonl"))
+    assert files, "the include_ai=true pass must still write the de-identified record"
+    archived = files[0].read_text(encoding="utf-8")
+    # Control value first: the record really was written for this analysis.
+    assert "PLAN_ARCHIVE_PROOF_TABLE" in archived
+    assert PLAN_SENTINEL not in archived
+    assert "Plan hash value" not in archived
+    assert "TABLE ACCESS FULL" not in archived
+
+
+async def test_unexpected_plan_parser_failure_never_leaks_plan_text_or_breaks_sql_review(
+    client, monkeypatch, caplog
+):
+    def _boom(_text, **_kwargs):
+        raise RuntimeError(f"simulated parser failure carrying {PLAN_SENTINEL}")
+
+    monkeypatch.setattr(api_module.execution_plan, "analyze", _boom)
+    caplog.set_level(logging.DEBUG)
+    resp = await client.post(
+        "/api/analyze",
+        json={
+            "application_no": "A1",
+            "cost": 68,
+            "sql": "SELECT A.X FROM T A WHERE A.Y = 1",
+            "execution_plan": SENTINEL_PLAN_TEXT,
+            "include_ai": False,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["execution_plan"]["recognized"] is False
+    assert data["execution_plan"]["steps"] == []
+    assert "執行計畫內容暫時無法解析" in data["execution_plan"]["message"]
+
+    assert PLAN_SENTINEL not in resp.text
+    assert "simulated parser failure" not in caplog.text
+    assert PLAN_SENTINEL not in caplog.text
+    # Only the exception *type* may be logged (PRD §50.4).
+    assert "execution_plan.analyze raised unexpectedly: RuntimeError" in caplog.text
+
+    # The deterministic SQL review itself is untouched by the plan failure.
+    assert data["compliance"]["status"] == "PASS"
+    assert data["improvement"]["score"] >= 0
+
+
+# ---------------------------------------------------------------------------
 # /api/extract-sql
 # ---------------------------------------------------------------------------
 async def test_extract_sql_from_sql_file(client):
@@ -345,3 +526,132 @@ async def test_extract_sql_does_not_write_any_temp_file(client):
     assert resp.status_code == 200
     after = set(os.listdir(tmp_dir))
     assert after == before, f"extract-sql left new files in {tmp_dir}: {after - before}"
+
+
+# ---------------------------------------------------------------------------
+# /api/extract-plan
+# ---------------------------------------------------------------------------
+async def test_extract_plan_reads_sql_developer_txt_without_sql_detection(client):
+    files = {"file": ("plan.txt", ESTIMATED_PLAN_TEXT.encode(), "text/plain")}
+    resp = await client.post("/api/extract-plan", files=files)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert "TABLE ACCESS FULL" in data["plan_text"]
+    assert data["truncated"] is False
+
+
+async def test_extract_plan_accepts_csv_export(client):
+    files = {"file": ("plan.csv", b"Id,Operation,Name\n0,SELECT STATEMENT,", "text/csv")}
+    resp = await client.post("/api/extract-plan", files=files)
+    assert resp.status_code == 200
+    assert "SELECT STATEMENT" in resp.json()["plan_text"]
+
+
+async def test_extract_plan_rejects_non_text_export(client):
+    files = {"file": ("plan.pdf", b"%PDF-1.4", "application/pdf")}
+    resp = await client.post("/api/extract-plan", files=files)
+    assert resp.status_code == 400
+    assert "TXT" in resp.json()["detail"]
+
+
+async def test_extract_plan_rejects_empty_upload(client):
+    files = {"file": ("plan.txt", b"", "text/plain")}
+    resp = await client.post("/api/extract-plan", files=files)
+    assert resp.status_code == 400
+    assert "檔案內容為空" in resp.json()["detail"]
+
+
+async def test_extract_plan_rejects_oversized_upload(client):
+    big = b"x" * (11 * 1024 * 1024)  # default limit is 10 MB
+    files = {"file": ("plan.txt", big, "text/plain")}
+    resp = await client.post("/api/extract-plan", files=files)
+    assert resp.status_code == 400
+    assert "超過允許大小" in resp.json()["detail"]
+
+
+async def test_extract_plan_rejects_executable_content_disguised_as_txt(client):
+    files = {"file": ("plan.txt", b"MZ\x90\x00", "text/plain")}
+    resp = await client.post("/api/extract-plan", files=files)
+    assert resp.status_code == 400
+    assert "可執行檔" in resp.json()["detail"]
+
+
+async def test_extract_plan_reports_truncation_without_failing(client, monkeypatch):
+    settings = get_settings()
+    limited = dataclasses.replace(
+        settings,
+        upload=dataclasses.replace(settings.upload, max_extracted_chars=50),
+    )
+    monkeypatch.setattr(api_module, "get_settings", lambda: limited)
+
+    long_plan = ("| Id | Operation | Name |\n" + "|  1 | TABLE ACCESS FULL | T |\n" * 20).encode()
+    files = {"file": ("plan.txt", long_plan, "text/plain")}
+    resp = await client.post("/api/extract-plan", files=files)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["truncated"] is True
+    assert len(data["plan_text"]) == 50
+    assert "截取" in data["message"]
+
+
+async def test_extract_plan_does_not_write_any_temp_file(client):
+    tmp_dir = tempfile.gettempdir()
+    before = set(os.listdir(tmp_dir))
+    files = {"file": ("plan.txt", ESTIMATED_PLAN_TEXT.encode(), "text/plain")}
+    resp = await client.post("/api/extract-plan", files=files)
+    assert resp.status_code == 200
+    after = set(os.listdir(tmp_dir))
+    assert after == before, f"extract-plan left new files in {tmp_dir}: {after - before}"
+
+
+async def test_upload_then_analyze_keeps_plan_evidence_deterministic_and_additive(client):
+    """Synthetic API-level END-TO-END for the UI flow (upload → analyze):
+    plan.csv → /api/extract-plan → /api/analyze → structured plan evidence.
+
+    No browser E2E infrastructure exists for this project (see AGENTS.md's
+    manual-evidence policy), so this test plus the frontend component tests
+    are the executable deterministic flow."""
+    csv_plan = (
+        "Id,Operation,Options,Object_Name,Cardinality,Cost,Filter_Predicates\n"
+        "0,SELECT STATEMENT,,,25,14,\n"
+        "1,TABLE ACCESS,FULL,TAX_CASE,25,14,TRUNC(A.CASE_DATE)=DATE_VALUE"
+    )
+    upload = await client.post(
+        "/api/extract-plan",
+        files={"file": ("plan.csv", csv_plan.encode(), "text/csv")},
+    )
+    assert upload.status_code == 200
+    upload_data = upload.json()
+    assert upload_data["truncated"] is False
+
+    body = {
+        "application_no": "115000218",
+        "cost": 14,
+        "sql": "SELECT A.X FROM TAX_CASE A WHERE TRUNC(A.CASE_DATE) = :D",
+    }
+    with_plan = await client.post(
+        "/api/analyze",
+        json={**body, "execution_plan": upload_data["plan_text"], "include_ai": False},
+    )
+    without_plan = await client.post(
+        "/api/analyze", json={**body, "execution_plan": None, "include_ai": False}
+    )
+    assert with_plan.status_code == 200
+
+    data = with_plan.json()
+    evidence = data["execution_plan"]
+    assert evidence["recognized"] is True
+    assert evidence["source"] == "estimated"
+    assert evidence["source_label"] == "測試機預估執行計畫"
+    assert evidence["cost_matches_input"] is True
+    step1 = next(step for step in evidence["steps"] if step["id"] == 1)
+    assert step1["operation"] == "TABLE ACCESS"
+    assert step1["options"] == "FULL"
+    assert any(item["code"] == "TABLE_ACCESS_FULL" for item in evidence["observations"])
+
+    # Plan evidence is additive only: the deterministic verdict and the
+    # 改善指數 are byte-for-byte the same as the same SQL without a plan.
+    assert data["compliance"] == without_plan.json()["compliance"]
+    assert data["improvement"] == without_plan.json()["improvement"]
+    assert data["rules"] == without_plan.json()["rules"]

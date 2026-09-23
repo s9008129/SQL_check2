@@ -23,7 +23,9 @@ test("shows formal-database F10 guidance and accepts pasted plan text", () => {
   render(<ExecutionPlanInput value="" onChange={onChange} />);
 
   expect(screen.getByText(/標準流程：正式資料庫 F10 Explain Plan/)).toBeInTheDocument();
-  expect(screen.getByText(/不需為 SQLCheck 額外在正式庫執行 F6 Autotrace/)).toBeInTheDocument();
+  expect(screen.getByText(/提供資料庫預估的執行方式/)).toBeInTheDocument();
+  expect(screen.queryByText(/F10 不代表 SQL 已實際執行/)).toBeNull();
+  expect(screen.queryByText(/F6 Autotrace/)).toBeNull();
   expect(screen.getByText("正式資料庫 F10 證據")).toBeInTheDocument();
 
   fireEvent.change(screen.getByLabelText("SQL Developer 執行計畫"), {

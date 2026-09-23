@@ -206,8 +206,10 @@ class ExecutionPlanObservation(BaseModel):
 class ExecutionPlanAnalysis(BaseModel):
     """Deterministic interpretation of user-supplied SQL Developer plan text.
 
-    This is test-environment evidence. It never changes compliance or the
-    改善指數, and it is deliberately separate from the LLM response.
+    The owner-confirmed normal workflow supplies F10 Explain Plan generated
+    against the formal Oracle database. Estimated F10 evidence still does not
+    prove runtime behavior. Plan evidence never changes compliance or the
+    改善指數 and stays separate from the LLM response.
     """
 
     recognized: bool

@@ -707,7 +707,7 @@ async def test_upload_then_analyze_keeps_plan_evidence_deterministic_and_additiv
     evidence = data["execution_plan"]
     assert evidence["recognized"] is True
     assert evidence["source"] == "estimated"
-    assert evidence["source_label"] == "測試機預估執行計畫"
+    assert evidence["source_label"] == "正式資料庫 F10 Explain Plan（估算）"
     assert evidence["cost_matches_input"] is True
     step1 = next(step for step in evidence["steps"] if step["id"] == 1)
     assert step1["operation"] == "TABLE ACCESS"

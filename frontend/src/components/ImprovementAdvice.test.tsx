@@ -80,6 +80,7 @@ describe("ImprovementAdvice", () => {
 
     expect(screen.getByTestId("oracle-evidence-count").textContent).toContain("改善重點 1 項");
     expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("Oracle 11g 官方依據");
+    expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("效能改善說明依據");
     expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("官方效能調校文件");
     expect(screen.getByText("為什麼這樣可能比較快")).toBeTruthy();
     expect(screen.getByText("從固定文字開頭比對")).toBeTruthy();
@@ -153,7 +154,7 @@ describe("ImprovementAdvice", () => {
     );
 
     expect(screen.getAllByText("Oracle 11g 官方依據")).toHaveLength(1);
-    expect(screen.getAllByText("為什麼這樣可能比較快")).toHaveLength(2);
+    expect(screen.getAllByText("為什麼這樣可能比較快")).toHaveLength(1);
     expect(screen.getByText("直接比對原始欄位")).toBeTruthy();
     expect(screen.getByText("從固定文字開頭比對")).toBeTruthy();
   });

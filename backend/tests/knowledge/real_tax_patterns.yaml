@@ -1,0 +1,79 @@
+# Synthetic / de-identified cases distilled from recurring local-tax SQL shapes.
+# Never replace these with raw production/taxpayer SQL.
+cases:
+  - id: verified_substr_prefix
+    sql: "SELECT A.CASE_ID FROM TAX_CASE A WHERE SUBSTR(A.YEAR_CODE, 1, 2) = '13'"
+    expected_flags: []
+    expected_exact_patterns: [SUBSTR_EQ_TO_LIKE]
+    expected_verified_rules: [substr_eq_to_like]
+
+  - id: verified_same_column_or
+    sql: "SELECT A.CASE_ID FROM TAX_CASE A WHERE A.STATUS = 'A' OR A.STATUS = 'B'"
+    expected_flags: []
+    expected_exact_patterns: [OR_SAME_COLUMN_TO_IN]
+    expected_verified_rules: [or_eq_to_in]
+
+  - id: cross_column_or
+    sql: "SELECT A.CASE_ID FROM TAX_CASE A WHERE A.STATUS = 'A' OR A.CLOSE_DATE >= '1150101'"
+    expected_flags: [cross_column_or]
+    expected_exact_patterns: [OR_CROSS_COLUMN_TO_UNION_ALL]
+    expected_verified_rules: []
+
+  - id: string_concat_predicate
+    sql: "SELECT A.CASE_ID FROM TAX_CASE A WHERE A.TAX_CD || A.SUBTAX_CD = '551'"
+    expected_flags: [string_concat_predicate]
+    expected_exact_patterns: [STRING_CONCAT_PREDICATE_SPLIT]
+    expected_verified_rules: []
+
+  - id: composite_key_expression_join
+    sql: "SELECT A.CASE_ID FROM TAX_CASE A JOIN TAX_MAP B ON SUBSTR(A.MANAGE_KEY, 1, 2) = B.DISTRICT_CD WHERE A.STATUS = '1'"
+    expected_flags: [column_expression_join]
+    expected_exact_patterns: [COMPOSITE_KEY_EXPRESSION_JOIN]
+    expected_verified_rules: []
+
+  - id: latest_row_correlated_max
+    sql: >
+      SELECT A.CASE_ID
+      FROM TAX_CASE A
+      JOIN TAX_HISTORY B ON B.CASE_ID = A.CASE_ID
+      WHERE B.UPDATE_DATE = (
+        SELECT MAX(H.UPDATE_DATE) FROM TAX_HISTORY H WHERE H.CASE_ID = A.CASE_ID
+      )
+      AND B.UPDATE_TIME = (
+        SELECT MAX(H2.UPDATE_TIME) FROM TAX_HISTORY H2 WHERE H2.CASE_ID = A.CASE_ID
+      )
+    expected_flags: [repeated_correlated_max_subquery]
+    expected_exact_patterns: [LATEST_ROW_CORRELATED_MAX]
+    expected_verified_rules: []
+
+  - id: repeated_scalar_aggregate
+    sql: >
+      SELECT A.CASE_ID,
+        (SELECT COUNT(*) FROM TAX_DETAIL D WHERE D.CASE_ID = A.CASE_ID AND D.KIND = 'A') AS CNT_A,
+        (SELECT COUNT(*) FROM TAX_DETAIL E WHERE E.CASE_ID = A.CASE_ID AND E.KIND = 'B') AS CNT_B
+      FROM TAX_CASE A
+      WHERE A.STATUS = '1'
+    expected_flags: [repeated_scalar_aggregate]
+    expected_exact_patterns: [REPEATED_SCALAR_AGGREGATE]
+    expected_verified_rules: []
+
+  - id: repeated_source_union_branch
+    sql: >
+      SELECT A.AREA_CD, COUNT(*) AS CNT
+      FROM TAX_CASE A
+      WHERE A.TAX_CD = '55' AND A.AMOUNT <= 100
+      GROUP BY A.AREA_CD
+      UNION ALL
+      SELECT B.AREA_CD, COUNT(*) AS CNT
+      FROM TAX_CASE B
+      WHERE B.TAX_CD = '55' AND B.AMOUNT > 100
+      GROUP BY B.AREA_CD
+    expected_flags: [repeated_source_set_operation]
+    expected_exact_patterns: [REPEATED_SOURCE_UNION_BRANCH]
+    expected_verified_rules: []
+
+  - id: clean_control
+    sql: "SELECT A.CASE_ID FROM TAX_CASE A WHERE A.STATUS = '1'"
+    expected_flags: []
+    expected_exact_patterns: []
+    expected_verified_rules: []

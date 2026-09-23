@@ -525,17 +525,20 @@ patterns:
 
   - id: OR_CROSS_COLUMN_TO_UNION_ALL
     name_zh_tw: 跨欄位 OR 條件改為 UNION ALL
+    model_guidance_zh_tw: >
+      已確定偵測到同一個 OR 鏈包含不同欄位。可說明可評估拆分查詢，
+      但 UNION ALL 可能產生重複列、UNION 會改變去重行為；不要直接給可採用改寫。
     category: set_operation
     classification: ADVICE_ONLY
     oracle_applicable: true
     detection:
-      source: prompt_heuristic_only
+      source: sql_parser_complexity_flag
+      complexity_flags: [cross_column_or]
       family_signals:
         rule_ids: [R006]
         qualifier_zh_tw: >
-          R006 只知道有 OR，不知道是否跨欄位，也無法和同欄位 OR→IN
-          （OR_SAME_COLUMN_TO_IN）區分；系統提示的檢查項 (5)「OR 連接不同欄位
-          的條件」要求模型判斷，沒有確定性的偵測器。
+          R006 只知道有 OR；只有 cross_column_or AST flag 才能確認這個 pattern。
+          未命中 exact flag 時仍不得把一般 OR 當成跨欄位 OR。
     rationale_zh_tw: >
       語意陷阱：OR 條件若拆成 UNION（去重）或 UNION ALL（不去重）兩個查詢，
       必須先確認同一列是否可能同時符合兩邊條件——會同時符合時 UNION ALL 會
@@ -631,6 +634,136 @@ patterns:
       - type: internal
         ref: backend/app/config/app.yaml ai_gate.candidate_forbidden_complexity_flags
 
+  - id: LATEST_ROW_CORRELATED_MAX
+    name_zh_tw: 重複相關 MAX 子查詢取得最新紀錄
+    model_guidance_zh_tw: >
+      已確定同一來源出現多個相關 MAX scalar subquery。可提醒評估先集中取得最新日期／時間再 JOIN，
+      但同日期同時間可能有多筆，未確認唯一性前不可把 ROW_NUMBER()=1 或其他完整改寫標成安全。
+    category: subquery
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    detection:
+      source: sql_parser_complexity_flag
+      complexity_flags: [repeated_correlated_max_subquery]
+    rationale_zh_tw: >
+      牌照稅代表案例反覆以 MAX(UPDATE_DATE) 與 MAX(UPDATE_TIME) 的相關 scalar
+      subquery 取得最新紀錄。集中計算最新紀錄可能減少重複邏輯，但若相同日期與
+      時間存在多筆，改成 ROW_NUMBER()=1 會從多筆縮成一筆，查詢結果可能改變；
+      因此此 pattern 只能提供方向，不能自動產生可採用改寫。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+      - actual_runtime_improvement
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: docs/real-tax-sql-patterns.md#latest-row-correlated-max
+      - type: internal
+        ref: backend/app/services/optimization_patterns.py
+
+  - id: REPEATED_SCALAR_AGGREGATE
+    name_zh_tw: 同一來源重複 scalar aggregate 子查詢
+    model_guidance_zh_tw: >
+      已確定同一來源重複出現 scalar aggregate 子查詢。可提醒評估是否能先彙總一次再重用，
+      但 GROUP BY、NULL、重複列與關聯條件都可能影響結果；不要直接合併或輸出可採用完整 SQL。
+    category: subquery
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    detection:
+      source: sql_parser_complexity_flag
+      complexity_flags: [repeated_scalar_aggregate]
+    rationale_zh_tw: >
+      當同一來源被多次 scalar COUNT／SUM／MIN／MAX 查詢時，可能存在可集中計算
+      的機會；但各子查詢的 filter、correlation、NULL 與 group semantics 必須逐項
+      比對。SQLCheck 目前只確認「重複 aggregate 形狀」存在，不證明可合併。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+      - actual_runtime_improvement
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: docs/real-tax-sql-patterns.md#repeated-scalar-aggregate
+      - type: internal
+        ref: backend/app/services/optimization_patterns.py
+
+  - id: COMPOSITE_KEY_EXPRESSION_JOIN
+    name_zh_tw: 複合代碼／欄位加工後再勾稽
+    model_guidance_zh_tw: >
+      已確定比較條件兩側來自不同資料表，且至少一側先做函數、串接或其他運算。
+      應提醒優先確認是否能以原始欄位勾稽；欄位寬度、NULL、補空白與正確關聯鍵未知時不得猜改法。
+    category: join
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    detection:
+      source: sql_parser_complexity_flag
+      complexity_flags: [column_expression_join]
+    rationale_zh_tw: >
+      地價稅代表案例常見 SUBSTR(A.KEY,...)=B.KEY 或
+      A.KEY=B.P1||B.P2 這類複合代碼勾稽。SQL 文字可以確認欄位先被加工再比較，
+      但無法確認各段固定寬度、CHAR/VARCHAR2 補空白、NULL 規則及真正 business key，
+      因此只能精準指出改善位置，不得自行拆欄或重組 JOIN。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+      - actual_runtime_improvement
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: docs/real-tax-sql-patterns.md#composite-key-expression-join
+      - type: internal
+        ref: backend/app/services/optimization_patterns.py
+
+  - id: REPEATED_SOURCE_UNION_BRANCH
+    name_zh_tw: 相同來源重複 set-operation branch
+    model_guidance_zh_tw: >
+      已確定 UNION／UNION ALL 的多個 branch 使用相同來源資料表組合。
+      可提醒評估是否能用 CASE、條件彙總或單次來源查詢整理，但不得把所有 UNION ALL 一概視為問題或直接合併。
+    category: set_operation
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    detection:
+      source: sql_parser_complexity_flag
+      complexity_flags: [repeated_source_set_operation]
+    rationale_zh_tw: >
+      實務統計 SQL 有同一資料表因不同級距或分類條件而重複查詢的情況，可能適合
+      改成 CASE／條件彙總；但 UNION ALL 也可能是正確的業務集合語意。detector
+      只確認來源重複，不判斷 branch 是否互斥，也不證明合併後結果相同。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - index_usage
+      - execution_plan
+      - actual_runtime_improvement
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
+      - type: internal
+        ref: docs/real-tax-sql-patterns.md#repeated-source-union-branch
+      - type: internal
+        ref: backend/app/services/optimization_patterns.py
+
   - id: DISTINCT_REMOVAL
     name_zh_tw: 移除 DISTINCT
     model_guidance_zh_tw: >
@@ -702,11 +835,15 @@ patterns:
 
   - id: STRING_CONCAT_PREDICATE_SPLIT
     name_zh_tw: 欄位串接條件拆分為多欄位比對
+    model_guidance_zh_tw: >
+      已確定偵測到條件式使用欄位字串串接。應提醒先確認各欄位固定寬度、
+      NULL 與補空白規則，再評估拆成原始欄位比對；資訊不足時不要猜切割位置或產生可採用 SQL。
     category: predicate
     classification: ADVICE_ONLY
     oracle_applicable: true
     detection:
-      source: none
+      source: sql_parser_complexity_flag
+      complexity_flags: [string_concat_predicate]
     rationale_zh_tw: >
       例如 W.TAX_CD || W.SUBTAX_CD = '551' 改成分欄位比對時，'551' 要切成
       '55'+'1' 還是 '5'+'51' 需要業務確認欄位寬度慣例，系統無法從字面猜測

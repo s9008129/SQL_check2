@@ -34,7 +34,10 @@ _VALID_RUNTIME_GAP_KINDS = {"unverified_precondition", "unauthorized_accepted_fo
 _BACKEND_DIR = Path(__file__).resolve().parents[1]
 _RULES_YAML = _BACKEND_DIR / "app" / "config" / "rules.yaml"
 _APP_YAML = _BACKEND_DIR / "app" / "config" / "app.yaml"
-_SQL_PARSER_PY = _BACKEND_DIR / "app" / "services" / "sql_parser.py"
+_COMPLEXITY_FLAG_SOURCES = (
+    _BACKEND_DIR / "app" / "services" / "sql_parser.py",
+    _BACKEND_DIR / "app" / "services" / "optimization_patterns.py",
+)
 
 # Which specific-id list belongs to which deterministic detection.source.
 _SPECIFIC_LIST_FOR_SOURCE = {
@@ -253,9 +256,13 @@ def test_referenced_rule_ids_exist_in_rules_yaml(patterns: list[dict[str, Any]])
             assert rid in known, f"{p.get('id')}: rule_id {rid!r} is not defined in rules.yaml"
 
 
-def test_referenced_complexity_flags_are_emitted_by_sql_parser(patterns: list[dict[str, Any]]) -> None:
-    emitted = set(re.findall(r'flags\.add\("([a-z_]+)"\)', _SQL_PARSER_PY.read_text(encoding="utf-8")))
-    assert emitted, "could not find any flags.add(...) in sql_parser.py"
+def test_referenced_complexity_flags_are_emitted_by_deterministic_detectors(
+    patterns: list[dict[str, Any]],
+) -> None:
+    emitted: set[str] = set()
+    for path in _COMPLEXITY_FLAG_SOURCES:
+        emitted.update(re.findall(r'flags\.add\("([a-z_]+)"\)', path.read_text(encoding="utf-8")))
+    assert emitted, "could not find any deterministic complexity/optimization flags"
     for p in patterns:
         detection = p.get("detection") or {}
         family = detection.get("family_signals") or {}

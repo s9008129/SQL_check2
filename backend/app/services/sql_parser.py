@@ -33,6 +33,7 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 from sqlglot.tokens import Tokenizer, TokenType
 
+from app.services.optimization_patterns import detect_optimization_patterns
 from app.services.text_normalize import normalize_text, strip_sqlplus_commands
 
 DIALECT = "oracle"
@@ -704,6 +705,10 @@ def _complexity_flags(tree: exp.Expression, stype: str) -> set[str]:
                 flags.add("correlated_subquery")
                 break
 
+    # Real-tax optimization patterns are additional deterministic facts only.
+    # They intentionally have no configured structure weights/score floors,
+    # so adding these flags does not change the finalized 改善指數.
+    flags.update(detect_optimization_patterns(tree, stype))
     return flags
 
 

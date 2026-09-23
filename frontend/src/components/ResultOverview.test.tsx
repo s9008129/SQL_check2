@@ -10,6 +10,54 @@ describe("ResultOverview", () => {
     expect(screen.getByText("先看下方重點，再決定是否需要調整。")).toBeTruthy();
   });
 
+  it("puts deterministic safe rewrites ahead of generic AI wording", () => {
+    render(
+      <ResultOverview
+        result={makeResult({
+          verified_rewrites: [
+            {
+              statement_index: 0,
+              rule: "or_eq_to_in",
+              source_rule_id: "R006",
+              title: "同欄位 OR 改為 IN",
+              before: "A.STATUS='A' OR A.STATUS='B'",
+              after: "A.STATUS IN ('A', 'B')",
+            },
+          ],
+          ai: makeAi({ status: "pending", advice: [], suggested_sql: null }),
+        })}
+      />,
+    );
+    expect(
+      screen.getByText("系統已確認有 1 項可安全改寫，請查看下方改寫對照。 AI 正在整理其他改善建議。"),
+    ).toBeTruthy();
+  });
+
+  it("keeps deterministic safe rewrites visible when AI is unavailable", () => {
+    render(
+      <ResultOverview
+        result={makeResult({
+          verified_rewrites: [
+            {
+              statement_index: 0,
+              rule: "substr_eq_to_like",
+              source_rule_id: "R005",
+              title: "SUBSTR 比對改為 LIKE",
+              before: "SUBSTR(A.YEAR_CODE,1,2)='13'",
+              after: "A.YEAR_CODE LIKE '13%'",
+            },
+          ],
+          ai: makeAi({ status: "unavailable", advice: [], suggested_sql: null }),
+        })}
+      />,
+    );
+    expect(
+      screen.getByText(
+        "系統已確認有 1 項可安全改寫，請查看下方改寫對照。 即使智慧建議暫時無法使用，這些改寫仍由系統規則確認。",
+      ),
+    ).toBeTruthy();
+  });
+
   it("puts explicit non-compliance first", () => {
     render(
       <ResultOverview

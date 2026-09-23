@@ -77,6 +77,65 @@ def test_complexity_flags_select_exact_catalog_patterns():
         assert expected in selection.exact_ids, (sql, selection.exact_ids)
 
 
+def test_real_tax_specific_flags_select_exact_advice_patterns():
+    cases = [
+        (
+            "SELECT A.X FROM T A WHERE A.STATUS='1' OR A.CLOSE_DATE >= '1150101'",
+            "OR_CROSS_COLUMN_TO_UNION_ALL",
+        ),
+        (
+            "SELECT A.X FROM T A WHERE A.TAX_CD || A.SUBTAX_CD = '551'",
+            "STRING_CONCAT_PREDICATE_SPLIT",
+        ),
+        (
+            "SELECT A.X FROM T A JOIN U B "
+            "ON SUBSTR(A.MANAGE_KEY,1,2)=B.DISTRICT_CD WHERE A.STATUS='1'",
+            "COMPOSITE_KEY_EXPRESSION_JOIN",
+        ),
+        (
+            "SELECT A.X FROM T A JOIN H B ON B.ID=A.ID "
+            "WHERE B.UPDATE_DATE=(SELECT MAX(H1.UPDATE_DATE) FROM H H1 WHERE H1.ID=A.ID) "
+            "AND B.UPDATE_TIME=(SELECT MAX(H2.UPDATE_TIME) FROM H H2 WHERE H2.ID=A.ID)",
+            "LATEST_ROW_CORRELATED_MAX",
+        ),
+        (
+            "SELECT A.X, "
+            "(SELECT COUNT(*) FROM D D1 WHERE D1.ID=A.ID AND D1.KIND='A') C1, "
+            "(SELECT COUNT(*) FROM D D2 WHERE D2.ID=A.ID AND D2.KIND='B') C2 "
+            "FROM T A WHERE A.STATUS='1'",
+            "REPEATED_SCALAR_AGGREGATE",
+        ),
+        (
+            "SELECT A.AREA_CD FROM T A WHERE A.STATUS='1' "
+            "UNION ALL SELECT B.AREA_CD FROM T B WHERE B.STATUS='2'",
+            "REPEATED_SOURCE_UNION_BRANCH",
+        ),
+    ]
+    for sql, expected in cases:
+        selection = select_patterns(_parsed(sql), [], _rules())
+        assert expected in selection.exact_ids, (sql, selection.exact_ids)
+        matched = next(item for item in selection.exact if item.pattern_id == expected)
+        assert matched.classification == "ADVICE_ONLY"
+
+
+def test_cross_column_or_is_exact_only_when_ast_confirms_different_columns():
+    same_column = select_patterns(
+        _parsed("SELECT A.X FROM T A WHERE A.STATUS='1' OR A.STATUS='2'"),
+        [_finding("R006")],
+        _rules(),
+    )
+    assert "OR_CROSS_COLUMN_TO_UNION_ALL" not in same_column.exact_ids
+    assert "OR_CROSS_COLUMN_TO_UNION_ALL" in same_column.family_signal_ids
+
+    cross_column = select_patterns(
+        _parsed("SELECT A.X FROM T A WHERE A.STATUS='1' OR A.CLOSE_DATE >= '1150101'"),
+        [_finding("R006")],
+        _rules(),
+    )
+    assert "OR_CROSS_COLUMN_TO_UNION_ALL" in cross_column.exact_ids
+    assert "OR_CROSS_COLUMN_TO_UNION_ALL" not in cross_column.family_signal_ids
+
+
 def test_many_tables_uses_same_threshold_contract_as_improvement_score():
     sql = (
         "SELECT A.X FROM T1 A "
@@ -110,7 +169,6 @@ def test_none_and_out_of_scope_patterns_are_never_selected_without_a_detector():
     selection = select_patterns(_parsed("SELECT A.X FROM T A WHERE A.X=1"), [], _rules())
     forbidden = {
         "IN_SUBQUERY_TO_EXISTS",
-        "STRING_CONCAT_PREDICATE_SPLIT",
         "LARGE_RESULT_SET_NO_LIMIT",
         "INDEX_ADVISORY",
         "EXECUTION_PLAN_CLAIM",

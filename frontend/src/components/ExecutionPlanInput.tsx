@@ -93,7 +93,7 @@ export default function ExecutionPlanInput({
         )}
       </div>
       <div className="upload-help">
-        SQLCheck 不會連線 Oracle；原始 Plan 不寫入 SQL Archive，也不送往雲端 AI。
+        SQLCheck 不會主動連線 Oracle；貼上的執行計畫不會保存，也不會送給雲端 AI。
       </div>
       {status && <div className={`upload-status upload-status-${status.tone}`}>{status.text}</div>}
     </div>

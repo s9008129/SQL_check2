@@ -43,13 +43,13 @@ export default function ExecutionPlanInput({
   return (
     <div className="plan-input">
       <div className="label plan-input-label">
-        <span>SQL Developer 執行計畫（選填）</span>
-        <span className="plan-optional">正式資料庫 F10 證據</span>
+        <span>SQL Developer F10 執行計畫（選填）</span>
+        <span className="plan-optional">F10 Explain Plan</span>
       </div>
 
       <div className="plan-guidance">
-        <strong>標準流程：正式資料庫 F10 Explain Plan</strong>
-        <span>：提供資料庫預估的執行方式，SQLCheck 會把它當作估算證據。</span>
+        在 <strong>SQL Developer</strong> 按 F10 取得執行計畫後，可直接貼上或上傳。
+        SQLCheck 會幫你整理 COST 較高的步驟與可注意的地方。
       </div>
 
       <textarea
@@ -59,7 +59,7 @@ export default function ExecutionPlanInput({
         maxLength={300000}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
-        placeholder={"可直接貼上 SQL Developer 的 Autotrace／Explain Plan 文字\n例如包含：Id、Operation、Name、E-Rows、A-Rows、Cost、Predicate…"}
+        placeholder={"可直接貼上 SQL Developer F10 執行計畫文字\n也可以上傳 TXT／CSV 檔案"}
       />
 
       <div className="plan-upload-row">

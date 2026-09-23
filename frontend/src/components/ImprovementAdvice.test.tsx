@@ -76,14 +76,41 @@ describe("ImprovementAdvice", () => {
       />,
     );
 
-    expect(screen.getByTestId("oracle-evidence-count").textContent).toContain("Oracle 11g 證據 1 項");
-    expect(screen.getByText("效能依據｜Oracle Database 11g 官方文件")).toBeTruthy();
-    expect(screen.getByText("Oracle Database Performance Tuning Guide 11g Release 2")).toBeTruthy();
+    expect(screen.getByTestId("oracle-evidence-count").textContent).toContain("Oracle 11g 官方依據 1 項");
+    expect(screen.getByText("為什麼這樣可能比較快｜Oracle 11g 官方依據")).toBeTruthy();
+    expect(screen.queryByText("Oracle Database Performance Tuning Guide 11g Release 2")).toBeNull();
     expect(screen.getByText(/固定前綴 LIKE 在條件適合時/)).toBeTruthy();
-    expect(screen.getByText(/本案判斷：/)).toBeTruthy();
-    expect(screen.getByText(/限制：/)).toBeTruthy();
+    expect(screen.getByText(/套用到這支 SQL：/)).toBeTruthy();
+    expect(screen.getByText(/還要注意：/)).toBeTruthy();
     expect(screen.getByText("AI 分析中，約需數十秒。")).toBeTruthy();
     expect(screen.queryByText(/https:\/\//)).toBeNull();
+  });
+
+
+  it("keeps Oracle evidence wording friendly and hides technical document names", () => {
+    render(
+      <ImprovementAdvice
+        ai={makeAi({ status: "pending", advice: [], suggested_sql: null, estimated_improvement_pct: null })}
+        performanceEvidence={[
+          {
+            evidence_id: "ORACLE11G_SUBQUERY_UNNESTING",
+            pattern_id: "LATEST_ROW_CORRELATED_MAX",
+            statement_indexes: [0],
+            source_label: "Oracle Database 11g 官方文件",
+            source_document: "Oracle Database SQL Language Reference 11g Release 2",
+            claim_zh_tw: "如果同一張表的相關子查詢重複出現，Oracle 可能需要反覆處理相似的工作。",
+            applicability_zh_tw: "這支 SQL 重複使用 MAX 子查詢來找最新資料。",
+            caveat_zh_tw: "這表示值得評估，但還不能直接改。",
+            strength: "conditional",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText(/如果同一張表的相關子查詢重複出現/)).toBeTruthy();
+    expect(screen.getByText(/這支 SQL 重複使用 MAX 子查詢/)).toBeTruthy();
+    expect(screen.queryByText(/SQL Language Reference/)).toBeNull();
+    expect(screen.queryByText(/nested subquery|unnesting|Pattern Selector|canonical|AST/)).toBeNull();
   });
 
   it("shows the pending copy while ai.status is pending", () => {

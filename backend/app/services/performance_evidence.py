@@ -114,29 +114,28 @@ def _substr_variant(rewrite: VerifiedRewrite) -> str | None:
 def _default_applicability(pattern_id: str) -> str:
     return {
         "LATEST_ROW_CORRELATED_MAX": (
-            "本案已由 AST 確認同一來源存在多個相關 MAX scalar subquery；"
-            "因此 Oracle 11g 對 nested subquery 與 unnesting 的原理適用於本案的改善評估。"
+            "這支 SQL 對同一來源重複使用 MAX 子查詢來找最新資料，"
+            "所以值得評估是否能先把最新資料集中算好，再和主查詢 JOIN。"
         ),
         "REPEATED_SOURCE_UNION_BRANCH": (
-            "本案已由 AST 確認多個 set-operation branch 使用相同來源；"
-            "因此可依 Oracle 11g「盡量減少重複存取資料」原理評估是否能集中處理。"
+            "這支 SQL 的多個區塊會重複讀取相同來源，"
+            "所以值得評估是否能把共同資料先取一次，再集中處理。"
         ),
         "LEADING_WILDCARD_LIKE": (
-            "本案已由中心規則 R004 確認 LIKE 樣式以前置萬用字元開始；"
-            "因此不能套用固定前綴 LIKE 的 Index Range Scan 正向說法。"
+            "這支 SQL 的 LIKE 一開始就是萬用字元，因此無法使用「固定開頭」來先縮小搜尋範圍。"
         ),
         "COMPOSITE_KEY_EXPRESSION_JOIN": (
-            "本案已由 AST 確認不同資料表欄位在比較前至少一側先做函數、串接或運算；"
-            "Oracle 11g 對 transformed column 的調校原理可作為檢視依據。"
+            "這支 SQL 在 JOIN 比對前，至少有一側先對欄位做函數、串接或運算，"
+            "所以值得檢查是否能直接使用原始欄位比對。"
         ),
         "STRING_CONCAT_PREDICATE_SPLIT": (
-            "本案已由 AST 確認條件式先串接欄位再比對；"
-            "Oracle 11g 對 untransformed column predicate 的原理可作為檢視依據。"
+            "這支 SQL 先把欄位串接起來再比對，"
+            "所以值得檢查是否能改成直接用原始欄位做條件。"
         ),
         "OR_SAME_COLUMN_TO_IN": (
-            "本案 OR→IN 已由系統確認條件等價，且改寫後 IN expression 數量在 Oracle 11g 的 1000 上限內。"
+            "這支 SQL 的同欄位 OR 已由系統確認可以安全整理成 IN，而且值的數量沒有超過 Oracle 11g 的 1000 個上限。"
         ),
-    }.get(pattern_id, "本案已由 SQLCheck 的確定性 Pattern Selector 確認符合這項 Oracle 11g 原理的適用範圍。")
+    }.get(pattern_id, "SQLCheck 已確認這支 SQL 符合這項 Oracle 11g 官方調校原則的適用情況。")
 
 
 def build_performance_evidence(
@@ -193,8 +192,8 @@ def build_performance_evidence(
                     match.pattern_id,
                     match.statement_indexes,
                     (
-                        "本案 canonical 改寫為固定前綴 LIKE，第一個字元不是 % 或 _；"
-                        "因此符合 Oracle 11g 所述的 Index Range Scan 候選條件形狀。"
+                        "這次改寫後的 LIKE 是從固定文字開頭，例如 '13%'；"
+                        "如果欄位有合適索引，Oracle 會有較好的機會先縮小搜尋範圍。"
                     ),
                 )
             if "leading_wildcard" in variants:
@@ -203,8 +202,8 @@ def build_performance_evidence(
                     match.pattern_id,
                     match.statement_indexes,
                     (
-                        "本案雖已確認 SUBSTR→LIKE 的查詢結果不變，但 canonical LIKE 前方仍有萬用字元；"
-                        "因此不能把這次安全改寫包裝成一般 B-tree 前綴索引的效能改善證據。"
+                        "這次 SUBSTR→LIKE 雖已確認查詢結果不變，但改寫後的 LIKE 前面仍有萬用字元；"
+                        "所以只能說改寫安全，不能因此宣稱一般索引的查找效率一定會變好。"
                     ),
                 )
 

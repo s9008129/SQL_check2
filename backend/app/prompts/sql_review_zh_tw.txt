@@ -56,8 +56,8 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
 - execution_plan_context：可選的 SQL Developer 執行計畫摘要。若為空物件，代表本次沒有可用的
   執行計畫資訊；若有內容，這是系統先解析後整理出的**輔助證據**，不是新的規則判決。常見欄位：
   source（estimated/actual）、plan_cost、cost_matches_input、step_count、has_runtime_stats、
-  priority_steps（最多數個較高 COST 的步驟，只含 operation/options/已在 SQL 出現的資料表名稱/
-  COST/筆數/函數名稱）、signals（系統辨識的 observation code）與 runtime_metrics。
+  priority_steps（最多數個較高 COST 的步驟，只含系統整理後的 operation 類型、已在 SQL 出現的資料表名稱、
+  COST／筆數／函數名稱）、signals（系統辨識的 observation code）與 runtime_metrics。
   使用方式：
   1. 優先處理同時有 SQL 寫法證據、又在 execution_plan_context 出現對應訊號的改善點。
   2. 可以把這份額外證據反映在 confidence_score，但**不得**放寬 candidate_allowed、

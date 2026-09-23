@@ -2,6 +2,7 @@ import type { AdviceItem, AiResult, PerformanceEvidence } from "../types/api";
 import { AI_PENDING_MESSAGE, AI_UNAVAILABLE_MESSAGE, VERIFIED_REWRITE_EXPLANATION } from "../lib/copy";
 import { assessmentConfidenceText, confidenceBadgeText, confidenceLevel } from "../lib/confidence";
 import { looksLikeSqlFragment } from "../lib/sqlDiff";
+import { performanceAdviceItems } from "../lib/adviceDisplay";
 
 export interface ImprovementAdviceProps {
   ai: AiResult;
@@ -110,6 +111,7 @@ export function adviceEvidenceLevel(item: AdviceItem): EvidenceLevel {
  * 「系統可確認／需人工確認／觀念提醒」呈現可信度與採用方式。
  */
 export default function ImprovementAdvice({ ai, performanceEvidence = [] }: ImprovementAdviceProps) {
+  const visibleAdvice = ai.status === "ok" ? performanceAdviceItems(ai.advice) : [];
   const assessmentConfidence =
     ai.status === "ok" ? assessmentConfidenceText(ai.assessment_confidence_score) : null;
   const assessmentLevel =
@@ -127,7 +129,7 @@ export default function ImprovementAdvice({ ai, performanceEvidence = [] }: Impr
                 改善重點 {performanceEvidence.length} 項
               </span>
             )}
-            {ai.status === "ok" && <span className="badge purple">AI 建議 {ai.advice.length} 項</span>}
+            {ai.status === "ok" && <span className="badge purple">AI 建議 {visibleAdvice.length} 項</span>}
             {assessmentConfidence && (
               <span
                 className={`badge assessment-confidence-badge confidence-${assessmentLevel ?? "medium"}`}
@@ -182,11 +184,11 @@ export default function ImprovementAdvice({ ai, performanceEvidence = [] }: Impr
 
         {ai.status === "ok" && (
           <>
-            {ai.advice.length === 0 ? (
+            {visibleAdvice.length === 0 ? (
               <div className="ai-note">{ai.summary?.trim() || "目前沒有額外的改善建議。"}</div>
             ) : (
               <div className="advice-grid">
-                {ai.advice.map((item, index) => {
+                {visibleAdvice.map((item, index) => {
                   const evidence = EVIDENCE_META[adviceEvidenceLevel(item)];
                   return (
                     <div className={`advice-box ${evidence.tone}`} key={`${item.title}-${index}`}>

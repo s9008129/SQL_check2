@@ -1,0 +1,109 @@
+registry_version: 1
+target_database:
+  vendor: oracle
+  major_version: "11g"
+  reference_release: "11g Release 2 (11.2)"
+  note_zh_tw: >
+    中心目前確認使用 Oracle Database 11g。正式 UI 的效能原理以 Oracle 11g 官方文件為第一順位；
+    若未來確認實際為 11.1，涉及 optimizer 細節的 evidence 應再對 11gR1 文件逐條複核。
+
+evidence:
+  - id: ORACLE11G_TRANSFORMED_COLUMN
+    source_type: oracle_official
+    source_label: Oracle Database 11g 官方文件
+    source_document: Oracle Database Performance Tuning Guide 11g Release 2
+    source_section: Avoid Transformed Columns in the WHERE Clause
+    source_url: https://docs.oracle.com/cd/E11882_01/server.112/e41573/sql_overview.htm
+    claim_zh_tw: >
+      Oracle 建議查詢條件盡量直接使用未經轉換的欄位。若先對欄位套用函數或運算，
+      一般欄位索引可能無法直接用於該條件；若資料庫存在相符的 function-based index，
+      則可能例外。
+    caveat_zh_tw: >
+      SQLCheck 看不到正式資料庫的索引定義與 Optimizer 最終選擇，因此不能宣稱一定不走索引、
+      一定全表掃描，或改寫後一定比較快。
+    strength: strong
+
+  - id: ORACLE11G_PREFIX_LIKE_RANGE_SCAN
+    source_type: oracle_official
+    source_label: Oracle Database 11g 官方文件
+    source_document: Oracle Database Performance Tuning Guide 11g Release 2
+    source_section: When the Optimizer Uses Index Range Scans
+    source_url: https://docs.oracle.com/cd/E25178_01/server.1111/e16638/optimops.htm
+    claim_zh_tw: >
+      Oracle 11g 說明，像 'ABC%' 這類具有固定前綴的 LIKE 條件，在欄位有合適索引且
+      Optimizer 判斷有利時，可以成為 Index Range Scan 的候選條件。
+    caveat_zh_tw: >
+      這代表具有效能改善潛力，不代表本案一定使用 Index Range Scan；實際結果仍應以測試機
+      Execution Plan 或執行統計確認。
+    strength: strong
+
+  - id: ORACLE11G_LEADING_WILDCARD_RANGE_LIMIT
+    source_type: oracle_official
+    source_label: Oracle Database 11g 官方文件
+    source_document: Oracle Database Performance Tuning Guide 11g Release 2
+    source_section: When the Optimizer Uses Index Range Scans
+    source_url: https://docs.oracle.com/cd/E25178_01/server.1111/e16638/optimops.htm
+    claim_zh_tw: >
+      Oracle 11g 說明，LIKE 若以萬用字元開頭，例如 '%ABC'，不會形成同樣的 Index Range Scan；
+      因此前方仍有萬用字元的 LIKE 不能僅憑文字改寫就宣稱一般索引存取會改善。
+    caveat_zh_tw: >
+      這不代表查詢一定慢，也不排除 function-based index 或其他存取路徑；SQLCheck 只描述
+      Oracle 11g 的一般 access-path 原理。
+    strength: conditional
+
+  - id: ORACLE11G_SUBQUERY_UNNESTING
+    source_type: oracle_official
+    source_label: Oracle Database 11g 官方文件
+    source_document: Oracle Database SQL Language Reference 11g Release 2
+    source_section: Unnesting of Nested Subqueries
+    source_url: https://docs.oracle.com/html/E26088_01/queries008.htm
+    claim_zh_tw: >
+      Oracle 11g 說明，nested subquery 可能需要重複評估；subquery unnesting 可讓 Optimizer
+      一起考量外層與子查詢的 JOIN 與存取路徑。但含 aggregate function 或 GROUP BY 的
+      correlated subquery 並不屬於一般可自動 unnest 的簡單情況。
+    caveat_zh_tw: >
+      因此重複 correlated MAX 值得在測試機比較集中計算再 JOIN 的寫法，但未確認唯一性、
+      tie 行為與實際 Plan 前，不可把 ROW_NUMBER()=1 或其他完整改寫標成安全。
+    strength: conditional
+
+  - id: ORACLE11G_VISIT_DATA_FEWER_TIMES
+    source_type: oracle_official
+    source_label: Oracle Database 11g 官方文件
+    source_document: Oracle Database Performance Tuning Guide 11g Release 2
+    source_section: Visiting Data as Few Times as Possible
+    source_url: https://docs.oracle.com/cd/E11882_01/server.112/e41573/sql_overview.htm
+    claim_zh_tw: >
+      Oracle 11g 建議盡量減少對同一資料來源的重複存取；在多次掃描同一來源做不同彙總的情況，
+      可評估用 CASE 或條件彙總集中成較少的掃描。
+    caveat_zh_tw: >
+      UNION／UNION ALL 可能本來就是正確的集合語意。SQLCheck 只能指出來源重複與改善方向，
+      未證明各 branch 可合併前不得自動重寫。
+    strength: conditional
+
+  - id: ORACLE11G_IMPLICIT_CONVERSION
+    source_type: oracle_official
+    source_label: Oracle Database 11g 官方文件
+    source_document: Oracle Database SQL Language Reference 11g
+    source_section: Datatype Comparison Rules
+    source_url: https://docs.oracle.com/cd/B28359_01/server.111/b28286/sql_elements002.htm
+    claim_zh_tw: >
+      Oracle 11g 建議不要依賴隱式型別轉換；若轉換發生在欄位端，可能增加處理成本並影響原欄位
+      索引的使用機會。
+    caveat_zh_tw: >
+      SQLCheck 目前沒有 schema datatype metadata，因此這條 evidence 先保留為治理知識，
+      不會僅憑 SQL 字面自行判斷某個欄位實際發生了哪一種隱式轉型。
+    strength: strong
+
+  - id: ORACLE11G_IN_LIST_LIMIT
+    source_type: oracle_official
+    source_label: Oracle Database 11g 官方文件
+    source_document: Oracle Database SQL Language Reference 11g Release 2
+    source_section: IN Condition
+    source_url: https://docs.oracle.com/html/E10592_02/conditions013.htm
+    claim_zh_tw: >
+      Oracle 11g 的單一 IN expression list 最多可包含 1000 個 expression。
+      SQLCheck 因此只在同欄位 OR 條件為 2 到 1000 個值時產生單一 IN 改寫。
+    caveat_zh_tw: >
+      這是語法可執行性的版本邊界，不代表 OR 改成 IN 後一定比較快；本 pattern 的主要保證是
+      查詢條件等價與寫法集中。
+    strength: strong

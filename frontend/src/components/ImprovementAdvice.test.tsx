@@ -238,9 +238,10 @@ it("shows overall AI assessment confidence even when no rewrite or advice is nee
 
   expect(screen.getByText("AI 判讀信心：高（91/100）")).toBeTruthy();
   expect(screen.getByText("目前未發現需要調整的寫法。")).toBeTruthy();
-  expect(screen.getByTestId("assessment-confidence-note")).toBeTruthy();
-  expect(screen.getByText(/不是 SQL 正確率/)).toBeTruthy();
-  expect(screen.getByText(/不代表可以直接執行/)).toBeTruthy();
+  expect(screen.queryByTestId("assessment-confidence-note")).toBeNull();
+  expect(
+    screen.getByText("AI 信心僅描述模型在目前證據下的自評；不代表實際效能、正確率或系統驗證結果。"),
+  ).toBeTruthy();
 });
 
 it.each([

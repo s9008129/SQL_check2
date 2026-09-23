@@ -1,6 +1,6 @@
 # SQLCheck AI 文件狀態總覽
 
-> 更新日期：2026-09-22  
+> 更新日期：2026-09-23  
 > 目的：避免舊 PRD、舊 E2E 報告或交接文件被誤當成目前系統規格。
 
 ## 判讀原則
@@ -44,7 +44,7 @@ HISTORICAL 文件
 | `skills/sqlcheck-oracle-review/references/advice-only-patterns.md` | CURRENT | 只能提供方向的 pattern。 |
 | `skills/sqlcheck-oracle-review/references/forbidden-claims.md` | CURRENT | AI / agent 禁止宣稱的內容。 |
 | `skills/sqlcheck-oracle-review/references/methodology.md` | CURRENT | Detect → Classify → Verify → Explain 方法。 |
-| `docs/sql-developer-execution-plan.md` | CURRENT | SQL Developer 執行計畫證據使用說明（測試機證據層）。 |
+| `docs/sql-developer-execution-plan.md` | CURRENT | SQL Developer 執行計畫證據使用說明（測試機證據層）。 |\n| `docs/real-tax-sql-patterns.md` | CURRENT | 從 owner 提供的地價稅／牌照稅 SQL 整理出的去識別化效能 pattern 與安全邊界。 |
 
 ## REFERENCE — 仍可參考，但不是現況唯一依據
 

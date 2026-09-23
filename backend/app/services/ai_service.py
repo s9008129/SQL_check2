@@ -394,6 +394,7 @@ def _build_payload(
     knowledge_context: list[dict[str, str]] | None = None,
     cost_context: dict[str, Any] | None = None,
     advice_contracts: list[dict[str, Any]] | None = None,
+    execution_plan_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the de-identified <SQL_DATA> object sent to Gemma.
 
@@ -433,6 +434,10 @@ def _build_payload(
         # The model may choose whether a suggestion is worth surfacing, but it
         # may not invent executable details outside these bounded explanations.
         "advice_contracts": advice_contracts or [],
+        # Optional deterministic summary of a user-supplied SQL Developer
+        # execution plan. Raw plan text, predicates, SQL_ID and Plan Hash are
+        # intentionally excluded before this service is called.
+        "execution_plan_context": execution_plan_context or {},
     }
     if where_evidence is not None:
         payload["where_evidence"] = where_evidence
@@ -1806,6 +1811,7 @@ async def get_ai_result(
     compliance_status: str,
     findings: list[Finding],
     statements: list[ParsedStatement],
+    execution_plan_context: dict[str, Any] | None = None,
     settings: Settings,
 ) -> AiResult:
     """Never raises — any failure anywhere in this path (provider down,
@@ -1918,6 +1924,7 @@ async def get_ai_result(
                 advice_contracts=_build_advice_contracts(
                     representative.raw_sql if representative is not None else sql_text
                 ),
+                execution_plan_context=execution_plan_context,
             )
 
         payload = build(candidate_allowed)

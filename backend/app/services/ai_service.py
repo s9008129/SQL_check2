@@ -84,10 +84,10 @@ LAST_CALL_STATS: dict[str, Any] = {}
 def improvement_potential(result: AiResult, findings: list[Finding]) -> tuple[str | None, list[str]]:
     """2026-09-17 user decision (tightened by the round-1 third-party review):
     the level is derived ONLY from facts the server can observe for itself.
-    The model's own `impact` rating is a self-assessment — it has no Oracle
-    execution plan, no real index, no statistics and no cardinality — so it
-    is shown on the advice card for reference but can never raise (or lower)
-    this level. The old percentage was never measured, and the old "any
+    The model's own `impact` rating is a self-assessment. A bounded F10
+    summary may now be available as advisory context, but the model still
+    does not own compliance, rewrite equivalence, index metadata, or the
+    improvement level. Therefore impact can never raise (or lower) this level. The old percentage was never measured, and the old "any
     NOTICE => medium" rule wrongly promoted pure governance reminders.
 
       high          — two or more server-verified improvement evidences (a
@@ -510,9 +510,10 @@ def _humanize_internal_placeholders(
 def _sanitize_unobservable_db_claims(text: str) -> str:
     """Remove sentences that claim database behavior SQLCheck cannot observe.
 
-    SQLCheck has no Oracle plan/index/statistics metadata. Keeping useful
-    neighboring sentences is better than dropping the whole advice item when
-    Gemma adds one unsupported index/plan assertion.
+    User-facing AI prose must not turn optional F10 context into DBA-style
+    plan claims. Keeping useful neighboring sentences is better than dropping
+    the whole advice item when Gemma adds an unsupported or overly technical
+    index/plan assertion.
     """
     if not text:
         return text

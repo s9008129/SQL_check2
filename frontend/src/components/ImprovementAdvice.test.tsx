@@ -19,10 +19,10 @@ describe("ImprovementAdvice", () => {
         ai={makeAi({
           advice: [
             {
-              title: "可確認改寫",
-              explanation: "系統已有確定性規則。",
-              before: "A.STATUS = 'A' OR A.STATUS = 'B'",
-              example: "A.STATUS IN ('A', 'B')",
+              title: "直接比對原始欄位",
+              explanation: "減少欄位端函數處理，讓條件直接比對原始欄位。",
+              before: "SUBSTR(A.CODE, 1, 2) = '13'",
+              example: "A.CODE LIKE '13%'",
               impact: "high",
               verification: "verified",
             },
@@ -81,12 +81,19 @@ describe("ImprovementAdvice", () => {
     expect(screen.getByTestId("oracle-evidence-count").textContent).toContain("改善重點 1 項");
     expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("Oracle 11g 官方依據");
     expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("效能改善說明依據");
-    expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("官方效能調校文件");
+    expect(screen.getByTestId("oracle-evidence-note").textContent).toContain(
+      "Oracle Database Performance Tuning Guide 11g Release 2 (11.2)",
+    );
+    expect(screen.getByTestId("oracle-evidence-note").textContent).toContain(
+      "Oracle Database SQL Language Reference 11g Release 2 (11.2)",
+    );
     expect(screen.getByText("為什麼這樣可能比較快")).toBeTruthy();
     expect(screen.getByText("從固定文字開頭比對")).toBeTruthy();
     expect(screen.getByText(/像 '13%' 這種從固定文字開頭比對的寫法/)).toBeTruthy();
     expect(screen.queryByText("系統依據")).toBeNull();
-    expect(screen.queryByText("Oracle Database Performance Tuning Guide 11g Release 2")).toBeNull();
+    expect(screen.getByTestId("oracle-evidence-note").textContent).toContain(
+      "Oracle Database Performance Tuning Guide 11g Release 2",
+    );
     expect(screen.getByText("AI 分析中，約需數十秒。")).toBeTruthy();
     expect(screen.queryByText(/https:\/\//)).toBeNull();
   });
@@ -114,8 +121,8 @@ describe("ImprovementAdvice", () => {
 
     expect(screen.getByText("避免重複找同一批資料")).toBeTruthy();
     expect(screen.getByText(/可能做了重複工作；可評估先整理一次再使用/)).toBeTruthy();
-    expect(screen.getByText(/同一時間有多筆最新資料/)).toBeTruthy();
-    expect(screen.queryByText(/SQL Language Reference/)).toBeNull();
+    expect(screen.queryByText(/同一時間有多筆最新資料/)).toBeNull();
+    expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("SQL Language Reference");
     expect(screen.queryByText(/nested subquery|unnesting|Pattern Selector|canonical|AST/)).toBeNull();
   });
 
@@ -204,14 +211,47 @@ describe("ImprovementAdvice", () => {
 });
 
 
-it("does not repeat the AI summary when detailed advice cards are visible", () => {
+it("does not repeat the AI summary or generic disclaimer when detailed advice cards are visible", () => {
   render(<ImprovementAdvice ai={makeAi({ summary: "這句摘要不應重複顯示。" })} />);
   expect(screen.queryByText("這句摘要不應重複顯示。")).toBeNull();
   expect(
-    screen.getByText("AI 建議是改善參考；真正可安全改寫的內容，仍以「系統已驗證」標示為準。"),
-  ).toBeTruthy();
+    screen.queryByText("AI 建議是改善參考；真正可安全改寫的內容，仍以「系統已驗證」標示為準。"),
+  ).toBeNull();
 });
 
+
+it("hides readability-only OR to IN advice from the performance section", () => {
+  render(
+    <ImprovementAdvice
+      ai={makeAi({
+        advice: [
+          {
+            title: "簡化多值比對寫法",
+            explanation: "將同一欄位的多個等於條件合併為 IN 寫法，使 SQL 更簡潔。",
+            before: "A.CASE_TYPE = '01' OR A.CASE_TYPE = '02'",
+            example: "A.CASE_TYPE IN ('01', '02')",
+            impact: "low",
+            verification: "verified",
+            confidence_score: 90,
+          },
+          {
+            title: "直接比對原始欄位",
+            explanation: "減少欄位端函數處理，讓條件直接比對原始欄位。",
+            before: "SUBSTR(A.AREA_CODE, 1, 3) = 'TNN'",
+            example: "A.AREA_CODE LIKE 'TNN%'",
+            impact: "high",
+            verification: "verified",
+            confidence_score: 90,
+          },
+        ],
+      })}
+    />,
+  );
+
+  expect(screen.queryByText("簡化多值比對寫法")).toBeNull();
+  expect(screen.getByText("直接比對原始欄位")).toBeTruthy();
+  expect(screen.getByText("AI 建議 1 項")).toBeTruthy();
+});
 
 it("never renders copyable SQL for an unverified advice item", () => {
   render(
@@ -368,13 +408,13 @@ it("shows overall AI assessment confidence even when no rewrite or advice is nee
   expect(screen.getByText("AI 判讀信心：高（91/100）")).toBeTruthy();
   expect(screen.getByText("目前未發現需要調整的寫法。")).toBeTruthy();
   expect(screen.queryByTestId("assessment-confidence-note")).toBeNull();
-  expect(screen.getByText("AI 信心怎麼看？")).toBeTruthy();
+  expect(screen.queryByText("AI 信心怎麼看？")).toBeNull();
   expect(
-    screen.getByText("高：可優先參考；中、低：代表仍有不確定資訊，建議先確認再使用。"),
-  ).toBeTruthy();
+    screen.queryByText("高：可優先參考；中、低：代表仍有不確定資訊，建議先確認再使用。"),
+  ).toBeNull();
   expect(
-    screen.getByText("AI 信心是採用時的參考，不是保證；中、低信心的建議請更保守確認。"),
-  ).toBeTruthy();
+    screen.queryByText("AI 信心是採用時的參考，不是保證；中、低信心的建議請更保守確認。"),
+  ).toBeNull();
 });
 
 it.each([

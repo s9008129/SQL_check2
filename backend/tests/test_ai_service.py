@@ -461,7 +461,8 @@ def test_system_prompt_keeps_not_needed_observable_and_plain():
 def test_system_prompt_keeps_verified_rewrite_explanation_separate_from_ui_verification_copy():
     prompt = ai_service.SYSTEM_PROMPT
     assert "VERIFIED_REWRITE" in prompt
-    assert "為什麼這樣比較容易閱讀" in prompt
+    assert "為什麼這個調整值得做效能評估" in prompt
+    assert "不要只說「更簡潔、較易閱讀」" in prompt
     assert "結果相同" in prompt
     assert "查詢結果相同" in prompt
     assert "可使用此改寫" in prompt

@@ -24,8 +24,9 @@ test("shows SQL Developer F10 guidance and accepts pasted plan text", () => {
 
   expect(screen.getByText("SQL Developer F10 執行計畫（選填）")).toBeInTheDocument();
   expect(screen.getByText("F10 Explain Plan")).toBeInTheDocument();
-  expect(screen.getByText(/在 SQL Developer.*按 F10 取得執行計畫後/)).toBeInTheDocument();
-  expect(screen.getByText(/COST 較高的步驟與可注意的地方/)).toBeInTheDocument();
+  const guidance = document.querySelector(".plan-guidance");
+  expect(guidance?.textContent).toContain("在 SQL Developer 按 F10 取得執行計畫後");
+  expect(guidance?.textContent).toContain("COST 較高的步驟與可注意的地方");
   expect(screen.queryByText(/E-Rows|A-Rows|Predicate/)).toBeNull();
   expect(screen.queryByText(/F6 Autotrace/)).toBeNull();
 

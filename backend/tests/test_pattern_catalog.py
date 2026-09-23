@@ -47,7 +47,7 @@ _SPECIFIC_LIST_FOR_SOURCE = {
     "improvement_score_structure": "structure_keys",
 }
 
-# Oracle 19c: "You can specify up to 1000 expressions in expression_list."
+# Oracle 11g: "You can specify up to 1000 expressions in expression_list."
 # https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/IN-Condition.html
 _ORACLE_IN_LIST_MAX_EXPRESSIONS = 1000
 # Runtime rewrite rules whose output is a single IN list.

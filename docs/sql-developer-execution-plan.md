@@ -1,26 +1,36 @@
 # SQL Developer 執行計畫匯入與效能證據
 
-> CURRENT — 2026-09-22
+> CURRENT — 2026-09-23
 
-SQLCheck 的執行計畫功能是為了讀取**測試機**證據，不會連線 Oracle，也不會把測試機結果說成正式機一定相同。
+SQLCheck 不會主動連線 Oracle，而是解析使用者從 SQL Developer 貼上／匯出的 Plan。專案 owner 已確認日常作業是在**正式 Oracle 資料庫**執行 **F10 Explain Plan**，因此 F10 證據應視為「正式資料庫環境下的 Optimizer 估算」，而不是測試機資料。F10 仍未實際執行 SQL，所以不能把預估 COST／Rows 當成真實耗時、I/O 或實際列數。
 
 ## 建議取得方式
 
-本專案的日常工具是 Oracle SQL Developer，因此輸入流程以 SQL Developer 為主。
+本專案的正式作業流程以 Oracle SQL Developer 為主，且 owner 已確認 **F10 Explain Plan 是在正式資料庫連線上執行**。
 
-### 1. 首選：Autotrace（F6）
+### 1. 標準流程：正式資料庫 Explain Plan（F10）
 
-在測試機可以實際執行 SQL 時，優先使用 SQL Developer 的 **Autotrace（F6）**。Oracle 官方說明中，Autotrace 會執行 SQL，並收集 runtime statistics 與 actual execution plan。
+在 SQL Developer 對正式資料庫連線，使用 **F10 Explain Plan** 取得 Optimizer 的預估執行計畫，再將 Plan 文字／CSV 貼入 SQLCheck。
 
-將 Autotrace 的文字內容複製到 SQLCheck 的「SQL Developer 執行計畫」欄位；若工作環境可匯出文字，也可存成 TXT／CSV 後上傳。
+Oracle 11g 官方說明，`EXPLAIN PLAN` 會讓 Optimizer 為指定 SQL 決定一份執行計畫，並將各步驟寫入 PLAN_TABLE；它也會估算 COST。這讓 F10 比「只看 SQL 文字」多了一層與正式資料庫環境相關的證據，例如當下 Optimizer 看見的物件、統計資訊與可選 access path 所形成的估算結果。
 
-### 2. 備用：Explain Plan（F10）
+但必須維持一條清楚邊界：**F10 是 estimated plan，不是 actual runtime plan。**它不能證明 SQL 已實際執行，也不能直接代表真實執行時間、Buffers、Reads、A-Rows 或最終 cursor plan。
 
-若不適合實際執行，可使用 **Explain Plan（F10）**。這是 Optimizer 的預估計畫，不等於 SQL 真正執行時一定採用相同計畫。SQLCheck 會明確標示為「測試機預估執行計畫」。
+SQLCheck 因此會標示：
+
+> 正式資料庫 F10 Explain Plan（估算）
+
+並允許用它確認「正式庫 Optimizer 當下預估會走哪種 Operation／Options」；若要宣稱「實際變快」，仍需要另有經核准的 runtime evidence。
+
+### 2. Autotrace（F6）／實際執行證據：不是 SQLCheck 的預設要求
+
+SQL Developer **F6 Autotrace** 會涉及實際執行與 runtime statistics。因本專案標準流程已確認是在正式資料庫做 F10，SQLCheck **不會要求同仁為了取得建議而在正式庫額外執行 F6**。
+
+若既有作業規範另有授權，而且使用者本來就有合法取得的 actual plan／runtime statistics，SQLCheck 仍能解析 A-Rows、Starts、Buffers、Reads、A-Time 等欄位；但系統不會僅憑文字自行猜測該 runtime evidence 是從正式庫或測試庫取得，來源應以作業紀錄為準。
 
 ### 3. 進階：DBMS_XPLAN.DISPLAY_CURSOR
 
-若測試帳號具備必要權限，而且已依環境規範收集 plan statistics，可在實際執行後使用 DBMS_XPLAN 顯示 cursor 計畫，例如：
+若既有 DBA／作業流程已合法取得 cursor plan statistics，可使用 DBMS_XPLAN 顯示 cursor 計畫，例如：
 
 ```sql
 SELECT *
@@ -29,7 +39,7 @@ FROM TABLE(
 );
 ```
 
-Oracle 文件說明，`ALLSTATS LAST` 能顯示最後一次執行的 I/O／memory statistics，但需要有對應的 plan statistics；`DISPLAY_CURSOR` 也需要查詢相關 `V$SQL*` fixed views 的權限。因此 SQLCheck 不會要求使用者一定採用此方式，也不會自動修改 SQL 加 hint。
+`ALLSTATS LAST` 需要有對應 plan statistics；`DISPLAY_CURSOR` 也需要查詢相關 `V$SQL*` fixed views 的權限。因此 SQLCheck 不要求使用者自行增加權限、修改 SQL 加 hint 或在正式庫額外執行查詢。
 
 ## SQLCheck 目前會讀什麼
 
@@ -70,9 +80,9 @@ SQLCheck 會 deterministic 合併成 `TABLE ACCESS FULL` 再判斷與顯示。`O
 執行計畫是「證據層」，不是新的中心規範。
 
 - 若 COST 欄位與計畫根節點 COST 不一致，系統只提醒確認是否拿錯 SQL／Plan。
-- 若看到 TABLE ACCESS FULL，系統只陳述測試計畫事實，不直接判成錯誤，也不自動要求建立 Index。
-- 若實際計畫同時有 E-Rows / A-Rows，系統會以「A-Rows ÷ Starts 與 E-Rows 相差 10 倍以上」作為 review 訊號，標示估計落差，作為後續確認 statistics／資料分布的線索；這是待確認線索，不是「統計資訊錯誤」的判定。
-- 若 SQL 已符合 deterministic VERIFIED_REWRITE，且 Plan Predicate 也看到對應條件，系統會把它列為優先在測試機做 Before／After 驗證的候選。
+- 若 F10 Plan 顯示 TABLE ACCESS FULL，系統可以陳述「正式庫 Optimizer 的估算 Plan 含此 access path」，但不直接判成錯誤，也不自動要求建立 Index。
+- 標準 F10 只有 estimated rows，不會因此產生「估計列數 vs 實際列數」判斷。只有使用者另行提供含 E-Rows / A-Rows / Starts 的合法 runtime evidence 時，系統才會計算落差作為後續確認線索；這仍不是「統計資訊錯誤」的判定。
+- 若 SQL 已符合 deterministic VERIFIED_REWRITE，且 Plan Predicate 也看到對應條件，系統會把它列為優先在正式資料庫依既有流程做 Before／After F10 Explain Plan 比較的候選。
 - 執行計畫目前**不改變中心規範判定與「改善指數」**。
 
 ## 資料安全
@@ -84,6 +94,7 @@ SQLCheck 會 deterministic 合併成 `TABLE ACCESS FULL` 再判斷與顯示。`O
 
 ## Oracle 官方依據
 
-- SQL Developer / Worksheet：Explain Plan 產生預估計畫；Autotrace 執行 SQL 並收集 runtime statistics 與 actual plan。
-- Oracle Database SQL Tuning Guide：EXPLAIN PLAN 可能與實際執行計畫不同。
+- Oracle SQL Developer：F10 顯示 Explain Plan；F6 顯示 Autotrace。
+- Oracle Database 11g SQL Language Reference：EXPLAIN PLAN 讓 Optimizer 決定指定 SQL 的執行計畫並寫入 PLAN_TABLE，也會估算 COST。
+- Oracle SQL Tuning Guide：EXPLAIN PLAN 顯示的是 explain 當下的估算；實際執行環境不同時，actual plan 可能不同。
 - DBMS_XPLAN：`DISPLAY_CURSOR` 可顯示 cursor 計畫；`ALLSTATS LAST` 在有收集 plan statistics 時可顯示最後一次執行統計。

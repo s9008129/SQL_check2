@@ -392,6 +392,77 @@ def test_clean_simple_select_has_no_complexity_flags_beyond_star():
     assert s.complexity_flags == set()
 
 
+def test_cross_column_or_gets_precise_advisory_flag():
+    s = _one("SELECT A.X FROM T A WHERE A.STATUS='1' OR A.CLOSE_DATE >= '1150101'")
+    assert "cross_column_or" in s.complexity_flags
+
+
+def test_same_column_or_does_not_get_cross_column_flag():
+    s = _one("SELECT A.X FROM T A WHERE A.STATUS='1' OR A.STATUS='2'")
+    assert "cross_column_or" not in s.complexity_flags
+
+
+def test_string_concat_condition_gets_precise_advisory_flag():
+    s = _one("SELECT A.X FROM T A WHERE A.TAX_CD || A.SUBTAX_CD = '551'")
+    assert "string_concat_predicate" in s.complexity_flags
+
+
+def test_expression_based_join_gets_precise_advisory_flag():
+    s = _one(
+        "SELECT A.X FROM T A JOIN U B "
+        "ON SUBSTR(A.MANAGE_KEY,1,2)=B.DISTRICT_CD WHERE A.STATUS='1'"
+    )
+    assert "column_expression_join" in s.complexity_flags
+
+
+def test_plain_column_join_is_not_expression_join():
+    s = _one("SELECT A.X FROM T A JOIN U B ON A.KEY=B.KEY WHERE A.STATUS='1'")
+    assert "column_expression_join" not in s.complexity_flags
+
+
+def test_repeated_correlated_max_subqueries_get_latest_row_flag():
+    s = _one(
+        "SELECT A.X FROM T A JOIN H B ON B.ID=A.ID "
+        "WHERE B.UPDATE_DATE=(SELECT MAX(H1.UPDATE_DATE) FROM H H1 WHERE H1.ID=A.ID) "
+        "AND B.UPDATE_TIME=(SELECT MAX(H2.UPDATE_TIME) FROM H H2 WHERE H2.ID=A.ID)"
+    )
+    assert "repeated_correlated_max_subquery" in s.complexity_flags
+
+
+def test_one_correlated_max_subquery_is_not_called_repeated():
+    s = _one(
+        "SELECT A.X FROM T A WHERE A.UPDATE_DATE="
+        "(SELECT MAX(H.UPDATE_DATE) FROM H H WHERE H.ID=A.ID)"
+    )
+    assert "repeated_correlated_max_subquery" not in s.complexity_flags
+
+
+def test_repeated_scalar_aggregate_same_source_gets_flag():
+    s = _one(
+        "SELECT A.X, "
+        "(SELECT COUNT(*) FROM D D1 WHERE D1.ID=A.ID AND D1.KIND='A') C1, "
+        "(SELECT COUNT(*) FROM D D2 WHERE D2.ID=A.ID AND D2.KIND='B') C2 "
+        "FROM T A WHERE A.STATUS='1'"
+    )
+    assert "repeated_scalar_aggregate" in s.complexity_flags
+
+
+def test_repeated_source_union_all_gets_flag():
+    s = _one(
+        "SELECT A.AREA_CD FROM T A WHERE A.STATUS='1' "
+        "UNION ALL SELECT B.AREA_CD FROM T B WHERE B.STATUS='2'"
+    )
+    assert "repeated_source_set_operation" in s.complexity_flags
+
+
+def test_union_all_of_different_sources_is_not_repeated_source():
+    s = _one(
+        "SELECT A.AREA_CD FROM T1 A WHERE A.STATUS='1' "
+        "UNION ALL SELECT B.AREA_CD FROM T2 B WHERE B.STATUS='2'"
+    )
+    assert "repeated_source_set_operation" not in s.complexity_flags
+
+
 # ---------------------------------------------------------------------------
 # Parse failure handling
 # ---------------------------------------------------------------------------

@@ -50,7 +50,7 @@ def test_prefix_substr_gets_transformed_column_and_prefix_like_evidence():
     }
     prefix = next(item for item in items if item.evidence_id == "ORACLE11G_PREFIX_LIKE_RANGE_SCAN")
     assert prefix.source_label == "Oracle Database 11g 官方文件"
-    assert "固定前綴 LIKE" in prefix.applicability_zh_tw
+    assert "固定文字開頭" in prefix.applicability_zh_tw
     assert "一定" not in prefix.claim_zh_tw
     assert "source_url" not in prefix.model_dump()
 
@@ -62,7 +62,8 @@ def test_mid_string_substr_never_gets_positive_prefix_range_scan_claim():
     assert "ORACLE11G_LEADING_WILDCARD_RANGE_LIMIT" in _ids(items)
     assert "ORACLE11G_PREFIX_LIKE_RANGE_SCAN" not in _ids(items)
     limited = next(item for item in items if item.evidence_id == "ORACLE11G_LEADING_WILDCARD_RANGE_LIMIT")
-    assert "不能把這次安全改寫" in limited.applicability_zh_tw
+    assert "只能說改寫安全" in limited.applicability_zh_tw
+    assert "不能因此宣稱一般索引的查找效率一定會變好" in limited.applicability_zh_tw
 
 
 def test_repeated_correlated_max_gets_11g_subquery_evidence_but_no_verified_rewrite():
@@ -88,7 +89,8 @@ def test_repeated_correlated_max_gets_11g_subquery_evidence_but_no_verified_rewr
     items = performance_evidence.build_performance_evidence(selection, [])
     assert _ids(items) == {"ORACLE11G_SUBQUERY_UNNESTING"}
     assert items[0].strength == "conditional"
-    assert "aggregate" in items[0].claim_zh_tw
+    assert "MAX" in items[0].claim_zh_tw
+    assert "反覆處理相似的工作" in items[0].claim_zh_tw
 
 
 def test_same_column_or_gets_11g_in_list_boundary_without_fake_speed_claim():
@@ -97,7 +99,7 @@ def test_same_column_or_gets_11g_in_list_boundary_without_fake_speed_claim():
     assert _ids(items) == {"ORACLE11G_IN_LIST_LIMIT"}
     item = items[0]
     assert "1000" in item.claim_zh_tw
-    assert "一定比較快" in item.caveat_zh_tw
+    assert "不代表 OR 改成 IN 就一定會變快" in item.caveat_zh_tw
 
 
 def test_clean_sql_has_no_performance_evidence():

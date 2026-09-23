@@ -84,7 +84,7 @@ export default function ImprovementAdvice({ ai, performanceEvidence = [] }: Impr
           <div className="advice-badges">
             {performanceEvidence.length > 0 && (
               <span className="badge green" data-testid="oracle-evidence-count">
-                Oracle 11g 證據 {performanceEvidence.length} 項
+                Oracle 11g 官方依據 {performanceEvidence.length} 項
               </span>
             )}
             {ai.status === "ok" && <span className="badge purple">{ai.advice.length} 項建議</span>}
@@ -110,15 +110,14 @@ export default function ImprovementAdvice({ ai, performanceEvidence = [] }: Impr
                 data-testid="performance-evidence"
               >
                 <div className="advice-title-row">
-                  <h4>效能依據｜{item.source_label}</h4>
+                  <h4>為什麼這樣可能比較快｜Oracle 11g 官方依據</h4>
                   <span className={`badge ${item.strength === "strong" ? "green" : "yellow"}`}>
-                    {item.strength === "strong" ? "官方依據" : "官方依據・需實測"}
+                    {item.strength === "strong" ? "Oracle 官方" : "Oracle 官方・需確認"}
                   </span>
                 </div>
-                <div className="evidence-explanation">{item.source_document}</div>
                 <p>{item.claim_zh_tw}</p>
-                <p><strong>本案判斷：</strong>{item.applicability_zh_tw}</p>
-                <p><strong>限制：</strong>{item.caveat_zh_tw}</p>
+                <p><strong>套用到這支 SQL：</strong>{item.applicability_zh_tw}</p>
+                <p><strong>還要注意：</strong>{item.caveat_zh_tw}</p>
               </div>
             ))}
           </div>

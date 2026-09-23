@@ -53,3 +53,30 @@ def test_registry_urls_are_audit_only_not_api_fields():
         applicability="synthetic",
     )
     assert "source_url" not in model.model_dump()
+
+
+def test_reviewer_facing_evidence_avoids_internal_or_oracle_jargon():
+    """Keep technical metadata for audit, but reviewer-facing prose must stay plain."""
+    data = yaml.safe_load(_REGISTRY_PATH.read_text(encoding="utf-8"))
+    forbidden = (
+        "nested subquery",
+        "subquery unnesting",
+        "Index Range Scan",
+        "function-based index",
+        "Optimizer",
+        "canonical",
+        "Pattern Selector",
+        "AST",
+        "scalar subquery",
+        "aggregate function",
+    )
+
+    for entry in data["evidence"]:
+        reviewer_text = " ".join(
+            [
+                str(entry.get("claim_zh_tw") or ""),
+                str(entry.get("caveat_zh_tw") or ""),
+            ]
+        )
+        for term in forbidden:
+            assert term not in reviewer_text, f"{entry['id']} leaked reviewer jargon: {term}"

@@ -475,11 +475,6 @@ _UNOBSERVABLE_DB_CLAIM_RE = re.compile(
     re.IGNORECASE,
 )
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[。！？!?])")
-_READABILITY_ONLY_ADVICE_RE = re.compile(
-    r"(?:可讀性|更?簡潔|較?簡潔|容易閱讀|較易閱讀|易於閱讀|便於閱讀|方便閱讀|"
-    r"容易維護|較易維護|易於維護|便於維護|方便維護|格式更一致)",
-    re.IGNORECASE,
-)
 _TYPED_LITERAL_RE = re.compile(
     r"\b(?P<kind>DATE|TIMESTAMP)\s*(?P<literal>'(?:[^']|'')*')",
     re.IGNORECASE,
@@ -1058,7 +1053,6 @@ def _filter_advice(
         before = unmask_sql(item.before, reverse_map or {}) if item.before else None
         verification: str | None = None
         assumption: str | None = None
-        verified_rule: str | None = None
         safety_issue = _advice_example_safety_issue(source_sql, before, example) if example else None
         if safety_issue is not None:
             confidence_score = None
@@ -1096,7 +1090,6 @@ def _filter_advice(
                 # as copyable SQL.
                 v = rewrite_rules.verify_fragment(before, example)
                 verification, assumption = v.status, v.assumption
-                verified_rule = v.rule
                 if v.status == "corrected":
                     confidence_score = None
                     logger.info("ai_service: advice fragment corrected by rule %s", v.rule)
@@ -1128,19 +1121,6 @@ def _filter_advice(
                 explanation = guarded_explanation
                 verification = "unverified"
                 logger.info("ai_service: advice-only prose normalized by guard: %s", prose_guard)
-        # Performance-only product scope:
-        # - same-column OR→IN is a safe deterministic syntax cleanup, but the
-        #   reviewed Oracle evidence only establishes the 1000-expression
-        #   limit, not a performance benefit; keep it out of AI advice.
-        # - prose whose only stated value is readability/maintenance is also
-        #   outside SQLCheck's performance-improvement goal.
-        if verified_rule == "or_eq_to_in":
-            dropped += 1
-            continue
-        if _READABILITY_ONLY_ADVICE_RE.search(f"{title} {explanation}"):
-            dropped += 1
-            continue
-
         kept.append(
             AdviceItem(
                 title=title,

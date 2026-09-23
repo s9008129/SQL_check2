@@ -264,7 +264,7 @@ def test_full_rewrite_reordering_conditions_ok():
     assert rr.verify_predicate_changes(o, s) == (True, None)
 
 
-# --- OR → IN: Oracle 19c 1000-expression boundary (2026-09-18) -------------
+# --- OR → IN: Oracle 11g 1000-expression boundary (2026-09-18) -------------
 # One IN list holds at most 1000 expressions, so only 2..1000 same-column
 # equality terms may become IN. Longer chains are refused by an explicit
 # count guard, never by a crash, and the OR flattening is iterative so the
@@ -295,7 +295,7 @@ def test_or_to_in_over_oracle_limit_is_refused_by_the_guard_not_a_crash(n):
     assert v.example == _in_list(n)
 
 
-def test_or_to_in_limit_matches_oracle_19c_documentation():
+def test_or_to_in_limit_matches_oracle_11g_documentation():
     assert rr.ORACLE_IN_LIST_MAX_EXPRESSIONS == 1000
 
 

@@ -27,7 +27,7 @@ const PLAN_TEXT = [
 const PLAN_EVIDENCE: ExecutionPlanAnalysis = {
   recognized: true,
   source: "estimated",
-  source_label: "測試機預估執行計畫",
+  source_label: "正式資料庫 F10 Explain Plan（估算）",
   plan_hash_value: null,
   sql_id: null,
   step_count: 2,
@@ -71,13 +71,13 @@ const PLAN_EVIDENCE: ExecutionPlanAnalysis = {
     {
       code: "TABLE_ACCESS_FULL",
       level: "fact",
-      title: "測試計畫包含 TABLE ACCESS FULL",
+      title: "正式 Plan 包含 TABLE ACCESS FULL",
       detail:
-        "Step 1 TAX_CASE 使用 TABLE ACCESS FULL。這是測試機計畫事實，本身不代表一定需要改成索引存取。",
+        "Step 1 TAX_CASE 使用 TABLE ACCESS FULL。這是提供的 Plan 事實，本身不代表一定需要改成索引存取。",
       step_id: 1,
     },
   ],
-  message: "已辨識測試機預估執行計畫。",
+  message: "已辨識正式資料庫 F10 Explain Plan（估算）。這反映正式庫 Optimizer 在 Explain 當下選出的預估路徑；F10 不代表 SQL 已實際執行。",
 };
 
 beforeAll(() => {
@@ -134,9 +134,10 @@ test("plan upload → analyze → card keeps the plan factual and out of the AI 
   expect(sentBodies[0].execution_plan).toBe(PLAN_TEXT);
   expect(sentBodies[1].execution_plan).toBe(PLAN_TEXT);
 
-  // The UI shows the merged PLAN_TABLE operation and the test-machine wording.
-  expect(screen.getByText("測試機預估執行計畫")).toBeInTheDocument();
-  expect(screen.getByText(/不代表正式機一定採用相同 Plan/)).toBeInTheDocument();
+  // The UI shows the merged PLAN_TABLE operation and the owner-confirmed
+  // formal-database F10 wording, while keeping estimated != runtime explicit.
+  expect(screen.getByText("正式資料庫 F10 Explain Plan（估算）")).toBeInTheDocument();
+  expect(screen.getByText(/不代表 SQL 已實際執行/)).toBeInTheDocument();
   expect(screen.getAllByText("日期條件可再簡化").length).toBeGreaterThan(0);
 
   // The raw plan stays in the input textarea; neither the AI advice nor any

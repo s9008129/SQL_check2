@@ -166,9 +166,10 @@ export default function ImprovementAdvice({ ai, performanceEvidence = [] }: Impr
             <div className="evidence-source-note oracle-source-note" data-testid="oracle-evidence-note">
               <span className="badge yellow">Oracle 11g 官方依據</span>
               <span>
-                效能改善建議參考 Oracle Database 11g 官方效能調校文件，並結合 SQLCheck 檢核結果整理。
+                效能改善說明依據 Oracle Database 11g 官方效能調校文件，並結合 SQLCheck 檢核結果整理。
               </span>
             </div>
+            <div className="evidence-learning-heading">為什麼這樣可能比較快</div>
             <div className="advice-grid system-evidence-grid" data-testid="performance-evidence-list">
               {performanceEvidence.map((item) => {
                 const copy = friendlyEvidenceCopy(item);
@@ -178,7 +179,6 @@ export default function ImprovementAdvice({ ai, performanceEvidence = [] }: Impr
                     key={`${item.pattern_id}-${item.evidence_id}-${item.statement_indexes.join("-")}`}
                     data-testid="performance-evidence"
                   >
-                    <div className="evidence-learning-kicker">為什麼這樣可能比較快</div>
                     <div className="advice-title-row">
                       <h4>{copy.title}</h4>
                       {item.strength === "conditional" && (

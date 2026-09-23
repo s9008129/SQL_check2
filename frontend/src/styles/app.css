@@ -784,3 +784,10 @@ mark.legend{margin:0 3px}
     display:none;
   }
 }
+
+.evidence-learning-heading{
+  margin:14px 0 8px;
+  color:#364152;
+  font-size:14px;
+  font-weight:850;
+}

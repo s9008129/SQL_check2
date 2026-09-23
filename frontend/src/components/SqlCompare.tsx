@@ -4,6 +4,7 @@ import { ConfidenceBadge } from "./ImprovementAdvice";
 import { FragmentDiff, FullSqlDiff } from "./SqlDiffView";
 import { locateOriginalFragment, looksLikeSqlFragment } from "../lib/sqlDiff";
 import { REWRITE_COMPARE_EXPLANATION } from "../lib/copy";
+import { performanceAdviceItems, performanceRewriteItems } from "../lib/adviceDisplay";
 
 export interface SqlCompareProps {
   originalSql: string;
@@ -58,7 +59,7 @@ function toSegments(originalSql: string, advice: AdviceItem[]): Segment[] {
 }
 
 function toVerifiedRewriteSegments(rewrites: VerifiedRewrite[]): Segment[] {
-  return rewrites.map((rewrite) => ({
+  return performanceRewriteItems(rewrites).map((rewrite) => ({
     title: rewrite.title,
     before: rewrite.before,
     after: rewrite.after,
@@ -69,8 +70,14 @@ function toVerifiedRewriteSegments(rewrites: VerifiedRewrite[]): Segment[] {
 
 export default function SqlCompare({ originalSql, ai, verifiedRewrites }: SqlCompareProps) {
   const [copied, setCopied] = useState(false);
+  const performanceRewriteCount =
+    verifiedRewrites === undefined ? null : performanceRewriteItems(verifiedRewrites).length;
+  const onlySyntaxCleanup =
+    verifiedRewrites !== undefined &&
+    verifiedRewrites.length > 0 &&
+    performanceRewriteCount === 0;
   const suggestedSql =
-    ai.status === "ok" && ai.suggested_sql?.available && ai.suggested_sql.sql
+    !onlySyntaxCleanup && ai.status === "ok" && ai.suggested_sql?.available && ai.suggested_sql.sql
       ? ai.suggested_sql
       : null;
   const suggestedSqlText = suggestedSql?.sql ?? null;
@@ -84,7 +91,7 @@ export default function SqlCompare({ originalSql, ai, verifiedRewrites }: SqlCom
       // not be repopulated from legacy AI advice. Only an absent field is an
       // old-backend payload and may use the legacy fallback.
       if (verifiedRewrites !== undefined) return toVerifiedRewriteSegments(verifiedRewrites);
-      return ai.status === "ok" ? toSegments(originalSql, ai.advice) : [];
+      return ai.status === "ok" ? toSegments(originalSql, performanceAdviceItems(ai.advice)) : [];
     },
     [ai.status, ai.advice, originalSql, verifiedRewrites],
   );

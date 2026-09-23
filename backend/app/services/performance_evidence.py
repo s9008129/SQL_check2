@@ -27,6 +27,12 @@ EVIDENCE_REGISTRY_PATH = KNOWLEDGE_DIR / "performance_evidence.yaml"
 
 _LIKE_LITERAL_RE = re.compile(r"\bLIKE\s+'((?:''|[^'])*)'", re.IGNORECASE)
 
+# Safe syntax normalization is not automatically a performance recommendation.
+# OR→IN remains available to the deterministic rewrite engine, but without
+# Oracle evidence of a performance benefit it is intentionally excluded from
+# the user-facing performance-evidence layer.
+_NON_PERFORMANCE_PATTERN_IDS = frozenset({"OR_SAME_COLUMN_TO_IN"})
+
 
 @lru_cache(maxsize=1)
 def _registry() -> dict[str, dict[str, Any]]:
@@ -142,9 +148,11 @@ def build_performance_evidence(
     selection: PatternSelection,
     verified_rewrites: list[VerifiedRewrite],
 ) -> list[PerformanceEvidence]:
-    """Return reviewed Oracle 11g evidence for exact matches only.
+    """Return reviewed Oracle 11g performance evidence for exact matches only.
 
-    Family signals never receive evidence. SUBSTR is refined using the
+    Family signals never receive evidence. Syntax-only cleanups such as
+    same-column OR→IN stay in the deterministic rewrite engine but are not
+    presented as performance improvements. SUBSTR is refined using the
     deterministic canonical rewrite: prefix LIKE and leading-wildcard LIKE
     deliberately receive different access-path wording.
     """
@@ -167,6 +175,8 @@ def build_performance_evidence(
 
     for match in selection.exact:
         if match.classification == "OUT_OF_SCOPE":
+            continue
+        if match.pattern_id in _NON_PERFORMANCE_PATTERN_IDS:
             continue
         pattern = get_catalog_pattern(match.pattern_id)
         if pattern is None:

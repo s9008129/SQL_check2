@@ -148,6 +148,35 @@ describe("SummaryCards — AI-dependent card", () => {
     expect(screen.getByText("2 項")).toBeTruthy();
   });
 
+  it("does not count readability-only advice", () => {
+    const result = makeResult({
+      ai: makeAi({
+        advice: [
+          {
+            title: "簡化多值比對寫法",
+            explanation: "改成 IN 讓 SQL 更簡潔。",
+            before: "A.C='1' OR A.C='2'",
+            example: "A.C IN ('1','2')",
+            impact: "low",
+            verification: "verified",
+          },
+          {
+            title: "直接比對原始欄位",
+            explanation: "減少欄位端函數處理。",
+            before: "SUBSTR(A.CODE,1,2)='13'",
+            example: "A.CODE LIKE '13%'",
+            impact: "high",
+            verification: "verified",
+          },
+        ],
+      }),
+    });
+    render(<SummaryCards result={result} />);
+    expect(screen.getByText("1 項")).toBeTruthy();
+    expect(screen.getByText("直接比對原始欄位")).toBeTruthy();
+    expect(screen.queryByText("簡化多值比對寫法")).toBeNull();
+  });
+
   it("shows an AI-pending state on 改善建議 while ai.status is pending", () => {
     const result = makeResult({
       ai: makeAi({ status: "pending", advice: [], suggested_sql: null, estimated_improvement_pct: null }),

@@ -1,13 +1,14 @@
 import type { AnalyzeResponse } from "../types/api";
 import { complianceSummaryText } from "../lib/status";
+import { performanceAdviceItems, performanceRewriteItems } from "../lib/adviceDisplay";
 
 export interface ResultOverviewProps {
   result: AnalyzeResponse;
 }
 
 export default function ResultOverview({ result }: ResultOverviewProps) {
-  const adviceCount = result.ai.status === "ok" ? result.ai.advice.length : 0;
-  const verifiedRewriteCount = result.verified_rewrites?.length ?? 0;
+  const adviceCount = result.ai.status === "ok" ? performanceAdviceItems(result.ai.advice).length : 0;
+  const verifiedRewriteCount = performanceRewriteItems(result.verified_rewrites).length;
   const complianceText = complianceSummaryText(result.rules);
 
   let tone = result.compliance.status === "BLOCK" ? "red" : result.compliance.status === "REVIEW" ? "yellow" : "green";
@@ -30,7 +31,7 @@ export default function ResultOverview({ result }: ResultOverviewProps) {
       detail = rewriteText;
     }
   } else if (result.ai.status === "pending") {
-    detail = "規則檢核已完成；AI 正在整理可讀的改善建議。";
+    detail = "規則檢核已完成；AI 正在整理效能改善建議。";
   } else if (result.ai.status === "unavailable") {
     detail = "規則檢核已完成；智慧改善建議目前暫不提供。";
   } else if (adviceCount > 0) {

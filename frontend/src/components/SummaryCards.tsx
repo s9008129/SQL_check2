@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { AnalyzeResponse, RuleRow } from "../types/api";
 import { formatCost } from "../lib/cost";
 import { complianceSummaryText, complianceTone, improvementTone, type Tone } from "../lib/status";
+import { performanceAdviceItems } from "../lib/adviceDisplay";
 
 export interface SummaryCardsProps {
   result: AnalyzeResponse;
@@ -57,6 +58,7 @@ const STATUS_VALUE_STYLE: React.CSSProperties = { fontSize: 26 };
 export default function SummaryCards({ result }: SummaryCardsProps) {
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   const { compliance, improvement, ai, cost, rules } = result;
+  const visibleAdvice = ai.status === "ok" ? performanceAdviceItems(ai.advice) : [];
   const costRule = findCostRule(rules);
   const costBlocked = costRule?.status === "BLOCK";
   const costNotApplicable = costRule?.status === "NA";
@@ -132,13 +134,13 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
         tone="purple"
         icon="AI"
         label="智慧改善建議"
-        value={aiPending ? "AI 分析中" : aiUnavailable ? "暫不提供" : `${ai.advice.length} 項`}
+        value={aiPending ? "AI 分析中" : aiUnavailable ? "暫不提供" : `${visibleAdvice.length} 項`}
         sub={
           aiPending
             ? "約需數十秒"
             : aiUnavailable
               ? "AI 智慧建議暫時無法使用"
-              : (ai.advice[0]?.title ?? "目前沒有額外建議")
+              : (visibleAdvice[0]?.title ?? "目前沒有額外建議")
         }
       />
     </section>

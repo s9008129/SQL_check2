@@ -524,6 +524,9 @@ def test_system_prompt_targets_business_sql_writers_and_avoids_dba_jargon():
     assert "同一張表重複查最新資料，可評估先集中取得再 JOIN" in prompt
     assert "不要寫「可改用 Window Function／ROW_NUMBER」" in prompt
     assert "不要使用「評估相關子查詢結構」「分析執行路徑」" in prompt
+    assert "智慧改善建議只處理「效能改善」" in prompt
+    assert "更簡潔、更容易閱讀" in prompt
+    assert "不要把 OR→IN 當成智慧改善建議" in prompt
 
 
 def test_system_prompt_keeps_verified_rewrite_explanation_separate_from_ui_verification_copy():
@@ -565,7 +568,8 @@ def test_system_prompt_keeps_r004_scope_and_derived_rewrite_list():
     assert "只有前置萬用字元才值得提醒" in prompt
     assert "替代 LIKE 片段" in prompt
     assert "目前只有 SUBSTR 等於、同欄位 OR 串成" in prompt
-    assert "超過 1000 個值不要合併成單一 IN" in prompt
+    assert "最多 1000 個值" in prompt
+    assert "不屬於使用者可見的效能改善建議" in prompt
     assert "不可直接合併成單一 IN" in prompt
     assert "advice_contracts 含 cross_column_or" in prompt
     assert "UNION／UNION ALL" not in prompt

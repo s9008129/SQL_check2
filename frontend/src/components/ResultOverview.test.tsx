@@ -10,7 +10,7 @@ describe("ResultOverview", () => {
     expect(screen.getByText("先看下方重點，再決定是否需要調整。")).toBeTruthy();
   });
 
-  it("puts deterministic safe rewrites ahead of generic AI wording", () => {
+  it("does not present OR to IN syntax cleanup as a performance rewrite", () => {
     render(
       <ResultOverview
         result={makeResult({
@@ -28,9 +28,8 @@ describe("ResultOverview", () => {
         })}
       />,
     );
-    expect(
-      screen.getByText("系統已確認有 1 項可安全改寫，請查看下方改寫對照。 AI 正在整理其他改善建議。"),
-    ).toBeTruthy();
+    expect(screen.getByText("規則檢核已完成；AI 正在整理效能改善建議。")).toBeTruthy();
+    expect(screen.queryByText(/可安全改寫/)).toBeNull();
   });
 
   it("keeps deterministic safe rewrites visible when AI is unavailable", () => {

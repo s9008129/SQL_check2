@@ -12,7 +12,7 @@ be executable on Oracle (e.g. at most 1000 expressions in one IN list).
 | Catalog id | rewrite_rules.py rule | Authorized form |
 |---|---|---|
 | `SUBSTR_EQ_TO_LIKE` | `substr_eq_to_like` | `SUBSTR(col,p,n)='v'` ⇔ `col LIKE '<p-1 underscores>v%'` (len(v)=n, no wildcard in v, quotes doubled). Canonical LIKE form **only**. |
-| `OR_SAME_COLUMN_TO_IN` | `or_eq_to_in` | `col=a OR col=b [...]` (same column, all equality) ⇔ `col IN (a,b,...)`, **1–1000 values only** (`authorized_boundary`: an Oracle 19c IN list holds at most 1000 expressions) |
+| `OR_SAME_COLUMN_TO_IN` | `or_eq_to_in` | `col=a OR col=b [...]` (same column, all equality) ⇔ `col IN (a,b,...)`, **1–1000 values only** (`authorized_boundary`: an Oracle 11g IN list holds at most 1000 expressions) |
 
 To read the equivalence argument, read the rule function's docstring in
 `rewrite_rules.py`. This file only indexes which catalog id maps to which

@@ -134,10 +134,12 @@ test("plan upload → analyze → card keeps the plan factual and out of the AI 
   expect(sentBodies[0].execution_plan).toBe(PLAN_TEXT);
   expect(sentBodies[1].execution_plan).toBe(PLAN_TEXT);
 
-  // The UI shows the merged PLAN_TABLE operation and the owner-confirmed
-  // formal-database F10 wording, while keeping estimated != runtime explicit.
-  expect(screen.getByText("正式資料庫 F10 Explain Plan（估算）")).toBeInTheDocument();
-  expect(screen.getAllByText(/不代表 SQL 已實際執行/).length).toBeGreaterThan(0);
+  // The UI keeps SQL Developer / F10 context clear, but presents it in
+  // business-friendly language instead of showing optimizer jargon first.
+  expect(screen.getByText("SQL Developer F10｜估算")).toBeInTheDocument();
+  expect(screen.getByText(/SQL Developer 的 F10 Explain Plan/)).toBeInTheDocument();
+  expect(screen.getByText("讀取整張表")).toBeInTheDocument();
+  expect(screen.queryByText(/Optimizer|I\/O/)).toBeNull();
   expect(screen.getAllByText("日期條件可再簡化").length).toBeGreaterThan(0);
 
   // The raw plan stays in the input textarea; neither the AI advice nor any

@@ -138,6 +138,16 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
 - 不要重述 compliance、COST 或 findings 的判定，除非它直接影響這一項建議；advice 要回答「可以怎麼做」。
 - 若一項 advice 只是把 findings 換句話說，卻沒有新增可行動資訊，請不要產生該 advice。
 - 優先使用「這段條件」「這個寫法」「請確認…」等白話說法；避免長句與不必要的 DBA 術語。
+- **目標讀者是會寫 SQL 的業務同仁，不是 DBA。** SQL 語法本身的關鍵字（例如 SUBSTR、LIKE、IN、JOIN、DISTINCT）
+  可以保留，但資料庫調校理論的英文名詞不要直接丟給使用者。除非 advice_contracts 明確要求逐字使用，
+  advice title／explanation 請避免 Correlated Subquery、scalar subquery、subquery unnesting、Window Function、
+  Optimizer、cardinality、access path、Filter Predicate、Index Range Scan 等字眼。
+- 遇到上述情況時，直接說使用者要做的事：例如「同一張表重複查最新資料，可評估先集中取得再 JOIN」，
+  不要寫「可改用 Window Function／ROW_NUMBER」；例如「欄位先經過函數處理」，不要解釋 access path。
+- explanation **優先只寫 1 句**，大約 30～60 個中文字；真的需要前提時才加第 2 句。不要把原理、套用判斷、
+  限制三段全部塞進同一張 AI 建議卡片。
+- title 優先使用動作式白話，例如「減少重複查詢」「直接比對原始欄位」「確認模糊搜尋範圍」；
+  不要使用「評估相關子查詢結構」「分析執行路徑」這種報告式標題。
 - 若因資料型態或業務條件不明而不能提供安全 example，explanation 也不要放可直接複製的完整 SQL；只說明可評估的方向與要先確認的事項。
 
 【輸出規則】

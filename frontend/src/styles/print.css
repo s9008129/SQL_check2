@@ -159,3 +159,22 @@
     display: none !important;
   }
 }
+
+
+@media print {
+  .evidence-source-note,
+  .ai-source-badge,
+  .plan-priority-item,
+  .plan-priority-rank,
+  .plan-summary-cost,
+  .plan-runtime-details,
+  .plan-notes-details {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* PDF keeps the business summary; the full technical table stays hidden. */
+  .plan-priority-item {
+    break-inside: avoid;
+  }
+}

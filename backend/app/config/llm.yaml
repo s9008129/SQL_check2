@@ -10,7 +10,8 @@
 #
 # 切換方式：
 #   SQLCHECK_LLM_PROVIDER=ollama        # 正式機 / 地端
-#   SQLCHECK_LLM_PROVIDER=ollama_cloud  # Mac 開發 / Ollama Cloud
+#   SQLCHECK_LLM_PROVIDER=openrouter    # GitHub Actions / OpenRouter
+#   SQLCHECK_LLM_PROVIDER=ollama_cloud  # 備援 / Ollama Cloud
 #   SQLCHECK_LLM_PROVIDER=gemini        # 備援雲端 provider
 
 active_provider_env: SQLCHECK_LLM_PROVIDER
@@ -40,6 +41,35 @@ providers:
     keep_alive: "30m"
     max_retries_on_invalid_json: 1
     think_env: OLLAMA_THINK
+    think_default: false
+    allow_short_ascii_literals: true
+
+  openrouter:
+    type: openrouter
+    remote: true
+    base_url_env: OPENROUTER_BASE_URL
+    base_url_default: "https://openrouter.ai/api/v1"
+    model_env: OPENROUTER_MODEL
+    # 保持與目前正式機模型家族一致，透過 OpenRouter 呼叫 Gemma 4 31B。
+    model_default: "google/gemma-4-31b-it"
+    api_key_env: OPENROUTER_API_KEY
+    timeout_seconds_env: OPENROUTER_TIMEOUT_SECONDS
+    timeout_seconds_default: 180
+    max_output_tokens_env: OPENROUTER_MAX_OUTPUT_TOKENS
+    max_output_tokens_default: 3072
+    context_window_env: OPENROUTER_NUM_CTX
+    context_window_default: 16384
+    context_window_max_env: OPENROUTER_NUM_CTX_MAX
+    context_window_max_default: 32768
+    temperature_env: OPENROUTER_TEMPERATURE
+    temperature_default: 0.2
+    top_p_env: OPENROUTER_TOP_P
+    top_p_default: 0.95
+    top_k_env: OPENROUTER_TOP_K
+    top_k_default: 64
+    keep_alive: null
+    max_retries_on_invalid_json: 1
+    think_env: OPENROUTER_THINK
     think_default: false
     allow_short_ascii_literals: true
 

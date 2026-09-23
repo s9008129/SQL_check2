@@ -1,4 +1,4 @@
-name: Manual Live Cloud E2E
+name: Manual OpenRouter E2E
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: live-cloud-e2e-${{ github.ref }}
+  group: openrouter-e2e-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -24,11 +24,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 55
     env:
-      SQLCHECK_LLM_PROVIDER: ollama_cloud
-      OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
-      OLLAMA_CLOUD_MODEL: gemma4:31b
+      SQLCHECK_LLM_PROVIDER: openrouter
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENROUTER_BASE_URL: "https://openrouter.ai/api/v1"
+      OPENROUTER_MODEL: "google/gemma-4-31b-it"
       SQLCHECK_ARCHIVE_ENABLED: "false"
-      RUN_ROOT: data/live_cloud_${{ github.run_id }}_${{ github.run_attempt }}
+      RUN_ROOT: data/openrouter_${{ github.run_id }}_${{ github.run_attempt }}
 
     steps:
       - name: Checkout
@@ -44,8 +45,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ -z "$OLLAMA_API_KEY" ]; then
-            echo "::error::GitHub secret OLLAMA_API_KEY is unavailable."
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "::error::GitHub secret OPENROUTER_API_KEY is unavailable."
             exit 20
           fi
 
@@ -67,7 +68,7 @@ jobs:
           uv run --frozen --python 3.12 pytest -p no:cacheprovider -q             2>&1 | tee "../$RUN_ROOT/logs/backend_pytest.txt"
           uv run --frozen --python 3.12 ruff check .             2>&1 | tee "../$RUN_ROOT/logs/ruff.txt"
 
-      - name: Ollama Cloud preflight
+      - name: OpenRouter preflight
         working-directory: backend
         shell: bash
         run: |
@@ -84,8 +85,14 @@ jobs:
           print(f"api_key_present={bool(s.api_key)}")
           available = asyncio.run(llm_provider.check_available(s))
           print(f"provider_available={available}")
-          if s.provider != "ollama_cloud" or s.model != "gemma4:31b" or not s.api_key or not available:
-              raise SystemExit("Ollama Cloud preflight failed")
+          if (
+              s.provider != "openrouter"
+              or s.base_url != "https://openrouter.ai/api/v1"
+              or s.model != "google/gemma-4-31b-it"
+              or not s.api_key
+              or not available
+          ):
+              raise SystemExit("OpenRouter preflight failed")
           PY
 
       - name: Live golden smoke
@@ -96,15 +103,15 @@ jobs:
           set -o pipefail
           uv run --frozen --python 3.12 python tests/golden/run_golden.py -v             2>&1 | tee "../$RUN_ROOT/logs/live_golden.txt"
           cat > "../$RUN_ROOT/evidence/REPORT.md" <<'EOF'
-          # SQLCheck Live Cloud E2E — Smoke
+          # SQLCheck OpenRouter E2E — Smoke
 
-          - Scope: Ollama Cloud / gemma4:31b
+          - Scope: OpenRouter / google/gemma-4-31b-it
           - Suite: existing live golden cases
           - Browser / Native Print: not part of this cloud model/API check
           - Result: see live_golden.txt; workflow succeeds only when the golden runner exits successfully
           EOF
 
-      - name: Full Live Cloud model/API E2E
+      - name: Full OpenRouter model/API E2E
         if: ${{ inputs.suite == 'full' }}
         working-directory: backend
         shell: bash
@@ -135,7 +142,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: live-cloud-e2e-${{ inputs.suite }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: openrouter-e2e-${{ inputs.suite }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.RUN_ROOT }}
           if-no-files-found: error
           retention-days: 14

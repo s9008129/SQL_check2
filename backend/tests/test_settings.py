@@ -123,3 +123,30 @@ def test_ollama_cloud_provider_selected_from_environment(monkeypatch):
     finally:
         get_settings.cache_clear()
 
+
+
+def test_openrouter_provider_selected_from_environment(monkeypatch):
+    monkeypatch.setenv("SQLCHECK_LLM_PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "secret-for-test")
+    monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
+    monkeypatch.delenv("OPENROUTER_BASE_URL", raising=False)
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+        assert settings.llm.provider == "openrouter"
+        assert settings.llm.provider_type == "openrouter"
+        assert settings.llm.remote is True
+        assert settings.llm.base_url == "https://openrouter.ai/api/v1"
+        assert settings.llm.model == "google/gemma-4-31b-it"
+        assert settings.llm.api_key_env == "OPENROUTER_API_KEY"
+        assert settings.llm.api_key == "secret-for-test"
+        assert settings.llm.temperature == 0.2
+        assert settings.llm.top_p == 0.95
+        assert settings.llm.top_k == 64
+        assert settings.llm.max_output_tokens == 3072
+        assert settings.llm.context_window == 16384
+        assert settings.llm.context_window_max == 32768
+        assert settings.llm.think is False
+        assert settings.llm.allow_short_ascii_literals is True
+    finally:
+        get_settings.cache_clear()

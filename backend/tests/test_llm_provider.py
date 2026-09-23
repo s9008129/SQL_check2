@@ -36,6 +36,28 @@ def _ollama_cloud_settings(base_llm):
         allow_short_ascii_literals=True,
     )
 
+def _openrouter_settings(base_llm):
+    return dataclasses.replace(
+        base_llm,
+        provider="openrouter",
+        provider_type="openrouter",
+        remote=True,
+        base_url="https://openrouter.ai/api/v1",
+        model="google/gemma-4-31b-it",
+        api_key_env="OPENROUTER_API_KEY",
+        api_key="openrouter-test-key",
+        timeout_seconds=30,
+        max_output_tokens=3072,
+        temperature=0.2,
+        top_p=0.95,
+        top_k=64,
+        keep_alive=None,
+        think=False,
+        thinking_level=None,
+        allow_short_ascii_literals=True,
+    )
+
+
 def _gemini_settings(base_llm):
     return dataclasses.replace(
         base_llm,
@@ -280,3 +302,129 @@ async def test_ollama_cloud_health_uses_bearer_auth(base_llm):
     assert await llm_provider.check_available(settings) is True
     assert route.call_count == 1
     assert route.calls[0].request.headers["authorization"] == "Bearer ollama-test-key"
+
+
+@respx.mock
+async def test_openrouter_adapter_uses_chat_completions_and_strict_json_schema(base_llm):
+    settings = _openrouter_settings(base_llm)
+    route = respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": '{"summary":"ok"}'},
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 321,
+                    "completion_tokens": 87,
+                    "total_tokens": 408,
+                },
+            },
+        )
+    )
+
+    schema = {"type": "object", "properties": {"summary": {"type": "string"}}}
+    async with httpx.AsyncClient() as client:
+        reply = await llm_provider.generate_structured_json(
+            client,
+            settings,
+            system_prompt="system rule",
+            user_content="<SQL_DATA>{}</SQL_DATA>",
+            response_schema=schema,
+            context_window=16384,
+        )
+
+    request = route.calls[0].request
+    assert request.headers["authorization"] == "Bearer openrouter-test-key"
+    body = json.loads(request.content)
+    assert body["model"] == "google/gemma-4-31b-it"
+    assert body["messages"][0] == {"role": "system", "content": "system rule"}
+    assert body["messages"][1] == {"role": "user", "content": "<SQL_DATA>{}</SQL_DATA>"}
+    assert body["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "sqlcheck_response",
+            "strict": True,
+            "schema": schema,
+        },
+    }
+    assert body["provider"] == {"require_parameters": True}
+    assert body["stream"] is False
+    assert body["max_tokens"] == 3072
+    assert body["temperature"] == 0.2
+    assert body["top_p"] == 0.95
+    assert body["top_k"] == 64
+    assert body["reasoning"] == {"enabled": False}
+    assert reply.content == '{"summary":"ok"}'
+    assert reply.prompt_tokens == 321
+    assert reply.output_tokens == 87
+    assert reply.total_tokens == 408
+    assert reply.provider == "openrouter"
+
+
+async def test_openrouter_missing_api_key_fails_as_configuration(base_llm):
+    settings = dataclasses.replace(_openrouter_settings(base_llm), api_key=None)
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(llm_provider.LLMConfigurationError):
+            await llm_provider.generate_structured_json(
+                client,
+                settings,
+                system_prompt="system",
+                user_content="user",
+                response_schema={"type": "object"},
+                context_window=16384,
+            )
+
+
+@respx.mock
+async def test_openrouter_length_maps_to_output_truncated(base_llm):
+    settings = _openrouter_settings(base_llm)
+    respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "length",
+                        "message": {"role": "assistant", "content": ""},
+                    }
+                ],
+                "usage": {"completion_tokens": 3072},
+            },
+        )
+    )
+
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(llm_provider.LLMOutputTruncatedError) as exc:
+            await llm_provider.generate_structured_json(
+                client,
+                settings,
+                system_prompt="system",
+                user_content="user",
+                response_schema={"type": "object"},
+                context_window=16384,
+            )
+    assert exc.value.output_tokens == 3072
+
+
+@respx.mock
+async def test_openrouter_health_uses_models_endpoint(base_llm):
+    settings = _openrouter_settings(base_llm)
+    route = respx.get("https://openrouter.ai/api/v1/models").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "google/gemma-4-31b-it"},
+                    {"id": "openai/gpt-5"},
+                ]
+            },
+        )
+    )
+
+    assert await llm_provider.check_available(settings) is True
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["authorization"] == "Bearer openrouter-test-key"

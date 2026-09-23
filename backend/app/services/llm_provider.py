@@ -5,9 +5,10 @@ all SQLCheck product rules, masking, prompt, structured-output validation and
 rewrite verification; provider adapters only translate a single structured
 generation request to/from a vendor API.
 
-Supported v1 providers:
+Supported providers:
 - ollama: local / formal-host Gemma 4 via /api/chat
 - ollama_cloud: Ollama Cloud direct API via https://ollama.com/api/chat
+- openrouter: OpenRouter OpenAI-compatible Chat Completions API
 - gemini: Google Gemini REST generateContent
 
 Adding a provider should require one adapter here + one profile in llm.yaml,
@@ -174,6 +175,109 @@ async def _generate_ollama(
     )
 
 
+def _openrouter_headers(settings: LLMSettings) -> dict[str, str]:
+    if not settings.api_key:
+        raise LLMConfigurationError(
+            f"{settings.api_key_env or 'OPENROUTER_API_KEY'} is required for OpenRouter"
+        )
+    return {
+        "Authorization": f"Bearer {settings.api_key}",
+        "Content-Type": "application/json",
+    }
+
+
+def _openrouter_body(
+    settings: LLMSettings,
+    *,
+    system_prompt: str,
+    user_content: str,
+    response_schema: dict[str, Any],
+) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "model": settings.model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "sqlcheck_response",
+                "strict": True,
+                "schema": response_schema,
+            },
+        },
+        "provider": {"require_parameters": True},
+        "stream": False,
+        "max_tokens": settings.max_output_tokens,
+        "temperature": settings.temperature if settings.temperature is not None else 0.2,
+    }
+    if settings.top_p is not None:
+        body["top_p"] = settings.top_p
+    if settings.top_k is not None:
+        body["top_k"] = settings.top_k
+    if settings.think is False:
+        body["reasoning"] = {"enabled": False}
+    return body
+
+
+async def _generate_openrouter(
+    client: httpx.AsyncClient,
+    settings: LLMSettings,
+    *,
+    system_prompt: str,
+    user_content: str,
+    response_schema: dict[str, Any],
+) -> ProviderReply:
+    headers = _openrouter_headers(settings)
+    body = _openrouter_body(
+        settings,
+        system_prompt=system_prompt,
+        user_content=user_content,
+        response_schema=response_schema,
+    )
+
+    started = time.perf_counter()
+    resp = await client.post(
+        f"{settings.base_url}/chat/completions",
+        headers=headers,
+        json=body,
+    )
+    resp.raise_for_status()
+    elapsed_ms = round((time.perf_counter() - started) * 1000)
+    data = resp.json()
+
+    choices = data.get("choices") or []
+    if not choices:
+        raise KeyError("choices")
+    first = choices[0] or {}
+    finish_reason = first.get("finish_reason")
+    usage = data.get("usage") or {}
+    output_tokens = usage.get("completion_tokens")
+    if finish_reason == "length":
+        raise LLMOutputTruncatedError(output_tokens if isinstance(output_tokens, int) else None)
+
+    message = first.get("message") or {}
+    content = message.get("content")
+    if not isinstance(content, str) or not content:
+        raise KeyError("choices[0].message.content")
+
+    prompt_tokens = usage.get("prompt_tokens")
+    total_tokens = usage.get("total_tokens")
+    return ProviderReply(
+        content=content,
+        provider=settings.provider,
+        model=settings.model,
+        finish_reason=str(finish_reason) if finish_reason is not None else None,
+        prompt_tokens=prompt_tokens if isinstance(prompt_tokens, int) else None,
+        output_tokens=output_tokens if isinstance(output_tokens, int) else None,
+        total_tokens=total_tokens if isinstance(total_tokens, int) else None,
+        total_duration_ms=elapsed_ms,
+        context_window=None,
+        think=settings.think,
+    )
+
+
 def _gemini_body(
     settings: LLMSettings,
     *,
@@ -290,6 +394,14 @@ async def generate_structured_json(
             response_schema=response_schema,
             context_window=context_window,
         )
+    if settings.provider_type == "openrouter":
+        return await _generate_openrouter(
+            client,
+            settings,
+            system_prompt=system_prompt,
+            user_content=user_content,
+            response_schema=response_schema,
+        )
     if settings.provider_type == "gemini":
         return await _generate_gemini(
             client,
@@ -317,6 +429,23 @@ async def check_available(settings: LLMSettings) -> bool:
                 data = resp.json()
                 names = {m.get("name") for m in data.get("models", [])}
                 return settings.model in names
+
+            if settings.provider_type == "openrouter":
+                if not settings.api_key:
+                    return False
+                resp = await client.get(
+                    f"{settings.base_url}/models",
+                    headers=_openrouter_headers(settings),
+                )
+                if resp.status_code != 200:
+                    return False
+                data = resp.json()
+                model_ids = {
+                    item.get("id")
+                    for item in data.get("data", [])
+                    if isinstance(item, dict)
+                }
+                return settings.model in model_ids
 
             if settings.provider_type == "gemini":
                 if not settings.api_key:

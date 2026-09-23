@@ -601,7 +601,7 @@ async def main(out: Path) -> int:
     verdict = "PASS" if deterministic_pass and model_quality_pass else "FAIL_MODEL_QUALITY_TARGETS"
 
     report = [
-        "# SQLCheck Live Cloud E2E — Model / API only",
+        "# SQLCheck OpenRouter E2E — Model / API only",
         "",
         f"- Verdict: **{verdict}**",
         f"- Planned live analyze invocations: {total_invocations}",
@@ -620,7 +620,7 @@ async def main(out: Path) -> int:
     report += [
         "",
         "## Scope",
-        "- Live provider: Ollama Cloud / gemma4:31b through the repository's ollama_cloud adapter.",
+        "- Live provider: OpenRouter / google/gemma-4-31b-it through the repository's openrouter adapter.",
         "- Covered: deterministic AI ON/OFF invariants, raw response confidence, confidence calibration, ADVICE_ONLY safety, TO_CHAR year masking, COST 99,999/100,000/100,001 semantics, prompt-injection containment, final API sanitization.",
         "- Excluded: real browser DOM, UI screenshot, native Chrome Print Preview, because this run intentionally validates only cloud-suitable model/API behavior.",
     ]

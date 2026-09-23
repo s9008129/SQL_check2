@@ -26,8 +26,8 @@ jobs:
     env:
       SQLCHECK_LLM_PROVIDER: openrouter
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      OPENROUTER_BASE_URL: https://openrouter.ai/api/v1
-      OPENROUTER_MODEL: google/gemma-4-31b-it
+      OPENROUTER_BASE_URL: "https://openrouter.ai/api/v1"
+      OPENROUTER_MODEL: "google/gemma-4-31b-it"
       SQLCHECK_ARCHIVE_ENABLED: "false"
       RUN_ROOT: data/openrouter_${{ github.run_id }}_${{ github.run_attempt }}
 
@@ -111,7 +111,7 @@ jobs:
           - Result: see live_golden.txt; workflow succeeds only when the golden runner exits successfully
           EOF
 
-      - name: Full Live Cloud model/API E2E
+      - name: Full OpenRouter model/API E2E
         if: ${{ inputs.suite == 'full' }}
         working-directory: backend
         shell: bash

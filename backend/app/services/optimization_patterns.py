@@ -19,14 +19,29 @@ from collections import Counter, defaultdict
 
 from sqlglot import exp
 
-DIALECT = "oracle"
-
 _COMPARISON_TYPES = (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE)
 _CONCAT_TYPES = tuple(
     cls
     for cls in (getattr(exp, "DPipe", None), getattr(exp, "Concat", None))
     if isinstance(cls, type)
 )
+
+
+def _nodes_including_self(node: exp.Expression, expression_type: type[exp.Expression]):
+    if isinstance(node, expression_type):
+        yield node
+    yield from node.find_all(expression_type)
+
+
+def _select_nodes(tree: exp.Expression) -> list[exp.Select]:
+    nodes: list[exp.Select] = []
+    seen: set[int] = set()
+    for node in _nodes_including_self(tree, exp.Select):
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        nodes.append(node)
+    return nodes
 
 
 def _nearest_select(node: exp.Expression) -> exp.Select | None:
@@ -98,7 +113,7 @@ def _condition_roots(select: exp.Select) -> list[exp.Expression]:
 
 
 def _maximal_or_nodes(root: exp.Expression):
-    for node in root.find_all(exp.Or):
+    for node in _nodes_including_self(root, exp.Or):
         parent = node.parent
         while isinstance(parent, exp.Paren):
             parent = parent.parent
@@ -113,7 +128,7 @@ def _column_key(column: exp.Column) -> str:
 
 
 def _has_cross_column_or(tree: exp.Expression) -> bool:
-    for select in tree.find_all(exp.Select):
+    for select in _select_nodes(tree):
         for root in _condition_roots(select):
             for or_node in _maximal_or_nodes(root):
                 columns = {_column_key(column) for column in or_node.find_all(exp.Column)}
@@ -142,7 +157,11 @@ def _has_string_concat_predicate(tree: exp.Expression) -> bool:
 def _column_tables(expr: exp.Expression | None) -> set[str]:
     if expr is None:
         return set()
-    return {(column.table or "").upper() for column in expr.find_all(exp.Column) if column.table}
+    return {
+        (column.table or "").upper()
+        for column in _nodes_including_self(expr, exp.Column)
+        if column.table
+    }
 
 
 def _is_plain_column(expr: exp.Expression | None) -> bool:
@@ -153,7 +172,7 @@ def _has_column_expression_join(tree: exp.Expression) -> bool:
     """Two table aliases are compared and at least one side transforms a column."""
     for select in tree.find_all(exp.Select):
         for root in _condition_roots(select):
-            for node in root.find_all(exp.EQ):
+            for node in _nodes_including_self(root, exp.EQ):
                 left = node.this
                 right = node.expression
                 left_tables = _column_tables(left)
@@ -171,7 +190,7 @@ def _aggregate_names(select: exp.Select) -> set[str]:
     names: set[str] = set()
     agg_type = getattr(exp, "AggFunc", ())
     for expression in select.expressions:
-        for func in expression.find_all(exp.Func):
+        for func in _nodes_including_self(expression, exp.Func):
             if isinstance(func, agg_type):
                 names.add(type(func).__name__.upper())
     return names

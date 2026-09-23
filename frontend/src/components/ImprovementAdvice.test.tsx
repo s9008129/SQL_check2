@@ -83,7 +83,7 @@ describe("ImprovementAdvice", () => {
     expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("官方效能調校文件");
     expect(screen.getByText("為什麼這樣可能比較快")).toBeTruthy();
     expect(screen.getByText("從固定文字開頭比對")).toBeTruthy();
-    expect(screen.getByText(/固定文字開頭比對/)).toBeTruthy();
+    expect(screen.getByText(/像 '13%' 這種從固定文字開頭比對的寫法/)).toBeTruthy();
     expect(screen.queryByText("系統依據")).toBeNull();
     expect(screen.queryByText("Oracle Database Performance Tuning Guide 11g Release 2")).toBeNull();
     expect(screen.getByText("AI 分析中，約需數十秒。")).toBeTruthy();

@@ -7,7 +7,8 @@ export interface ResultOverviewProps {
 
 export default function ResultOverview({ result }: ResultOverviewProps) {
   const adviceCount = result.ai.status === "ok" ? result.ai.advice.length : 0;
-  const verifiedRewriteCount = result.verified_rewrites?.length ?? 0;
+  const verifiedRewriteCount =
+    result.verified_rewrites?.filter((rewrite) => rewrite.rule !== "or_eq_to_in").length ?? 0;
   const complianceText = complianceSummaryText(result.rules);
 
   let tone = result.compliance.status === "BLOCK" ? "red" : result.compliance.status === "REVIEW" ? "yellow" : "green";

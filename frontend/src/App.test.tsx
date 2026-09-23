@@ -137,7 +137,7 @@ test("plan upload → analyze → card keeps the plan factual and out of the AI 
   // The UI shows the merged PLAN_TABLE operation and the owner-confirmed
   // formal-database F10 wording, while keeping estimated != runtime explicit.
   expect(screen.getByText("正式資料庫 F10 Explain Plan（估算）")).toBeInTheDocument();
-  expect(screen.getByText(/不代表 SQL 已實際執行/)).toBeInTheDocument();
+  expect(screen.getAllByText(/不代表 SQL 已實際執行/).length).toBeGreaterThan(0);
   expect(screen.getAllByText("日期條件可再簡化").length).toBeGreaterThan(0);
 
   // The raw plan stays in the input textarea; neither the AI advice nor any

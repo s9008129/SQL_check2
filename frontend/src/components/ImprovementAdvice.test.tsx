@@ -56,6 +56,36 @@ describe("ImprovementAdvice", () => {
     expect(screen.queryByText("影響：低")).toBeNull();
   });
 
+  it("shows server-owned Oracle 11g evidence even while AI is pending", () => {
+    render(
+      <ImprovementAdvice
+        ai={makeAi({ status: "pending", advice: [], suggested_sql: null, estimated_improvement_pct: null })}
+        performanceEvidence={[
+          {
+            evidence_id: "ORACLE11G_PREFIX_LIKE_RANGE_SCAN",
+            pattern_id: "SUBSTR_EQ_TO_LIKE",
+            statement_indexes: [0],
+            source_label: "Oracle Database 11g 官方文件",
+            source_document: "Oracle Database Performance Tuning Guide 11g Release 2",
+            claim_zh_tw: "固定前綴 LIKE 在條件適合時可成為 Index Range Scan 的候選條件。",
+            applicability_zh_tw: "本案 canonical 改寫為固定前綴 LIKE。",
+            caveat_zh_tw: "實際是否使用索引仍需以測試機 Execution Plan 確認。",
+            strength: "strong",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId("oracle-evidence-count").textContent).toContain("Oracle 11g 證據 1 項");
+    expect(screen.getByText("效能依據｜Oracle Database 11g 官方文件")).toBeTruthy();
+    expect(screen.getByText("Oracle Database Performance Tuning Guide 11g Release 2")).toBeTruthy();
+    expect(screen.getByText(/固定前綴 LIKE 在條件適合時/)).toBeTruthy();
+    expect(screen.getByText(/本案判斷：/)).toBeTruthy();
+    expect(screen.getByText(/限制：/)).toBeTruthy();
+    expect(screen.getByText("AI 分析中，約需數十秒。")).toBeTruthy();
+    expect(screen.queryByText(/https:\/\//)).toBeNull();
+  });
+
   it("shows the pending copy while ai.status is pending", () => {
     render(
       <ImprovementAdvice

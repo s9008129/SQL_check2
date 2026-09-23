@@ -65,8 +65,8 @@ describe("SqlCompare — deterministic rewrite diff", () => {
     expect(confidence.closest(".card-head")).toBeNull();
   });
 
-  it("renders deterministic verified rewrites while AI is pending", () => {
-    render(
+  it("hides deterministic OR to IN cleanup from the performance diff", () => {
+    const { container } = render(
       <SqlCompare
         originalSql="SELECT A.X FROM T A WHERE A.C = '1' OR A.C = '2'"
         ai={makeAi({ status: "pending", advice: [], suggested_sql: null })}
@@ -82,9 +82,7 @@ describe("SqlCompare — deterministic rewrite diff", () => {
         ]}
       />,
     );
-    expect(screen.getByText("改寫對照")).toBeTruthy();
-    expect(screen.getByText("重點改寫")).toBeTruthy();
-    expect(screen.getByText("改後寫法")).toBeTruthy();
+    expect(container.firstChild).toBeNull();
   });
 
   it("renders deterministic verified rewrites while AI is unavailable", () => {
@@ -142,8 +140,8 @@ describe("SqlCompare — deterministic rewrite diff", () => {
     expect(screen.queryByText("A.NAME LIKE '明%'")).toBeNull();
   });
 
-  it("shows verified advice fragments in the concise 寫法對照 block", () => {
-    render(
+  it("hides legacy OR to IN advice fragments when they only clean up syntax", () => {
+    const { container } = render(
       <SqlCompare
         originalSql="SELECT A.X FROM T A WHERE A.C = '1' OR A.C = '2'"
         ai={makeAi({
@@ -161,9 +159,7 @@ describe("SqlCompare — deterministic rewrite diff", () => {
         })}
       />,
     );
-    expect(screen.getByText("重點改寫")).toBeTruthy();
-    expect(screen.getByText("改後寫法")).toBeTruthy();
-    expect(screen.queryByText(/每一項建議都會標示/)).toBeNull();
+    expect(container.firstChild).toBeNull();
   });
 
   it("uses the new compare copy and does not render the retired labels", () => {
@@ -209,7 +205,7 @@ describe("SqlCompare — deterministic rewrite diff", () => {
         ]}
       />,
     );
-    expect(screen.getAllByTestId("fragment-diff")).toHaveLength(1);
+    expect(screen.queryAllByTestId("fragment-diff")).toHaveLength(0);
   });
 
   it("does not duplicate differently formatted AI advice when deterministic before text has newlines", () => {
@@ -295,8 +291,8 @@ describe("SqlCompare — deterministic rewrite diff", () => {
         })}
       />,
     );
-    expect(screen.getAllByTestId("fragment-diff")).toHaveLength(1);
-    expect(screen.getByText("1. 舊版 AI 建議")).toBeTruthy();
+    expect(screen.queryAllByTestId("fragment-diff")).toHaveLength(0);
+    expect(screen.queryByText("1. 舊版 AI 建議")).toBeNull();
   });
 
   it("does not manufacture a deterministic fragment from AI when verified_rewrites is empty", () => {
@@ -340,7 +336,7 @@ describe("SqlCompare — deterministic rewrite diff", () => {
       />,
     );
 
-    expect(screen.getByText("改寫對照")).toBeTruthy();
+    expect(screen.queryByText("改寫對照")).toBeNull();
     expect(screen.queryByTestId("confidence-badge")).toBeNull();
   });
 

@@ -7,6 +7,7 @@ export interface ResultOverviewProps {
 
 export default function ResultOverview({ result }: ResultOverviewProps) {
   const adviceCount = result.ai.status === "ok" ? result.ai.advice.length : 0;
+  const verifiedRewriteCount = result.verified_rewrites?.length ?? 0;
   const complianceText = complianceSummaryText(result.rules);
 
   let tone = result.compliance.status === "BLOCK" ? "red" : result.compliance.status === "REVIEW" ? "yellow" : "green";
@@ -19,6 +20,15 @@ export default function ResultOverview({ result }: ResultOverviewProps) {
       : "請先處理不符合項目。";
   } else if (result.compliance.status === "REVIEW") {
     detail = "請確認目前的查詢條件是否符合中心規定。";
+  } else if (verifiedRewriteCount > 0) {
+    const rewriteText = `系統已確認有 ${verifiedRewriteCount} 項可安全改寫，請查看下方改寫對照。`;
+    if (result.ai.status === "pending") {
+      detail = `${rewriteText} AI 正在整理其他改善建議。`;
+    } else if (result.ai.status === "unavailable") {
+      detail = `${rewriteText} 即使智慧建議暫時無法使用，這些改寫仍由系統規則確認。`;
+    } else {
+      detail = rewriteText;
+    }
   } else if (result.ai.status === "pending") {
     detail = "規則檢核已完成；AI 正在整理可讀的改善建議。";
   } else if (result.ai.status === "unavailable") {

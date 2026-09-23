@@ -7,7 +7,8 @@ import type { AnalyzeRequest, ExecutionPlanAnalysis } from "./types/api";
 
 // The real client is replaced here so this integration test stays
 // deterministic and offline: it exercises App's wiring (upload → plan textarea
-// → two-pass /api/analyze → ExecutionPlanCard), not HTTP behaviour.
+// → two-pass /api/analyze) while keeping execution-plan details out of the
+// reviewer-facing result, not HTTP behaviour.
 vi.mock("./api/client", () => ({
   ApiError: class ApiError extends Error {},
   analyze: vi.fn(),
@@ -86,7 +87,7 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
 });
 
-test("plan upload → analyze → card keeps the plan factual and out of the AI section", async () => {
+test("plan upload → analyze uses F10 as hidden AI context and never renders plan details", async () => {
   vi.mocked(extractSql).mockResolvedValueOnce({
     status: "ok",
     filename: "q.sql",
@@ -123,7 +124,7 @@ test("plan upload → analyze → card keeps the plan factual and out of the AI 
   });
   fireEvent.click(screen.getByRole("button", { name: "開始檢核" }));
 
-  await waitFor(() => expect(screen.getByText("TABLE ACCESS FULL")).toBeInTheDocument());
+  await waitFor(() => expect(screen.getAllByText("日期條件可再簡化").length).toBeGreaterThan(0));
 
   // Both passes carry the plan: deterministic pass 1 and AI pass 2, no
   // server-side session or plan token store in between.
@@ -134,19 +135,19 @@ test("plan upload → analyze → card keeps the plan factual and out of the AI 
   expect(sentBodies[0].execution_plan).toBe(PLAN_TEXT);
   expect(sentBodies[1].execution_plan).toBe(PLAN_TEXT);
 
-  // The UI keeps SQL Developer / F10 context clear, but presents it in
-  // business-friendly language instead of showing optimizer jargon first.
-  expect(screen.getByText("SQL Developer F10｜估算")).toBeInTheDocument();
-  expect(screen.getByText(/SQL Developer 的 F10 Explain Plan/)).toBeInTheDocument();
-  expect(screen.getByText("讀取整張表")).toBeInTheDocument();
-  expect(screen.queryByText(/Optimizer|I\/O/)).toBeNull();
+  // F10 stays an optional input for the AI, not a result section.
+  expect(screen.getByTestId("plan-ai-ready")).toHaveTextContent("已加入本次 AI 分析參考");
   expect(screen.getAllByText("日期條件可再簡化").length).toBeGreaterThan(0);
 
-  // The raw plan stays in the input textarea; neither the AI advice nor any
-  // other part of the result area renders the raw plan text.
+  // The raw plan remains only in the input textarea. The result area must not
+  // teach DBA plan mechanics or replay parsed operations.
   expect((screen.getByLabelText("SQL Developer 執行計畫") as HTMLTextAreaElement).value).toBe(PLAN_TEXT);
   const resultArea = document.getElementById("resultArea");
   expect(resultArea).not.toBeNull();
   expect(resultArea?.innerHTML).not.toContain("Id,Operation,Options");
-  expect(resultArea?.textContent).not.toContain("TABLE ACCESS,FULL");
+  expect(resultArea?.textContent).not.toContain("TABLE ACCESS");
+  expect(resultArea?.textContent).not.toContain("SQL Developer F10｜估算");
+  expect(resultArea?.textContent).not.toContain("讀取整張表");
+  expect(resultArea?.textContent).not.toContain("Plan Hash");
+  expect(resultArea?.textContent).not.toContain("E-Rows");
 });

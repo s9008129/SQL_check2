@@ -402,10 +402,11 @@ async def test_analyze_archive_failure_does_not_affect_response(client, monkeypa
 
 
 # ---------------------------------------------------------------------------
-# SQL Developer execution-plan evidence: privacy / authority boundaries
-# (2026-09-22). Plan text is test-environment evidence only: it must stay out
-# of the cloud-model call, out of the SQL archive, and out of logs even when
-# the deterministic parser raises. It must never change compliance either.
+# SQL Developer execution-plan evidence: privacy / authority boundaries.
+# Raw Plan text never reaches the cloud-model call, archive, or logs. A
+# bounded, literal-free deterministic summary may be supplied to AI so it can
+# prioritize advice more accurately. Plan evidence still never changes
+# compliance or rewrite authority.
 # ---------------------------------------------------------------------------
 PLAN_SENTINEL = "SUPER_SECRET_PLAN_SENTINEL"
 
@@ -423,7 +424,7 @@ Predicate Information (identified by operation id):
 """
 
 
-async def test_analyze_never_sends_raw_execution_plan_to_ai(client, monkeypatch):
+async def test_analyze_sends_safe_plan_summary_to_ai_but_never_raw_plan(client, monkeypatch):
     captured: list[dict] = []
 
     async def _spy(**kwargs):
@@ -444,14 +445,20 @@ async def test_analyze_never_sends_raw_execution_plan_to_ai(client, monkeypatch)
     assert resp.status_code == 200
     assert len(captured) == 1
 
-    # Every keyword the AI service received — including findings and parsed
-    # statements — must be free of the raw plan text.
+    context = captured[0]["execution_plan_context"]
+    assert context["source"] == "estimated"
+    assert context["plan_cost"] == 68
+    assert context["step_count"] == 2
+    assert context["priority_steps"]
+    assert any(signal["code"] == "TABLE_ACCESS_FULL" for signal in context["signals"])
+
+    # The AI receives deterministic plan facts, never the raw predicate/literal
+    # or whole SQL Developer plan text.
     serialized_call = json.dumps(captured[0], default=str, ensure_ascii=False)
     assert PLAN_SENTINEL not in serialized_call
     assert "Plan hash value" not in serialized_call
-    assert "TABLE ACCESS FULL" not in serialized_call
+    assert "filter(" not in serialized_call
 
-    # ...and so must the AI section the frontend renders.
     serialized_ai = json.dumps(resp.json()["ai"], default=str, ensure_ascii=False)
     assert PLAN_SENTINEL not in serialized_ai
     assert "Plan hash value" not in serialized_ai

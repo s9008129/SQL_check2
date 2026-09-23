@@ -652,3 +652,142 @@ mark.legend{margin:0 3px}
   .plan-priority-detail{padding-left:13px}
   .evidence-source-note{flex-direction:column}
 }
+
+
+/* 2026-09-23: F10 becomes hidden AI context; result UI is for business users. */
+.oracle-source-note{
+  background:#fff9e6;
+  border-color:#efd98f;
+  color:#6f5620;
+}
+.oracle-source-note .badge.yellow{
+  background:#f7e3a0;
+  color:#6f4b00;
+}
+.evidence-learning-kicker{
+  margin-bottom:5px;
+  color:#8a5a00;
+  font-size:12px;
+  font-weight:850;
+  letter-spacing:.01em;
+}
+.system-evidence-box{
+  min-height:0;
+  background:#fffdf8;
+  border-color:#eee2bd;
+  border-left-color:#e5b84c;
+}
+.system-evidence-box .advice-title-row h4{
+  color:#334155;
+}
+.system-evidence-box p{
+  color:#4b5565;
+}
+.friendly-evidence-note{
+  color:#7a6540;
+  border-top-color:#efe4c5;
+}
+.confidence-guide{
+  display:flex;
+  align-items:center;
+  gap:9px;
+  margin:0 0 14px;
+  padding:10px 12px;
+  border:1px solid #e8e3ff;
+  border-radius:12px;
+  background:#faf9ff;
+  color:#5f5874;
+  font-size:12px;
+  line-height:1.55;
+}
+.confidence-guide strong{
+  color:#493aa7;
+  white-space:nowrap;
+}
+.confidence-high{
+  background:#e8f7ee;
+  color:#18794e;
+  border:1px solid #c8e8d5;
+}
+.confidence-medium{
+  background:#fff5d6;
+  color:#8a5a00;
+  border:1px solid #efd98f;
+}
+.confidence-low{
+  background:#f3f4f6;
+  color:#5b6577;
+  border:1px solid #d9dee7;
+}
+.plan-ai-tag{
+  background:#f1edff;
+  color:#5746bb;
+}
+.plan-ai-ready{
+  margin-top:8px;
+  padding:8px 10px;
+  border-radius:10px;
+  background:#f3f0ff;
+  color:#5746bb;
+  font-size:12px;
+  font-weight:760;
+}
+@media(max-width:720px){
+  .confidence-guide{
+    align-items:flex-start;
+    flex-direction:column;
+    gap:3px;
+  }
+}
+
+
+/* Optional F10 input: keep it out of the way until a user actually has one. */
+.plan-input-details{
+  border:1px solid #e3e8ef;
+  border-radius:13px;
+  background:#fbfcfe;
+  overflow:hidden;
+}
+.plan-input-summary{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  cursor:pointer;
+  list-style:none;
+  padding:11px 12px;
+  color:#465166;
+  font-size:13px;
+  font-weight:800;
+}
+.plan-input-summary::-webkit-details-marker{display:none}
+.plan-input-summary::after{
+  content:"＋";
+  color:#8a94a6;
+  font-size:16px;
+  font-weight:500;
+}
+.plan-input-details[open] .plan-input-summary::after{content:"－"}
+.plan-input-content{
+  padding:0 12px 12px;
+}
+.plan-input-details .plan-guidance{
+  margin-top:1px;
+  background:#fff;
+}
+@media(max-width:520px){
+  .plan-input-summary{
+    align-items:flex-start;
+    flex-direction:column;
+  }
+  .plan-input-summary::after{
+    display:none;
+  }
+}
+
+.evidence-learning-heading{
+  margin:14px 0 8px;
+  color:#364152;
+  font-size:14px;
+  font-weight:850;
+}

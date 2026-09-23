@@ -77,13 +77,20 @@ def _multi_statement():
     return parse_sql_text(sql).statements
 
 
-async def _call(settings, statements, findings=None, sql_text="SELECT A.X FROM T A WHERE A.Y = 1"):
+async def _call(
+    settings,
+    statements,
+    findings=None,
+    sql_text="SELECT A.X FROM T A WHERE A.Y = 1",
+    execution_plan_context=None,
+):
     return await ai_service.get_ai_result(
         sql_text=sql_text,
         cost=68420,
         compliance_status="PASS",
         findings=findings or [],
         statements=statements,
+        execution_plan_context=execution_plan_context,
         settings=settings,
     )
 
@@ -169,6 +176,47 @@ async def test_exact_pattern_context_is_injected_but_family_signal_is_not(settin
     assert context[0]["classification"] == "VERIFIED_REWRITE"
     assert "guidance_zh_tw" in context[0]
     assert "TRUNC_EQ_TO_RANGE" not in json.dumps(context, ensure_ascii=False)
+
+
+@respx.mock
+async def test_safe_execution_plan_context_is_injected_into_model_payload(settings, chat_url):
+    route = respx.post(chat_url).mock(
+        return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(_good_inner(), ensure_ascii=False)))
+    )
+    plan_context = {
+        "source": "estimated",
+        "plan_cost": 68420,
+        "cost_matches_input": True,
+        "step_count": 4,
+        "has_runtime_stats": False,
+        "priority_steps": [
+            {
+                "id": 2,
+                "operation": "TABLE ACCESS",
+                "options": "FULL",
+                "object_name": "T",
+                "cost": 40000,
+                "estimated_rows": 120000,
+                "actual_rows": None,
+                "starts": None,
+                "filter_functions": ["SUBSTR"],
+            }
+        ],
+        "signals": [{"code": "FUNCTION_FILTER_PREDICATE", "level": "opportunity", "step_id": 2}],
+        "runtime_metrics": [],
+    }
+
+    result = await _call(
+        settings,
+        _clean_select_statement(),
+        execution_plan_context=plan_context,
+    )
+    assert result.status == "ok"
+
+    sent_body = json.loads(route.calls[0].request.content)
+    user_message = next(m["content"] for m in sent_body["messages"] if m["role"] == "user")
+    payload = json.loads(user_message.removeprefix("<SQL_DATA>\n").removesuffix("\n</SQL_DATA>"))
+    assert payload["execution_plan_context"] == plan_context
 
 
 @respx.mock
@@ -458,6 +506,16 @@ def test_system_prompt_keeps_not_needed_observable_and_plain():
     assert "重新推導每一個條件改寫" in ai_service.SYSTEM_PROMPT
 
 
+def test_system_prompt_uses_plan_only_as_hidden_ai_context():
+    prompt = ai_service.SYSTEM_PROMPT
+    assert "execution_plan_context" in prompt
+    assert "更精準地排序改善重點與調整信心水準" in prompt
+    assert "不要逐條解說執行計畫" in prompt
+    assert "candidate_allowed" in prompt
+    assert "VERIFIED_REWRITE" in prompt
+    assert "Step、Plan Hash、E-Rows、A-Rows、Buffers" in prompt
+
+
 def test_system_prompt_targets_business_sql_writers_and_avoids_dba_jargon():
     prompt = ai_service.SYSTEM_PROMPT
     assert "會寫 SQL 的業務同仁，不是 DBA" in prompt
@@ -495,9 +553,9 @@ def test_system_prompt_keeps_verified_rewrite_explanation_separate_from_ui_verif
     ],
 )
 def test_system_prompt_has_no_overclaiming_or_unprovable_rewrite_wording(overclaim):
-    # 2026-09-18 Runtime Correctness v1: SQLCheck has no execution plan, index
-    # metadata or statistics, and the runtime only derives SUBSTR→LIKE and
-    # same-column OR→IN. The prompt must not claim more than that.
+    # Runtime correctness: even when a bounded F10 summary is available,
+    # rewrite authority still derives only SUBSTR→LIKE and same-column OR→IN.
+    # The prompt must not claim more than deterministic verification allows.
     assert overclaim not in ai_service.SYSTEM_PROMPT
 
 

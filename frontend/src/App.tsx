@@ -4,7 +4,6 @@ import SummaryCards from "./components/SummaryCards";
 import ResultOverview from "./components/ResultOverview";
 import ComplianceTable from "./components/ComplianceTable";
 import ImprovementAdvice from "./components/ImprovementAdvice";
-import ExecutionPlanCard from "./components/ExecutionPlanCard";
 import SqlCompare from "./components/SqlCompare";
 import PrintFooter from "./components/PrintFooter";
 import { analyze, ApiError } from "./api/client";
@@ -206,7 +205,7 @@ export default function App() {
                     申請單號 <span>{result.application_no}</span>
                   </div>
                   <h1>SQL 效能檢核結果</h1>
-                  <p>先看中心規範結果，再看改善建議與改寫對照。</p>
+                  <p>先確認是否符合中心規範，再看看哪裡可以改、為什麼這樣改。</p>
                 </div>
                 <span className={`status-pill status-pill-${complianceTone(result.compliance.status)}`}>
                   {complianceIcon(result.compliance.status)} {complianceStateLabel(result.compliance.status)}
@@ -215,7 +214,6 @@ export default function App() {
 
               <ResultOverview result={result} />
               <SummaryCards result={result} />
-              <ExecutionPlanCard plan={result.execution_plan} />
               <ImprovementAdvice ai={result.ai} performanceEvidence={result.performance_evidence} />
               <SqlCompare
                 originalSql={submittedSql}

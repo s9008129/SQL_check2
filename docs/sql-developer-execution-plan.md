@@ -2,7 +2,7 @@
 
 > CURRENT — 2026-09-23
 
-SQLCheck 不會主動連線 Oracle，而是解析使用者從 SQL Developer 貼上／匯出的 Plan。專案 owner 已確認日常作業是在**正式 Oracle 資料庫**執行 **F10 Explain Plan**，因此 F10 證據應視為「正式資料庫環境下的 Optimizer 估算」，而不是測試機資料。F10 仍未實際執行 SQL，所以不能把預估 COST／Rows 當成真實耗時、I/O 或實際列數。
+SQLCheck 不會主動連線 Oracle，而是解析使用者從 SQL Developer 貼上／匯出的 Plan。專案 owner 已確認日常作業是在**正式 Oracle 資料庫**執行 **F10 Explain Plan**。在產品流程中，F10 的主要用途是補充 AI 的判讀證據：系統先用 deterministic parser 解析，再只把 bounded、去除 predicate 常數與額外物件名稱的安全摘要提供給 AI，用來排序改善重點與校準信心水準。使用者結果頁不呈現完整執行計畫。F10 仍屬估算資訊，不能把預估 COST／Rows 當成真實耗時、I/O 或實際列數。
 
 ## 建議取得方式
 
@@ -16,11 +16,7 @@ Oracle 11g 官方說明，`EXPLAIN PLAN` 會讓 Optimizer 為指定 SQL 決定�
 
 但必須維持一條清楚邊界：**F10 是 estimated plan，不是 actual runtime plan。**它不能證明 SQL 已實際執行，也不能直接代表真實執行時間、Buffers、Reads、A-Rows 或最終 cursor plan。
 
-SQLCheck 因此會標示：
-
-> 正式資料庫 F10 Explain Plan（估算）
-
-並允許用它確認「正式庫 Optimizer 當下預估會走哪種 Operation／Options」；若要宣稱「實際變快」，仍需要另有經核准的 runtime evidence。
+SQLCheck 會在後端把 F10 辨識為 estimated evidence，但一般業務使用者不需要閱讀這個 technical classification。結果頁只呈現由 SQL、規則、Oracle 11g 官方依據與可用 F10 摘要共同支撐的白話改善建議；若要宣稱「實際變快」，仍需要另有經核准的 runtime evidence。
 
 ### 2. Autotrace（F6）／實際執行證據：不是 SQLCheck 的預設要求
 
@@ -77,19 +73,20 @@ SQLCheck 會 deterministic 合併成 `TABLE ACCESS FULL` 再判斷與顯示。`O
 
 ## 系統如何使用這些資料
 
-執行計畫是「證據層」，不是新的中心規範。
+執行計畫是「AI 的輔助證據層」，不是新的中心規範，也不是另一個要給使用者閱讀的報表。
 
-- 若 COST 欄位與計畫根節點 COST 不一致，系統只提醒確認是否拿錯 SQL／Plan。
-- 若 F10 Plan 顯示 TABLE ACCESS FULL，系統可以陳述「正式庫 Optimizer 的估算 Plan 含此 access path」，但不直接判成錯誤，也不自動要求建立 Index。
-- 標準 F10 只有 estimated rows，不會因此產生「估計列數 vs 實際列數」判斷。只有使用者另行提供含 E-Rows / A-Rows / Starts 的合法 runtime evidence 時，系統才會計算落差作為後續確認線索；這仍不是「統計資訊錯誤」的判定。
-- 若 SQL 已符合 deterministic VERIFIED_REWRITE，且 Plan Predicate 也看到對應條件，系統會把它列為優先在正式資料庫依既有流程做 Before／After F10 Explain Plan 比較的候選。
-- 執行計畫目前**不改變中心規範判定與「改善指數」**。
+1. 後端先解析 F10，辨識 COST、Operation、Rows、Predicate 所含函數與其他可觀察事實。
+2. 再產生 bounded safe context：排除 Step 0，只保留少量高 COST 真正執行步驟；Operation 轉成固定 vocabulary；Predicate 只抽取 SUBSTR／TRUNC／NVL／TO_CHAR 等函數名稱。
+3. 資料表名稱只有在原 SQL 本來就出現時才保留；SQL_ID、Plan Hash、predicate 原文與常數值、額外 index/view 名稱全部排除。
+4. AI 使用這份摘要來**選對優先建議、減少空泛提醒、校準 confidence**。最終仍必須輸出一般業務同仁看得懂的 SQL 撰寫建議，不得重播 Step／E-Rows／A-Rows 等 DBA 技術細節。
+5. F10 context **不得改變中心規範判定、「改善指數」或 VERIFIED_REWRITE 權限**；可安全改寫仍只由 deterministic rewrite rules 決定。
 
 ## 資料安全
 
 - 執行計畫原文不寫入 `data/sql_archive/`。
-- 執行計畫原文不送往 Ollama Cloud / Gemma。
-- SQLCheck 只在目前這次 API request 中解析，前端取得的是結構化結果。
+- 執行計畫原文不送往 Ollama Cloud / Gemma；送給模型的是後端產生的 bounded、literal-free safe context。
+- safe context 不含 SQL_ID、Plan Hash、predicate 原文或常數值，也不保留原 SQL 未出現的 index/view 名稱。
+- SQLCheck 只在目前這次 API request 中解析原始 Plan；結果頁不呈現完整 Plan。
 - 使用者仍應遵守既有測試資料與敏感資訊管理規範。
 
 ## Oracle 官方依據

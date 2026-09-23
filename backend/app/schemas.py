@@ -73,8 +73,9 @@ class AnalyzeRequest(BaseModel):
     cost: str | int
     sql: str = Field(min_length=1)
     # Optional SQL Developer / DBMS_XPLAN text. The raw text is parsed
-    # deterministically, is not persisted by sql_archive, and is not sent to
-    # the cloud model. 300k matches the attachment extraction ceiling.
+    # deterministically and is never persisted or sent to the cloud model.
+    # Only a bounded, literal-free summary may be passed to AI as advisory
+    # context. 300k matches the attachment extraction ceiling.
     execution_plan: str | None = Field(default=None, max_length=300_000)
     include_ai: bool = False
 
@@ -208,8 +209,9 @@ class ExecutionPlanAnalysis(BaseModel):
 
     The owner-confirmed normal workflow supplies F10 Explain Plan generated
     against the formal Oracle database. Estimated F10 evidence still does not
-    prove runtime behavior. Plan evidence never changes compliance or the
-    改善指數 and stays separate from the LLM response.
+    prove runtime behavior. Plan evidence never changes compliance, the
+    改善指數, or rewrite authority; a bounded summary may be used only to make
+    AI advice more context-aware.
     """
 
     recognized: bool

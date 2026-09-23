@@ -84,10 +84,10 @@ LAST_CALL_STATS: dict[str, Any] = {}
 def improvement_potential(result: AiResult, findings: list[Finding]) -> tuple[str | None, list[str]]:
     """2026-09-17 user decision (tightened by the round-1 third-party review):
     the level is derived ONLY from facts the server can observe for itself.
-    The model's own `impact` rating is a self-assessment — it has no Oracle
-    execution plan, no real index, no statistics and no cardinality — so it
-    is shown on the advice card for reference but can never raise (or lower)
-    this level. The old percentage was never measured, and the old "any
+    The model's own `impact` rating is a self-assessment. A bounded F10
+    summary may now be available as advisory context, but the model still
+    does not own compliance, rewrite equivalence, index metadata, or the
+    improvement level. Therefore impact can never raise (or lower) this level. The old percentage was never measured, and the old "any
     NOTICE => medium" rule wrongly promoted pure governance reminders.
 
       high          — two or more server-verified improvement evidences (a
@@ -394,6 +394,7 @@ def _build_payload(
     knowledge_context: list[dict[str, str]] | None = None,
     cost_context: dict[str, Any] | None = None,
     advice_contracts: list[dict[str, Any]] | None = None,
+    execution_plan_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the de-identified <SQL_DATA> object sent to Gemma.
 
@@ -433,6 +434,10 @@ def _build_payload(
         # The model may choose whether a suggestion is worth surfacing, but it
         # may not invent executable details outside these bounded explanations.
         "advice_contracts": advice_contracts or [],
+        # Optional deterministic summary of a user-supplied SQL Developer
+        # execution plan. Raw plan text, predicates, SQL_ID and Plan Hash are
+        # intentionally excluded before this service is called.
+        "execution_plan_context": execution_plan_context or {},
     }
     if where_evidence is not None:
         payload["where_evidence"] = where_evidence
@@ -505,9 +510,10 @@ def _humanize_internal_placeholders(
 def _sanitize_unobservable_db_claims(text: str) -> str:
     """Remove sentences that claim database behavior SQLCheck cannot observe.
 
-    SQLCheck has no Oracle plan/index/statistics metadata. Keeping useful
-    neighboring sentences is better than dropping the whole advice item when
-    Gemma adds one unsupported index/plan assertion.
+    User-facing AI prose must not turn optional F10 context into DBA-style
+    plan claims. Keeping useful neighboring sentences is better than dropping
+    the whole advice item when Gemma adds an unsupported or overly technical
+    index/plan assertion.
     """
     if not text:
         return text
@@ -1806,6 +1812,7 @@ async def get_ai_result(
     compliance_status: str,
     findings: list[Finding],
     statements: list[ParsedStatement],
+    execution_plan_context: dict[str, Any] | None = None,
     settings: Settings,
 ) -> AiResult:
     """Never raises — any failure anywhere in this path (provider down,
@@ -1918,6 +1925,7 @@ async def get_ai_result(
                 advice_contracts=_build_advice_contracts(
                     representative.raw_sql if representative is not None else sql_text
                 ),
+                execution_plan_context=execution_plan_context,
             )
 
         payload = build(candidate_allowed)

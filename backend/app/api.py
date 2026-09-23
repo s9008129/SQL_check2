@@ -29,6 +29,8 @@ from app.services import (
     execution_plan,
     file_extract,
     improvement_score,
+    pattern_selector,
+    performance_evidence,
     rewrite_rules,
     rule_engine,
     sql_archive,
@@ -195,6 +197,22 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
 
     verified_rewrites = _find_verified_rewrites(parsed)
 
+    # Oracle 11g evidence is selected by deterministic facts, never by AI.
+    # A registry/configuration defect must not take down the core rule review.
+    try:
+        selected_patterns = pattern_selector.select_patterns(
+            parsed.statements,
+            findings,
+            settings.rules_config,
+        )
+        performance_evidence_items = performance_evidence.build_performance_evidence(
+            selected_patterns,
+            verified_rewrites,
+        )
+    except Exception as exc:  # noqa: BLE001 - evidence is supplemental, fail safe
+        _log_exception_type_only("performance evidence selection failed", exc)
+        performance_evidence_items = []
+
     plan_analysis: ExecutionPlanAnalysis | None = None
     if payload.execution_plan:
         try:
@@ -275,6 +293,7 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
         findings=findings,
         statements=statements_summary,
         verified_rewrites=verified_rewrites,
+        performance_evidence=performance_evidence_items,
         execution_plan=plan_analysis,
         parse_message=parsed.parse_message,
         ai=ai_result,

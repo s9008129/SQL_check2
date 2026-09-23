@@ -49,9 +49,7 @@ export default function ExecutionPlanInput({
 
       <div className="plan-guidance">
         <strong>標準流程：正式資料庫 F10 Explain Plan</strong>
-        <span>：提供 Optimizer 的預估執行路徑，SQLCheck 會標示為估算證據。</span>
-        <br />
-        <span>F10 不代表 SQL 已實際執行；不需為 SQLCheck 額外在正式庫執行 F6 Autotrace。</span>
+        <span>：提供資料庫預估的執行方式，SQLCheck 會把它當作估算證據。</span>
       </div>
 
       <textarea

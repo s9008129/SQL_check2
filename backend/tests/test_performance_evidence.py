@@ -93,13 +93,9 @@ def test_repeated_correlated_max_gets_11g_subquery_evidence_but_no_verified_rewr
     assert "反覆處理相似的工作" in items[0].claim_zh_tw
 
 
-def test_same_column_or_gets_11g_in_list_boundary_without_fake_speed_claim():
+def test_same_column_or_is_not_exposed_as_performance_evidence():
     sql = "SELECT A.X FROM T A WHERE A.STATUS='A' OR A.STATUS='B'"
-    items = _evidence(sql)
-    assert _ids(items) == {"ORACLE11G_IN_LIST_LIMIT"}
-    item = items[0]
-    assert "1000" in item.claim_zh_tw
-    assert "不代表 OR 改成 IN 就一定會變快" in item.caveat_zh_tw
+    assert _evidence(sql) == []
 
 
 def test_clean_sql_has_no_performance_evidence():

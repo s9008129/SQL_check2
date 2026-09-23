@@ -44,14 +44,14 @@ export default function ExecutionPlanInput({
     <div className="plan-input">
       <div className="label plan-input-label">
         <span>SQL Developer 執行計畫（選填）</span>
-        <span className="plan-optional">測試機證據</span>
+        <span className="plan-optional">正式資料庫 F10 證據</span>
       </div>
 
       <div className="plan-guidance">
-        <strong>建議優先使用 F6 Autotrace</strong>
-        <span>：會真正執行 SQL，可取得 runtime statistics 與 actual plan。</span>
+        <strong>標準流程：正式資料庫 F10 Explain Plan</strong>
+        <span>：提供 Optimizer 的預估執行路徑，SQLCheck 會標示為估算證據。</span>
         <br />
-        <span>若不適合執行，可用 F10 Explain Plan；系統會標示為預估計畫。</span>
+        <span>F10 不代表 SQL 已實際執行；不需為 SQLCheck 額外在正式庫執行 F6 Autotrace。</span>
       </div>
 
       <textarea

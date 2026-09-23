@@ -115,8 +115,8 @@ export default function SqlCompare({ originalSql, ai, verifiedRewrites }: SqlCom
           <div className="card-desc">{REWRITE_COMPARE_EXPLANATION}</div>
         </div>
         <div className="compare-head-badges">
+          <span className={`badge ${statusTone}`}>系統已驗證</span>
           <span className={`badge ${statusTone}`}>{statusText}</span>
-          <ConfidenceBadge score={fullRewriteConfidence} />
         </div>
       </div>
       <div className="card-body">
@@ -144,9 +144,12 @@ export default function SqlCompare({ originalSql, ai, verifiedRewrites }: SqlCom
                 <span>
                   原寫法與改後寫法對照 · <mark className="diff-add legend">黃底</mark> 為修改處
                 </span>
-                <button className="copy-btn copy-sql-btn" type="button" onClick={() => void copySuggestedSql()}>
-                  {copied ? "已複製" : "複製改後 SQL"}
-                </button>
+                <div className="advice-badges">
+                  <ConfidenceBadge score={fullRewriteConfidence} />
+                  <button className="copy-btn copy-sql-btn" type="button" onClick={() => void copySuggestedSql()}>
+                    {copied ? "已複製" : "複製改後 SQL"}
+                  </button>
+                </div>
               </div>
               <FullSqlDiff original={originalSql} suggested={suggestedSqlText} />
             </div>

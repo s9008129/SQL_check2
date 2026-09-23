@@ -48,6 +48,8 @@ def test_parses_dbms_xplan_estimated_plan_and_predicates():
     result = execution_plan.analyze(ESTIMATED_PLAN, expected_cost=5)
     assert result.recognized is True
     assert result.source == "estimated"
+    assert result.source_label == "正式資料庫 F10 Explain Plan（估算）"
+    assert "不代表 SQL 已實際執行" in result.message
     assert result.plan_hash_value == "3556827125"
     assert result.plan_cost == 5
     assert result.cost_matches_input is True
@@ -63,6 +65,8 @@ def test_parses_dbms_xplan_estimated_plan_and_predicates():
 def test_parses_actual_rows_runtime_metrics_and_cardinality_gap():
     result = execution_plan.analyze(ACTUAL_PLAN, expected_cost=88)
     assert result.source == "actual"
+    assert result.source_label == "含實際執行統計的執行計畫"
+    assert "來源環境仍以使用者的作業紀錄為準" in result.message
     assert result.has_runtime_stats is True
     assert result.sql_id == "8h4m1abcxyz12"
     assert {item.key: item.value for item in result.runtime_metrics}["consistent_gets"] == 2000

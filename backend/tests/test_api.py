@@ -165,6 +165,70 @@ async def test_analyze_without_ai_returns_deterministic_verified_rewrites(client
     ]
 
 
+async def test_analyze_prefix_substr_returns_oracle11g_performance_evidence_before_ai(client):
+    resp = await client.post(
+        "/api/analyze",
+        json={
+            "application_no": "A1",
+            "cost": 1000,
+            "sql": "SELECT A.X FROM T A WHERE SUBSTR(A.YEAR_CODE, 1, 2) = '13'",
+            "include_ai": False,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ai"]["status"] == "pending"
+    evidence_ids = {item["evidence_id"] for item in data["performance_evidence"]}
+    assert evidence_ids == {
+        "ORACLE11G_TRANSFORMED_COLUMN",
+        "ORACLE11G_PREFIX_LIKE_RANGE_SCAN",
+    }
+    assert all(item["source_label"] == "Oracle Database 11g 官方文件" for item in data["performance_evidence"])
+    assert all("source_url" not in item for item in data["performance_evidence"])
+
+
+async def test_analyze_mid_substr_returns_wildcard_limit_not_prefix_range_claim(client):
+    resp = await client.post(
+        "/api/analyze",
+        json={
+            "application_no": "A1",
+            "cost": 1000,
+            "sql": "SELECT A.X FROM T A WHERE SUBSTR(A.MANAGE_KEY, 6, 3) = '551'",
+            "include_ai": False,
+        },
+    )
+    assert resp.status_code == 200
+    evidence_ids = {item["evidence_id"] for item in resp.json()["performance_evidence"]}
+    assert "ORACLE11G_TRANSFORMED_COLUMN" in evidence_ids
+    assert "ORACLE11G_LEADING_WILDCARD_RANGE_LIMIT" in evidence_ids
+    assert "ORACLE11G_PREFIX_LIKE_RANGE_SCAN" not in evidence_ids
+
+
+async def test_analyze_repeated_correlated_max_returns_official_direction_without_safe_diff(client):
+    sql = """
+    SELECT A.CASE_ID
+    FROM TAX_CASE A
+    JOIN TAX_HISTORY B ON B.CASE_ID = A.CASE_ID
+    WHERE B.UPDATE_DATE = (
+      SELECT MAX(H1.UPDATE_DATE) FROM TAX_HISTORY H1 WHERE H1.CASE_ID = A.CASE_ID
+    )
+    AND B.UPDATE_TIME = (
+      SELECT MAX(H2.UPDATE_TIME) FROM TAX_HISTORY H2 WHERE H2.CASE_ID = A.CASE_ID
+    )
+    """
+    resp = await client.post(
+        "/api/analyze",
+        json={"application_no": "A1", "cost": 1000, "sql": sql, "include_ai": False},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["verified_rewrites"] == []
+    assert [item["evidence_id"] for item in data["performance_evidence"]] == [
+        "ORACLE11G_SUBQUERY_UNNESTING"
+    ]
+    assert data["performance_evidence"][0]["strength"] == "conditional"
+
+
 async def test_analyze_verified_rewrites_are_identical_with_or_without_ai(client, monkeypatch):
     async def _unavailable(**_kwargs):
         return AiResult(status="unavailable", message="暫時無法使用")
@@ -643,7 +707,7 @@ async def test_upload_then_analyze_keeps_plan_evidence_deterministic_and_additiv
     evidence = data["execution_plan"]
     assert evidence["recognized"] is True
     assert evidence["source"] == "estimated"
-    assert evidence["source_label"] == "測試機預估執行計畫"
+    assert evidence["source_label"] == "正式資料庫 F10 Explain Plan（估算）"
     assert evidence["cost_matches_input"] is True
     step1 = next(step for step in evidence["steps"] if step["id"] == 1)
     assert step1["operation"] == "TABLE ACCESS"

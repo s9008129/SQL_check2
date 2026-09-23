@@ -6,7 +6,7 @@ import type { ExecutionPlanAnalysis } from "../types/api";
 const plan: ExecutionPlanAnalysis = {
   recognized: true,
   source: "actual",
-  source_label: "測試機實際執行計畫",
+  source_label: "含實際執行統計的執行計畫",
   plan_hash_value: "123456789",
   sql_id: "abc123xyz",
   step_count: 2,
@@ -55,16 +55,16 @@ const plan: ExecutionPlanAnalysis = {
       step_id: 1,
     },
   ],
-  message: "已辨識測試機實際執行計畫／執行統計。",
+  message: "已辨識含實際執行統計的 Plan。",
 };
 
-test("renders actual test-plan evidence without calling it production truth", () => {
+test("renders runtime evidence without inventing its source environment", () => {
   render(<ExecutionPlanCard plan={plan} />);
 
-  expect(screen.getByText("測試機實際執行計畫")).toBeInTheDocument();
+  expect(screen.getByText("含實際執行統計的執行計畫")).toBeInTheDocument();
   expect(screen.getByText("Consistent gets")).toBeInTheDocument();
   expect(screen.getByText("估計列數與實際列數差距較大")).toBeInTheDocument();
-  expect(screen.getByText(/不代表正式機一定採用相同 Plan/)).toBeInTheDocument();
+  expect(screen.getByText(/來源環境仍以作業紀錄為準/)).toBeInTheDocument();
 });
 
 test("renders a safe unrecognized state", () => {
@@ -127,4 +127,24 @@ test("merges INDEX + RANGE SCAN without inventing extra text", () => {
   );
 
   expect(screen.getByText("INDEX RANGE SCAN")).toBeInTheDocument();
+});
+
+test("renders formal-database F10 as estimated evidence, not runtime proof", () => {
+  render(
+    <ExecutionPlanCard
+      plan={{
+        ...plan,
+        source: "estimated",
+        source_label: "正式資料庫 F10 Explain Plan（估算）",
+        has_runtime_stats: false,
+        runtime_metrics: [],
+        message:
+          "已辨識正式資料庫 F10 Explain Plan（估算）。這反映正式庫 Optimizer 在 Explain 當下選出的預估路徑。",
+      }}
+    />,
+  );
+
+  expect(screen.getByText("正式資料庫 F10 Explain Plan（估算）")).toBeInTheDocument();
+  expect(screen.getByText(/不代表 SQL 已實際執行/)).toBeInTheDocument();
+  expect(screen.getByText(/不等於實際耗時、I\/O 或列數/)).toBeInTheDocument();
 });

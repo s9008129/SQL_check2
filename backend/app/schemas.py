@@ -206,8 +206,10 @@ class ExecutionPlanObservation(BaseModel):
 class ExecutionPlanAnalysis(BaseModel):
     """Deterministic interpretation of user-supplied SQL Developer plan text.
 
-    This is test-environment evidence. It never changes compliance or the
-    改善指數, and it is deliberately separate from the LLM response.
+    The owner-confirmed normal workflow supplies F10 Explain Plan generated
+    against the formal Oracle database. Estimated F10 evidence still does not
+    prove runtime behavior. Plan evidence never changes compliance or the
+    改善指數 and stays separate from the LLM response.
     """
 
     recognized: bool
@@ -281,6 +283,25 @@ class SuggestedSql(BaseModel):
     outcome: RewriteOutcome = "advice_only"
 
 
+class PerformanceEvidence(BaseModel):
+    """Server-owned Oracle 11g tuning evidence for exact SQL patterns.
+
+    These fields come from the reviewed performance_evidence.yaml registry,
+    never from the model. URLs stay in the registry for audit and are not
+    exposed in the normal reviewer UI.
+    """
+
+    evidence_id: str
+    pattern_id: str
+    statement_indexes: list[int] = Field(default_factory=list)
+    source_label: str
+    source_document: str
+    claim_zh_tw: str
+    applicability_zh_tw: str
+    caveat_zh_tw: str
+    strength: Literal["strong", "conditional"]
+
+
 class AiResult(BaseModel):
     status: AiStatus
     summary: str | None = None
@@ -331,6 +352,7 @@ class AnalyzeResponse(BaseModel):
     findings: list[Finding]
     statements: list[StatementSummary]
     verified_rewrites: list[VerifiedRewrite] = Field(default_factory=list)
+    performance_evidence: list[PerformanceEvidence] = Field(default_factory=list)
     execution_plan: ExecutionPlanAnalysis | None = None
     parse_message: str | None = None
     ai: AiResult

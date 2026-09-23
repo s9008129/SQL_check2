@@ -106,7 +106,7 @@ column is a proposed disposition, not a governance decision.
   correlated subquery→window function — every one of these has a documented
   semantic trap in `skills/sqlcheck-oracle-review/references/advice-only-patterns.md`.
 - **Verified rewrite** (Class A, proven and tested today): SUBSTR equality →
-  canonical LIKE, and same-column OR → IN with 1–1000 values (an Oracle 19c
+  canonical LIKE, and same-column OR → IN with 1–1000 values (an Oracle 11g
   IN list holds at most 1000 expressions). These are the *only* patterns from
   either the external skill or SQLCheck's own history that meet the bar for
   automatic-rewrite-eligible status — and even they are not wired to

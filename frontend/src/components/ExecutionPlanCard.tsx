@@ -31,7 +31,7 @@ export default function ExecutionPlanCard({ plan }: ExecutionPlanCardProps) {
       <section className="card card-plan card-plan-unrecognized">
         <div className="card-head">
           <div>
-            <div className="card-title">測試機執行計畫</div>
+            <div className="card-title">Oracle 執行計畫證據</div>
             <div className="card-desc">SQL Developer 證據解析</div>
           </div>
           <span className="badge yellow">格式待確認</span>
@@ -50,7 +50,7 @@ export default function ExecutionPlanCard({ plan }: ExecutionPlanCardProps) {
     <section className="card card-plan">
       <div className="card-head">
         <div>
-          <div className="card-title">測試機執行計畫</div>
+          <div className="card-title">Oracle 執行計畫證據</div>
           <div className="card-desc">把 COST 拆成可觀察的 Plan 證據，不讓 AI 猜原因。</div>
         </div>
         <span className={`badge ${plan.source === "actual" ? "green" : "blue"}`}>
@@ -152,7 +152,15 @@ export default function ExecutionPlanCard({ plan }: ExecutionPlanCardProps) {
         </details>
 
         <div className="plan-disclaimer">
-          這是<strong>測試機</strong>證據，不代表正式機一定採用相同 Plan；目前也不改變中心規範判定或「改善指數」。
+          {plan.source === "estimated" ? (
+            <>
+              這是<strong>正式資料庫 F10 Explain Plan</strong> 的估算證據；可反映 Explain 當下
+              Optimizer 的預估路徑，但不代表 SQL 已實際執行，也不等於實際耗時、I/O 或列數。
+            </>
+          ) : (
+            <>此 Plan 含 runtime 欄位；來源環境仍以作業紀錄為準。</>
+          )}
+          目前 Plan 證據不改變中心規範判定或「改善指數」。
         </div>
       </div>
     </section>

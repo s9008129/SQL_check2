@@ -121,6 +121,18 @@ export interface VerifiedRewrite {
   after: string;
 }
 
+export interface PerformanceEvidence {
+  evidence_id: string;
+  pattern_id: string;
+  statement_indexes: number[];
+  source_label: string;
+  source_document: string;
+  claim_zh_tw: string;
+  applicability_zh_tw: string;
+  caveat_zh_tw: string;
+  strength: "strong" | "conditional";
+}
+
 export interface ExecutionPlanMetric {
   key: string;
   label: string;
@@ -239,6 +251,8 @@ export interface AnalyzeResponse {
    * undefined means legacy payload fallback is allowed.
    */
   verified_rewrites?: VerifiedRewrite[];
+  /** Server-owned Oracle 11g evidence; optional only for rolling compatibility with older payloads. */
+  performance_evidence?: PerformanceEvidence[];
   execution_plan: ExecutionPlanAnalysis | null;
   parse_message: string | null;
   ai: AiResult;

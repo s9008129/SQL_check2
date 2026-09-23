@@ -216,7 +216,7 @@ export default function App() {
               <ResultOverview result={result} />
               <SummaryCards result={result} />
               <ExecutionPlanCard plan={result.execution_plan} />
-              <ImprovementAdvice ai={result.ai} />
+              <ImprovementAdvice ai={result.ai} performanceEvidence={result.performance_evidence} />
               <SqlCompare
                 originalSql={submittedSql}
                 ai={result.ai}

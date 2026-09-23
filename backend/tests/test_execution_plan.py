@@ -221,3 +221,38 @@ def test_unrecognized_text_fails_closed_without_inventing_plan_facts():
     assert result.source == "unknown"
     assert result.steps == []
     assert result.observations == []
+
+
+
+def test_build_ai_context_is_bounded_and_literal_free():
+    plan = execution_plan.analyze(ACTUAL_PLAN, expected_cost=88)
+    context = execution_plan.build_ai_context(plan, allowed_tables={"TAX_CASE"})
+
+    assert context is not None
+    assert context["source"] == "actual"
+    assert context["plan_cost"] == 88
+    assert context["has_runtime_stats"] is True
+    assert context["priority_steps"][0]["object_name"] == "TAX_CASE"
+    assert context["priority_steps"][0]["filter_functions"] == ["TRUNC"]
+
+    serialized = str(context)
+    assert "2026-09-20" not in serialized
+    assert "CASE_DATE" not in serialized
+    assert "Plan hash value" not in serialized
+    assert "8h4m1abcxyz12" not in serialized
+
+
+def test_build_ai_context_hides_objects_not_already_present_in_sql():
+    plan_text = """
+Id,Operation,Options,Object_Name,Cardinality,Cost
+0,SELECT STATEMENT,,,10,100
+1,TABLE ACCESS,FULL,TAX_CASE,10,90
+2,INDEX,RANGE SCAN,SECRET_INTERNAL_INDEX,10,80
+"""
+    plan = execution_plan.analyze(plan_text, expected_cost=100)
+    context = execution_plan.build_ai_context(plan, allowed_tables={"TAX_CASE"})
+
+    assert context is not None
+    steps = context["priority_steps"]
+    assert any(step["object_name"] == "TAX_CASE" for step in steps)
+    assert all(step["object_name"] != "SECRET_INTERNAL_INDEX" for step in steps)

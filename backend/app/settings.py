@@ -2,12 +2,12 @@
 
 The runtime is intentionally provider-agnostic:
 - app.yaml: product/runtime settings (upload, guards, archive, knowledge context)
-- llm.yaml: selectable LLM provider profiles (Ollama, Gemini, future providers)
+- llm.yaml: selectable LLM provider profiles (Ollama, OpenRouter, Gemini)
 - rules.yaml / important_tables.yaml: deterministic governance rules
 
 Secrets are never stored in YAML. Cloud provider credentials are read only from
 an environment variable declared by the selected profile (for example:
-OLLAMA_API_KEY or GEMINI_API_KEY).
+OLLAMA_API_KEY, OPENROUTER_API_KEY or GEMINI_API_KEY).
 """
 
 from __future__ import annotations

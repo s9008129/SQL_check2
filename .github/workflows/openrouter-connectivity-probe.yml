@@ -1,0 +1,99 @@
+name: OpenRouter Connectivity Probe
+
+on:
+  push:
+    branches:
+      - test/openrouter-connectivity-probe
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SQLCHECK_LLM_PROVIDER: openrouter
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENROUTER_BASE_URL: "https://openrouter.ai/api/v1"
+      OPENROUTER_MODEL: "google/gemma-4-31b-it"
+      SQLCHECK_ARCHIVE_ENABLED: "false"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify secret exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+            echo "::error::OPENROUTER_API_KEY is not available to this workflow."
+            exit 20
+          fi
+          echo "OPENROUTER_API_KEY is present."
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install --disable-pip-version-check "uv==0.12.5"
+
+      - name: OpenRouter provider and generation probe
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv sync --frozen --python 3.12
+          uv run --frozen --python 3.12 python - <<'PY'
+          import asyncio
+          import json
+          import httpx
+
+          from app.settings import get_settings
+          from app.services import llm_provider
+
+          async def main():
+              settings = get_settings().llm
+              print(f"provider={settings.provider}")
+              print(f"provider_type={settings.provider_type}")
+              print(f"base_url={settings.base_url}")
+              print(f"model={settings.model}")
+              print(f"api_key_present={bool(settings.api_key)}")
+
+              available = await llm_provider.check_available(settings)
+              print(f"provider_available={available}")
+              if not available:
+                  raise SystemExit("OpenRouter /models preflight failed")
+
+              schema = {
+                  "type": "object",
+                  "properties": {"ok": {"type": "boolean"}},
+                  "required": ["ok"],
+                  "additionalProperties": False,
+              }
+              async with httpx.AsyncClient(timeout=settings.timeout_seconds) as client:
+                  reply = await llm_provider.generate_structured_json(
+                      client,
+                      settings,
+                      system_prompt="You are a connectivity probe. Return JSON only.",
+                      user_content='Return {"ok": true}.',
+                      response_schema=schema,
+                      context_window=settings.context_window,
+                  )
+
+              payload = json.loads(reply.content)
+              if payload != {"ok": True}:
+                  raise SystemExit(f"Unexpected structured response: {payload!r}")
+
+              print("chat_completion_ok=true")
+              print(f"reply_provider={reply.provider}")
+              print(f"reply_model={reply.model}")
+              print(f"finish_reason={reply.finish_reason}")
+              print(f"prompt_tokens={reply.prompt_tokens}")
+              print(f"output_tokens={reply.output_tokens}")
+
+          asyncio.run(main())
+          PY

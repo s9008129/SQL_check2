@@ -18,15 +18,16 @@ const PLAN_CSV = [
 
 const extractPlanMock = vi.mocked(extractPlan);
 
-test("shows formal-database F10 guidance and accepts pasted plan text", () => {
+test("shows SQL Developer F10 guidance and accepts pasted plan text", () => {
   const onChange = vi.fn();
   render(<ExecutionPlanInput value="" onChange={onChange} />);
 
-  expect(screen.getByText(/標準流程：正式資料庫 F10 Explain Plan/)).toBeInTheDocument();
-  expect(screen.getByText(/提供資料庫預估的執行方式/)).toBeInTheDocument();
-  expect(screen.queryByText(/F10 不代表 SQL 已實際執行/)).toBeNull();
+  expect(screen.getByText("SQL Developer F10 執行計畫（選填）")).toBeInTheDocument();
+  expect(screen.getByText("F10 Explain Plan")).toBeInTheDocument();
+  expect(screen.getByText(/在 SQL Developer.*按 F10 取得執行計畫後/)).toBeInTheDocument();
+  expect(screen.getByText(/COST 較高的步驟與可注意的地方/)).toBeInTheDocument();
+  expect(screen.queryByText(/E-Rows|A-Rows|Predicate/)).toBeNull();
   expect(screen.queryByText(/F6 Autotrace/)).toBeNull();
-  expect(screen.getByText("正式資料庫 F10 證據")).toBeInTheDocument();
 
   fireEvent.change(screen.getByLabelText("SQL Developer 執行計畫"), {
     target: { value: "| Id | Operation | Name |" },

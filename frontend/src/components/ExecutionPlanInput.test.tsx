@@ -22,8 +22,8 @@ test("explains that SQL Developer F10 is optional context for AI", () => {
   const onChange = vi.fn();
   render(<ExecutionPlanInput value="" onChange={onChange} />);
 
-  expect(screen.getByText("SQL Developer F10 執行計畫（選填）")).toBeInTheDocument();
-  expect(screen.getByText("協助 AI 判讀")).toBeInTheDocument();
+  expect(screen.getByText("有 SQL Developer F10 執行計畫？")).toBeInTheDocument();
+  expect(screen.getByText("選填・協助 AI 判讀")).toBeInTheDocument();
   const guidance = document.querySelector(".plan-guidance");
   expect(guidance?.textContent).toContain("系統會整理重點提供給 AI 參考");
   expect(guidance?.textContent).toContain("讓改善建議更貼近這支 SQL");

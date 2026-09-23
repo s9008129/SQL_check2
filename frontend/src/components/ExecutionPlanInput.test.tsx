@@ -18,12 +18,13 @@ const PLAN_CSV = [
 
 const extractPlanMock = vi.mocked(extractPlan);
 
-test("shows SQL Developer F6/F10 guidance and accepts pasted plan text", () => {
+test("shows formal-database F10 guidance and accepts pasted plan text", () => {
   const onChange = vi.fn();
   render(<ExecutionPlanInput value="" onChange={onChange} />);
 
-  expect(screen.getByText(/F6 Autotrace/)).toBeInTheDocument();
-  expect(screen.getByText(/F10 Explain Plan/)).toBeInTheDocument();
+  expect(screen.getByText(/標準流程：正式資料庫 F10 Explain Plan/)).toBeInTheDocument();
+  expect(screen.getByText(/不需為 SQLCheck 額外在正式庫執行 F6 Autotrace/)).toBeInTheDocument();
+  expect(screen.getByText("正式資料庫 F10 證據")).toBeInTheDocument();
 
   fireEvent.change(screen.getByLabelText("SQL Developer 執行計畫"), {
     target: { value: "| Id | Operation | Name |" },

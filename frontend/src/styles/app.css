@@ -739,3 +739,48 @@ mark.legend{margin:0 3px}
     gap:3px;
   }
 }
+
+
+/* Optional F10 input: keep it out of the way until a user actually has one. */
+.plan-input-details{
+  border:1px solid #e3e8ef;
+  border-radius:13px;
+  background:#fbfcfe;
+  overflow:hidden;
+}
+.plan-input-summary{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  cursor:pointer;
+  list-style:none;
+  padding:11px 12px;
+  color:#465166;
+  font-size:13px;
+  font-weight:800;
+}
+.plan-input-summary::-webkit-details-marker{display:none}
+.plan-input-summary::after{
+  content:"＋";
+  color:#8a94a6;
+  font-size:16px;
+  font-weight:500;
+}
+.plan-input-details[open] .plan-input-summary::after{content:"－"}
+.plan-input-content{
+  padding:0 12px 12px;
+}
+.plan-input-details .plan-guidance{
+  margin-top:1px;
+  background:#fff;
+}
+@media(max-width:520px){
+  .plan-input-summary{
+    align-items:flex-start;
+    flex-direction:column;
+  }
+  .plan-input-summary::after{
+    display:none;
+  }
+}

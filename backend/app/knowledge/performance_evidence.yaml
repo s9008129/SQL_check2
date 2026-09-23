@@ -83,9 +83,9 @@ evidence:
   - id: ORACLE11G_IMPLICIT_CONVERSION
     source_type: oracle_official
     source_label: Oracle Database 11g 官方文件
-    source_document: Oracle Database SQL Language Reference 11g
+    source_document: Oracle Database SQL Language Reference 11g Release 2
     source_section: Datatype Comparison Rules
-    source_url: https://docs.oracle.com/cd/B28359_01/server.111/b28286/sql_elements002.htm
+    source_url: https://docs.oracle.com/html/E26088_01/sql_elements002.htm
     claim_zh_tw: >
       Oracle 11g 建議不要依賴隱式型別轉換；若轉換發生在欄位端，可能增加處理成本並影響原欄位
       索引的使用機會。

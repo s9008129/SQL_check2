@@ -169,10 +169,25 @@ def _is_plain_column(expr: exp.Expression | None) -> bool:
 
 
 def _has_column_expression_join(tree: exp.Expression) -> bool:
-    """Two table aliases are compared and at least one side transforms a column."""
-    for select in tree.find_all(exp.Select):
-        for root in _condition_roots(select):
+    """JOIN ON compares table columns and at least one side transforms a column.
+
+    Deliberately inspect JOIN ... ON roots only. A WHERE predicate such as
+    ``outer_col = (SELECT MAX(inner_col) ...)`` also contains columns from
+    different scopes, but it is a scalar-subquery pattern, not an expression
+    join. Walking all WHERE descendants previously mislabeled correlated MAX
+    SQL as COMPOSITE_KEY_EXPRESSION_JOIN.
+    """
+    for select in _select_nodes(tree):
+        for join in select.args.get("joins") or ():
+            root = join.args.get("on")
+            if root is None:
+                continue
             for node in _nodes_including_self(root, exp.EQ):
+                # An equality inside a nested scalar subquery belongs to that
+                # subquery, not to this JOIN ON.
+                nearest = _nearest_select(node)
+                if nearest is not select:
+                    continue
                 left = node.this
                 right = node.expression
                 left_tables = _column_tables(left)
@@ -184,7 +199,6 @@ def _has_column_expression_join(tree: exp.Expression) -> bool:
                 if not (_is_plain_column(left) and _is_plain_column(right)):
                     return True
     return False
-
 
 def _aggregate_names(select: exp.Select) -> set[str]:
     names: set[str] = set()

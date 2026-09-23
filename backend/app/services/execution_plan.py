@@ -488,6 +488,39 @@ def _normalized_object_name(value: str | None) -> str | None:
     return value.strip().upper().split(".")[-1]
 
 
+def _safe_ai_operation(step: ExecutionPlanStep) -> str:
+    """Collapse raw operation/options text into a fixed vocabulary."""
+
+    label = _operation_label(step).upper()
+    if "TABLE ACCESS FULL" in label:
+        return "TABLE_ACCESS_FULL"
+    if "TABLE ACCESS" in label:
+        return "TABLE_ACCESS"
+    if "INDEX" in label:
+        return "INDEX_ACCESS"
+    if "HASH JOIN" in label:
+        return "HASH_JOIN"
+    if "NESTED LOOPS" in label:
+        return "NESTED_LOOPS"
+    if "MERGE JOIN" in label:
+        return "MERGE_JOIN"
+    if "SORT ORDER BY" in label:
+        return "SORT_ORDER_BY"
+    if "GROUP BY" in label:
+        return "GROUP_BY"
+    if "HASH UNIQUE" in label or "SORT UNIQUE" in label:
+        return "DEDUPLICATE"
+    if "FILTER" in label:
+        return "FILTER"
+    if "VIEW" in label:
+        return "VIEW"
+    if "WINDOW" in label:
+        return "WINDOW"
+    if "UNION-ALL" in label or "UNION ALL" in label:
+        return "UNION_ALL"
+    return "OTHER"
+
+
 def build_ai_context(
     plan: ExecutionPlanAnalysis | None,
     *,
@@ -518,7 +551,7 @@ def build_ai_context(
     priority_steps: list[dict[str, object]] = []
     for step in ranked_steps:
         normalized_object = _normalized_object_name(step.object_name)
-        safe_object_name = step.object_name if normalized_object in allowed else None
+        safe_object_name = normalized_object if normalized_object in allowed else None
         functions = sorted(
             {
                 match.group(1).upper()
@@ -529,8 +562,7 @@ def build_ai_context(
         priority_steps.append(
             {
                 "id": step.id,
-                "operation": step.operation,
-                "options": step.options,
+                "operation": _safe_ai_operation(step),
                 "object_name": safe_object_name,
                 "cost": step.cost,
                 "estimated_rows": step.estimated_rows,

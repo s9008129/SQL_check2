@@ -198,7 +198,7 @@ export default function ExecutionPlanCard({ plan }: ExecutionPlanCardProps) {
         <div className="plan-section-heading">
           <div>
             <div className="plan-section-title">先看 COST 較高的 {prioritySteps.length} 個步驟</div>
-            <div className="plan-section-help">依 F10 的 Plan COST 排序，先幫你抓重點；不是實際耗時排行。</div>
+            <div className="plan-section-help">依 F10 顯示的 COST 排序，先幫你抓重點；不是實際耗時排行。</div>
           </div>
           <span className="badge blue">Top {prioritySteps.length}</span>
         </div>
@@ -222,7 +222,7 @@ export default function ExecutionPlanCard({ plan }: ExecutionPlanCardProps) {
                   </summary>
                   <div className="plan-priority-detail">
                     <p>
-                      這一步的 Plan COST 是 <strong>{formatNumber(step.cost)}</strong>
+                      這一步的 COST 是 <strong>{formatNumber(step.cost)}</strong>
                       {step.estimated_rows == null ? "。" : `，預估會處理 ${formatNumber(step.estimated_rows)} 筆資料。`}
                     </p>
                     <div className="plan-tech-line">

@@ -175,7 +175,9 @@ patterns:
   - id: SUBSTR_EQ_TO_LIKE
     name_zh_tw: SUBSTR 定位比對改為 LIKE
     model_guidance_zh_tw: >
-      系統已能以確定性規則驗證符合條件的 SUBSTR 等式改寫；只使用系統認可的 canonical LIKE 形式，
+      系統已能以確定性規則驗證符合條件的 SUBSTR 等式改寫；只使用系統認可的 canonical LIKE 形式。
+      說明時優先指出「減少欄位端函數、讓條件直接比對原始欄位」這個效能動機，不要只寫更簡潔易讀。
+      若 canonical LIKE 是固定前綴，可說值得評估索引存取潛力；若前方仍有 % 或 _，不可暗示一般索引會改善。
       不要自行改變萬用字元位置，也不要改成依賴 collation 的上下界範圍。
     category: predicate
     classification: VERIFIED_REWRITE

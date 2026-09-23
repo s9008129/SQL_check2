@@ -78,13 +78,14 @@ describe("ImprovementAdvice", () => {
       />,
     );
 
-    expect(screen.getByTestId("oracle-evidence-count").textContent).toContain("系統依據 1 項");
+    expect(screen.getByTestId("oracle-evidence-count").textContent).toContain("改善重點 1 項");
     expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("Oracle 11g 官方依據");
+    expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("官方效能調校文件");
+    expect(screen.getByText("為什麼這樣可能比較快")).toBeTruthy();
     expect(screen.getByText("從固定文字開頭比對")).toBeTruthy();
-    expect(screen.getByText(/固定開頭的寫法/)).toBeTruthy();
-    expect(screen.getByText("系統依據")).toBeTruthy();
+    expect(screen.getByText(/固定文字開頭比對/)).toBeTruthy();
+    expect(screen.queryByText("系統依據")).toBeNull();
     expect(screen.queryByText("Oracle Database Performance Tuning Guide 11g Release 2")).toBeNull();
-    expect(screen.queryByText("為什麼這樣可能比較快｜Oracle 11g 官方依據")).toBeNull();
     expect(screen.getByText("AI 分析中，約需數十秒。")).toBeTruthy();
     expect(screen.queryByText(/https:\/\//)).toBeNull();
   });
@@ -111,7 +112,7 @@ describe("ImprovementAdvice", () => {
     );
 
     expect(screen.getByText("避免重複找同一批資料")).toBeTruthy();
-    expect(screen.getByText(/先集中算一次，再和主查詢 JOIN/)).toBeTruthy();
+    expect(screen.getByText(/可能做了重複工作；可評估先整理一次再使用/)).toBeTruthy();
     expect(screen.getByText(/同一時間有多筆最新資料/)).toBeTruthy();
     expect(screen.queryByText(/SQL Language Reference/)).toBeNull();
     expect(screen.queryByText(/nested subquery|unnesting|Pattern Selector|canonical|AST/)).toBeNull();
@@ -152,6 +153,7 @@ describe("ImprovementAdvice", () => {
     );
 
     expect(screen.getAllByText("Oracle 11g 官方依據")).toHaveLength(1);
+    expect(screen.getAllByText("為什麼這樣可能比較快")).toHaveLength(2);
     expect(screen.getByText("直接比對原始欄位")).toBeTruthy();
     expect(screen.getByText("從固定文字開頭比對")).toBeTruthy();
   });
@@ -204,7 +206,9 @@ describe("ImprovementAdvice", () => {
 it("does not repeat the AI summary when detailed advice cards are visible", () => {
   render(<ImprovementAdvice ai={makeAi({ summary: "這句摘要不應重複顯示。" })} />);
   expect(screen.queryByText("這句摘要不應重複顯示。")).toBeNull();
-  expect(screen.getByText("AI 建議僅供參考，不代表實際效能提升；採用前請先測試。")).toBeTruthy();
+  expect(
+    screen.getByText("AI 建議是改善參考；真正可安全改寫的內容，仍以「系統已驗證」標示為準。"),
+  ).toBeTruthy();
 });
 
 
@@ -275,6 +279,30 @@ it("keeps high AI confidence separate from an unverified evidence badge", () => 
 });
 
 it.each([
+  [92, "confidence-high"],
+  [73, "confidence-medium"],
+  [41, "confidence-low"],
+])("uses a friendly confidence tone for score %i", (score, expectedClass) => {
+  render(
+    <ImprovementAdvice
+      ai={makeAi({
+        advice: [
+          {
+            title: "方向提醒",
+            explanation: "請先確認業務條件。",
+            example: null,
+            impact: "low",
+            confidence_score: score,
+          },
+        ],
+      })}
+    />,
+  );
+
+  expect(screen.getByTestId("confidence-badge").className).toContain(expectedClass);
+});
+
+it.each([
   ["AI 信心：中 73/100", 73],
   ["AI 信心：低 41/100", 41],
 ])("renders %s inline", (text, score) => {
@@ -339,8 +367,12 @@ it("shows overall AI assessment confidence even when no rewrite or advice is nee
   expect(screen.getByText("AI 判讀信心：高（91/100）")).toBeTruthy();
   expect(screen.getByText("目前未發現需要調整的寫法。")).toBeTruthy();
   expect(screen.queryByTestId("assessment-confidence-note")).toBeNull();
+  expect(screen.getByText("AI 信心怎麼看？")).toBeTruthy();
   expect(
-    screen.getByText("AI 信心僅描述模型在目前證據下的自評；不代表實際效能、正確率或系統驗證結果。"),
+    screen.getByText("高：可優先參考；中、低：代表仍有不確定資訊，建議先確認再使用。"),
+  ).toBeTruthy();
+  expect(
+    screen.getByText("AI 信心是採用時的參考，不是保證；中、低信心的建議請更保守確認。"),
   ).toBeTruthy();
 });
 

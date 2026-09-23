@@ -1,7 +1,8 @@
 """Deterministic Oracle execution-plan parser for SQL Developer exports.
 
 SQLCheck never connects to Oracle. This module only interprets plan text the
-reviewer explicitly pasted/uploaded from the TEST environment. Supported v1
+reviewer explicitly pasted/uploaded. The owner-confirmed production workflow uses
+SQL Developer F10 Explain Plan against the formal Oracle database. Supported v1
 inputs are:
 - DBMS_XPLAN / SQL Developer text tables using |...| columns;
 - SQL Developer grid exports copied/saved as CSV or tab-delimited text;
@@ -9,7 +10,9 @@ inputs are:
 
 The output is evidence, not a compliance rule. TABLE ACCESS FULL, HASH JOIN,
 large row counts, etc. are reported as observed facts and are never declared
-"bad" on their own. Production behavior is never inferred from a test plan.
+"bad" on their own. F10 is an estimated plan from the formal database
+environment, not proof that the SQL was actually executed or that runtime
+time/I/O matched the estimate.
 """
 
 from __future__ import annotations
@@ -334,9 +337,9 @@ def _runtime_stats_present(steps: Iterable[ExecutionPlanStep], metrics: list[Exe
 
 def _source_label(source: str) -> str:
     if source == "actual":
-        return "測試機實際執行計畫"
+        return "含實際執行統計的執行計畫"
     if source == "estimated":
-        return "測試機預估執行計畫"
+        return "正式資料庫 F10 Explain Plan（估算）"
     return "執行計畫格式待確認"
 
 
@@ -394,7 +397,7 @@ def _observations(
                     title="測試計畫包含 TABLE ACCESS FULL",
                     detail=(
                         f"Step {step.id}{target} 使用 {operation_label}。"
-                        "這是測試機計畫事實，本身不代表一定需要改成索引存取。"
+                        "這是提供的 Plan 事實，本身不代表一定需要改成索引存取。"
                     ),
                     step_id=step.id,
                 )
@@ -431,7 +434,7 @@ def _observations(
                             detail=(
                                 f"Step {step.id}：E-Rows {step.estimated_rows:,}，"
                                 f"A-Rows/Start 約 {actual_per_start:,.0f}，差距 {ratio_text}。"
-                                "這可作為測試環境後續確認統計資訊或條件選擇性的證據。"
+                                "這可作為後續確認統計資訊或條件選擇性的證據。"
                             ),
                             step_id=step.id,
                         )
@@ -452,11 +455,12 @@ def _observations(
                 ExecutionPlanObservation(
                     code="VERIFIED_REWRITE_PLAN_MATCH",
                     level="opportunity",
-                    title="已有可確認改寫，也有測試計畫證據可對照",
+                    title="已有可確認改寫，也有正式 Plan 證據可對照",
                     detail=(
-                        f"SQLCheck 已能確認 SUBSTR→LIKE 的等價改寫；測試機計畫 Step {substr_step.id} "
-                        "同時顯示 SUBSTR 出現在 Filter Predicate。建議在測試機重跑改寫後 SQL，"
-                        "再比較 COST、計畫與實際統計，而不是直接推定一定變快。"
+                        f"SQLCheck 已能確認 SUBSTR→LIKE 的等價改寫；提供的 Plan Step {substr_step.id} "
+                        "同時顯示 SUBSTR 出現在 Filter Predicate。若依中心流程在正式資料庫以 F10 "
+                        "比較改寫前後 Explain Plan，可再對照 COST 與 access path；F10 仍是估算，"
+                        "不能直接推定實際執行一定變快。"
                     ),
                     step_id=substr_step.id,
                 )
@@ -511,13 +515,14 @@ def analyze(
 
     if source == "actual":
         message = (
-            "已辨識測試機實際執行計畫／執行統計。這些資料可用來找優先驗證點，"
-            "但不代表正式機會採用相同計畫。"
+            "已辨識含實際執行統計的 Plan。SQLCheck 會把 runtime 欄位當作實際證據使用；"
+            "來源環境仍以使用者的作業紀錄為準。"
         )
     else:
         message = (
-            "已辨識測試機預估執行計畫。可用來理解 Optimizer 的預估路徑；"
-            "若要比較真實執行差異，建議在測試機使用 SQL Developer Autotrace。"
+            "已辨識正式資料庫 F10 Explain Plan（估算）。這反映正式庫 Optimizer 在 Explain 當下"
+            "選出的預估路徑；F10 不代表 SQL 已實際執行，因此不能把預估 COST／Rows 當成實際耗時、"
+            "實際列數或 I/O。"
         )
 
     return ExecutionPlanAnalysis(

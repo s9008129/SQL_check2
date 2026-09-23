@@ -33,7 +33,7 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 from sqlglot.tokens import Tokenizer, TokenType
 
-from app.services.text_normalize import normalize_text, strip_sqlplus_commands
+from app.services.optimization_patterns import detect_optimization_patterns\nfrom app.services.text_normalize import normalize_text, strip_sqlplus_commands
 
 DIALECT = "oracle"
 

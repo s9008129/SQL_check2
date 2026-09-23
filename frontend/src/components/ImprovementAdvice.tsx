@@ -1,10 +1,11 @@
-import type { AdviceItem, AiResult } from "../types/api";
+import type { AdviceItem, AiResult, PerformanceEvidence } from "../types/api";
 import { AI_PENDING_MESSAGE, AI_UNAVAILABLE_MESSAGE, VERIFIED_REWRITE_EXPLANATION } from "../lib/copy";
 import { assessmentConfidenceText, confidenceBadgeText } from "../lib/confidence";
 import { looksLikeSqlFragment } from "../lib/sqlDiff";
 
 export interface ImprovementAdviceProps {
   ai: AiResult;
+  performanceEvidence?: PerformanceEvidence[];
 }
 
 type EvidenceLevel = "confirmed" | "review" | "info";
@@ -62,7 +63,7 @@ export function adviceEvidenceLevel(item: AdviceItem): EvidenceLevel {
  * 模型看不到 execution plan / index / statistics，因此畫面改以伺服器可驗證的
  * 「系統可確認／需人工確認／觀念提醒」呈現可信度與採用方式。
  */
-export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
+export default function ImprovementAdvice({ ai, performanceEvidence = [] }: ImprovementAdviceProps) {
   const assessmentConfidence =
     ai.status === "ok" ? assessmentConfidenceText(ai.assessment_confidence_score) : null;
   const hasConfidence =
@@ -79,9 +80,14 @@ export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
         <div>
           <div className="card-title"><span className="ai-spark" aria-hidden="true">✦</span> 智慧改善建議</div>
         </div>
-        {ai.status === "ok" && (
+        {(ai.status === "ok" || performanceEvidence.length > 0) && (
           <div className="advice-badges">
-            <span className="badge purple">{ai.advice.length} 項建議</span>
+            {performanceEvidence.length > 0 && (
+              <span className="badge green" data-testid="oracle-evidence-count">
+                Oracle 11g 證據 {performanceEvidence.length} 項
+              </span>
+            )}
+            {ai.status === "ok" && <span className="badge purple">{ai.advice.length} 項建議</span>}
             {assessmentConfidence && (
               <span
                 className="badge purple assessment-confidence-badge"
@@ -95,6 +101,29 @@ export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
         )}
       </div>
       <div className="card-body">
+        {performanceEvidence.length > 0 && (
+          <div className="advice-grid" data-testid="performance-evidence-list">
+            {performanceEvidence.map((item) => (
+              <div
+                className={`advice-box ${item.strength === "strong" ? "a-confirmed" : "a-review"}`}
+                key={`${item.pattern_id}-${item.evidence_id}-${item.statement_indexes.join("-")}`}
+                data-testid="performance-evidence"
+              >
+                <div className="advice-title-row">
+                  <h4>效能依據｜{item.source_label}</h4>
+                  <span className={`badge ${item.strength === "strong" ? "green" : "yellow"}`}>
+                    {item.strength === "strong" ? "官方依據" : "官方依據・需實測"}
+                  </span>
+                </div>
+                <div className="evidence-explanation">{item.source_document}</div>
+                <p>{item.claim_zh_tw}</p>
+                <p><strong>本案判斷：</strong>{item.applicability_zh_tw}</p>
+                <p><strong>限制：</strong>{item.caveat_zh_tw}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
         {ai.status === "pending" && <div className="ai-note">{AI_PENDING_MESSAGE}</div>}
 
         {ai.status === "unavailable" && (

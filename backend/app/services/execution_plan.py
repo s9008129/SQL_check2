@@ -13,6 +13,11 @@ large row counts, etc. are reported as observed facts and are never declared
 "bad" on their own. F10 is an estimated plan from the formal database
 environment, not proof that the SQL was actually executed or that runtime
 time/I/O matched the estimate.
+
+The raw plan is never sent to the LLM. build_ai_context converts the
+deterministic parse result into a small, literal-free summary so the plan can
+improve AI prioritization without exposing predicate values or turning the LLM
+into the execution-plan authority.
 """
 
 from __future__ import annotations
@@ -42,6 +47,14 @@ _SECTION_STOP_RE = re.compile(
     r"Peeked Binds|Note|Statistics)\b",
     re.IGNORECASE,
 )
+
+_AI_FILTER_FUNCTION_RE = re.compile(
+    r"\b(SUBSTR|TRUNC|NVL|TO_CHAR|UPPER|LOWER|TRIM|LTRIM|RTRIM)\s*\(",
+    re.IGNORECASE,
+)
+_AI_CONTEXT_MAX_STEPS = 8
+_AI_CONTEXT_MAX_SIGNALS = 12
+_AI_CONTEXT_MAX_RUNTIME_METRICS = 8
 
 _HEADER_ALIASES = {
     "ID": "id",
@@ -467,6 +480,93 @@ def _observations(
             )
 
     return observations
+
+
+def _normalized_object_name(value: str | None) -> str | None:
+    if not value:
+        return None
+    return value.strip().upper().split(".")[-1]
+
+
+def build_ai_context(
+    plan: ExecutionPlanAnalysis | None,
+    *,
+    allowed_tables: Iterable[str] = (),
+) -> dict[str, object] | None:
+    """Return a bounded, literal-free plan summary for the AI.
+
+    The LLM gets enough deterministic facts to prioritize advice (costly
+    operations, full-table reads, function-bearing filters, cardinality gaps)
+    but never receives the raw plan, predicates, SQL_ID, Plan Hash, or object
+    names that are not already present in the submitted SQL.
+    """
+
+    if plan is None or not plan.recognized:
+        return None
+
+    allowed = {
+        normalized
+        for table in allowed_tables
+        if (normalized := _normalized_object_name(table)) is not None
+    }
+
+    ranked_steps = sorted(
+        (step for step in plan.steps if step.cost is not None),
+        key=lambda step: (-(step.cost or 0), step.id),
+    )[:_AI_CONTEXT_MAX_STEPS]
+
+    priority_steps: list[dict[str, object]] = []
+    for step in ranked_steps:
+        normalized_object = _normalized_object_name(step.object_name)
+        safe_object_name = step.object_name if normalized_object in allowed else None
+        functions = sorted(
+            {
+                match.group(1).upper()
+                for predicate in step.filter_predicates
+                for match in _AI_FILTER_FUNCTION_RE.finditer(predicate)
+            }
+        )
+        priority_steps.append(
+            {
+                "id": step.id,
+                "operation": step.operation,
+                "options": step.options,
+                "object_name": safe_object_name,
+                "cost": step.cost,
+                "estimated_rows": step.estimated_rows,
+                "actual_rows": step.actual_rows,
+                "starts": step.starts,
+                "filter_functions": functions,
+            }
+        )
+
+    signals = [
+        {
+            "code": item.code,
+            "level": item.level,
+            "step_id": item.step_id,
+        }
+        for item in plan.observations[:_AI_CONTEXT_MAX_SIGNALS]
+    ]
+
+    runtime_metrics = [
+        {
+            "key": metric.key,
+            "value": metric.value,
+        }
+        for metric in plan.runtime_metrics[:_AI_CONTEXT_MAX_RUNTIME_METRICS]
+    ]
+
+    return {
+        "source": plan.source,
+        "plan_cost": plan.plan_cost,
+        "cost_matches_input": plan.cost_matches_input,
+        "step_count": plan.step_count,
+        "has_runtime_stats": plan.has_runtime_stats,
+        "priority_steps": priority_steps,
+        "signals": signals,
+        "runtime_metrics": runtime_metrics,
+    }
 
 
 def unrecognized(message: str = "未辨識到可解析的 Oracle 執行計畫表格。") -> ExecutionPlanAnalysis:

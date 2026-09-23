@@ -18,22 +18,29 @@ const PLAN_CSV = [
 
 const extractPlanMock = vi.mocked(extractPlan);
 
-test("shows SQL Developer F10 guidance and accepts pasted plan text", () => {
+test("explains that SQL Developer F10 is optional context for AI", () => {
   const onChange = vi.fn();
   render(<ExecutionPlanInput value="" onChange={onChange} />);
 
   expect(screen.getByText("SQL Developer F10 執行計畫（選填）")).toBeInTheDocument();
-  expect(screen.getByText("F10 Explain Plan")).toBeInTheDocument();
+  expect(screen.getByText("協助 AI 判讀")).toBeInTheDocument();
   const guidance = document.querySelector(".plan-guidance");
-  expect(guidance?.textContent).toContain("在 SQL Developer 按 F10 取得執行計畫後");
-  expect(guidance?.textContent).toContain("COST 較高的步驟與可注意的地方");
-  expect(screen.queryByText(/E-Rows|A-Rows|Predicate/)).toBeNull();
-  expect(screen.queryByText(/F6 Autotrace/)).toBeNull();
+  expect(guidance?.textContent).toContain("系統會整理重點提供給 AI 參考");
+  expect(guidance?.textContent).toContain("讓改善建議更貼近這支 SQL");
+  expect(screen.getByText(/原始執行計畫不會保存，也不會顯示在檢核結果/)).toBeInTheDocument();
+  expect(screen.queryByText(/E-Rows|A-Rows|Predicate|COST 較高/)).toBeNull();
+  expect(screen.queryByTestId("plan-ai-ready")).toBeNull();
 
   fireEvent.change(screen.getByLabelText("SQL Developer 執行計畫"), {
     target: { value: "| Id | Operation | Name |" },
   });
   expect(onChange).toHaveBeenCalledWith("| Id | Operation | Name |");
+});
+
+test("shows a simple ready state when F10 context is present", () => {
+  render(<ExecutionPlanInput value="| Id | Operation | Name |" onChange={vi.fn()} />);
+
+  expect(screen.getByTestId("plan-ai-ready")).toHaveTextContent("已加入本次 AI 分析參考");
 });
 
 test("uploads a CSV export straight into the plan textarea", async () => {

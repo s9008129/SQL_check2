@@ -41,7 +41,7 @@ describe("SqlCompare — deterministic rewrite diff", () => {
     expect(screen.queryByText("建議採用狀態")).toBeNull();
   });
 
-  it("shows confidence for a validated complete AI rewrite in the card header", () => {
+  it("keeps validated full-rewrite AI confidence inside the full SQL area, not the system header", () => {
     render(
       <SqlCompare
         originalSql="SELECT A.X FROM T A WHERE A.C = '1' OR A.C = '2'"
@@ -58,7 +58,11 @@ describe("SqlCompare — deterministic rewrite diff", () => {
       />,
     );
 
-    expect(screen.getByText("AI 信心：高 91/100")).toBeTruthy();
+    expect(screen.getByText("系統已驗證")).toBeTruthy();
+    const confidence = screen.getByText("AI 信心：高 91/100");
+    expect(confidence).toBeTruthy();
+    expect(confidence.closest(".sql-head")).toBeTruthy();
+    expect(confidence.closest(".card-head")).toBeNull();
   });
 
   it("renders deterministic verified rewrites while AI is pending", () => {

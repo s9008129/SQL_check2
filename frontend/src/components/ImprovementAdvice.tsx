@@ -103,12 +103,6 @@ export default function ImprovementAdvice({ ai }: ImprovementAdviceProps) {
 
         {ai.status === "ok" && (
           <>
-            {assessmentConfidence && (
-              <div className="assessment-confidence-note" data-testid="assessment-confidence-note">
-                這個信心表示 AI 對目前可見 SQL 文字與系統提供證據的把握程度；不是 SQL 正確率，
-                也不代表可以直接執行。能否採用改寫仍以「系統可確認／需先確認」為準。
-              </div>
-            )}
             {ai.advice.length === 0 ? (
               <div className="ai-note">{ai.summary?.trim() || "目前沒有額外的改善建議。"}</div>
             ) : (

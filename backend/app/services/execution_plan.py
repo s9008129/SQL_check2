@@ -511,7 +511,7 @@ def build_ai_context(
     }
 
     ranked_steps = sorted(
-        (step for step in plan.steps if step.cost is not None),
+        (step for step in plan.steps if step.id != 0 and step.cost is not None),
         key=lambda step: (-(step.cost or 0), step.id),
     )[:_AI_CONTEXT_MAX_STEPS]
 

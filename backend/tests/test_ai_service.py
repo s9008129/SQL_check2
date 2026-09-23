@@ -458,6 +458,16 @@ def test_system_prompt_keeps_not_needed_observable_and_plain():
     assert "重新推導每一個條件改寫" in ai_service.SYSTEM_PROMPT
 
 
+def test_system_prompt_targets_business_sql_writers_and_avoids_dba_jargon():
+    prompt = ai_service.SYSTEM_PROMPT
+    assert "會寫 SQL 的業務同仁，不是 DBA" in prompt
+    assert "explanation **優先只寫 1 句**" in prompt
+    assert "30～60 個中文字" in prompt
+    assert "同一張表重複查最新資料，可評估先集中取得再 JOIN" in prompt
+    assert "不要寫「可改用 Window Function／ROW_NUMBER」" in prompt
+    assert "不要使用「評估相關子查詢結構」「分析執行路徑」" in prompt
+
+
 def test_system_prompt_keeps_verified_rewrite_explanation_separate_from_ui_verification_copy():
     prompt = ai_service.SYSTEM_PROMPT
     assert "VERIFIED_REWRITE" in prompt

@@ -44,12 +44,12 @@ export default function ExecutionPlanInput({
     <div className="plan-input">
       <div className="label plan-input-label">
         <span>SQL Developer F10 執行計畫（選填）</span>
-        <span className="plan-optional">F10 Explain Plan</span>
+        <span className="plan-optional plan-ai-tag">協助 AI 判讀</span>
       </div>
 
       <div className="plan-guidance">
-        在 <strong>SQL Developer</strong> 按 F10 取得執行計畫後，可直接貼上或上傳。
-        SQLCheck 會幫你整理 COST 較高的步驟與可注意的地方。
+        如果手邊有 SQL Developer F10 執行計畫，可以貼上或上傳。
+        系統會整理重點提供給 AI 參考，讓改善建議更貼近這支 SQL。
       </div>
 
       <textarea
@@ -93,8 +93,13 @@ export default function ExecutionPlanInput({
         )}
       </div>
       <div className="upload-help">
-        SQLCheck 不會主動連線 Oracle；貼上的執行計畫不會保存，也不會送給雲端 AI。
+        系統只會把整理後的重點提供給 AI；原始執行計畫不會保存，也不會顯示在檢核結果。
       </div>
+      {value.trim() && (
+        <div className="plan-ai-ready" data-testid="plan-ai-ready">
+          ✓ 已加入本次 AI 分析參考
+        </div>
+      )}
       {status && <div className={`upload-status upload-status-${status.tone}`}>{status.text}</div>}
     </div>
   );

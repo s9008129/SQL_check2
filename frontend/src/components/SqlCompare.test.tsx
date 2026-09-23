@@ -208,7 +208,7 @@ describe("SqlCompare — deterministic rewrite diff", () => {
     expect(screen.queryAllByTestId("fragment-diff")).toHaveLength(0);
   });
 
-  it("does not duplicate differently formatted AI advice when deterministic before text has newlines", () => {
+  it("keeps OR to IN hidden even when legacy before text has newlines", () => {
     render(
       <SqlCompare
         originalSql="SELECT A.X FROM T A WHERE A.C = '1' OR A.C = '2'"
@@ -237,10 +237,10 @@ describe("SqlCompare — deterministic rewrite diff", () => {
         ]}
       />,
     );
-    expect(screen.getAllByTestId("fragment-diff")).toHaveLength(1);
+    expect(screen.queryAllByTestId("fragment-diff")).toHaveLength(0);
   });
 
-  it("does not duplicate differently formatted AI advice when comma spacing differs", () => {
+  it("keeps OR to IN hidden when legacy comma spacing differs", () => {
     render(
       <SqlCompare
         originalSql="SELECT A.X FROM T A WHERE A.C = '1' OR A.C = '2'"
@@ -269,10 +269,10 @@ describe("SqlCompare — deterministic rewrite diff", () => {
         ]}
       />,
     );
-    expect(screen.getAllByTestId("fragment-diff")).toHaveLength(1);
+    expect(screen.queryAllByTestId("fragment-diff")).toHaveLength(0);
   });
 
-  it("keeps a legacy verified AI fragment when verified_rewrites is undefined", () => {
+  it("keeps a legacy OR to IN fragment hidden when verified_rewrites is undefined", () => {
     render(
       <SqlCompare
         originalSql="SELECT A.X FROM T A WHERE A.C = '1' OR A.C = '2'"

@@ -227,6 +227,15 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
                 "執行計畫內容暫時無法解析；SQL 規則檢核仍可正常使用。"
             )
 
+    plan_ai_context = execution_plan.build_ai_context(
+        plan_analysis,
+        allowed_tables={
+            table
+            for statement in parsed.statements
+            for table in statement.tables
+        },
+    )
+
     if payload.include_ai:
         try:
             ai_result: AiResult = await ai_service.get_ai_result(
@@ -235,6 +244,7 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
                 compliance_status=compliance.status,
                 findings=findings,
                 statements=parsed.statements,
+                execution_plan_context=plan_ai_context,
                 settings=settings,
             )
         except Exception as exc:  # noqa: BLE001 - AI must never be a single point of failure (PRD §51)

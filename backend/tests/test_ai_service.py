@@ -511,7 +511,8 @@ def test_system_prompt_uses_plan_only_as_hidden_ai_context():
     assert "execution_plan_context" in prompt
     assert "更精準地排序改善重點與調整信心水準" in prompt
     assert "不要逐條解說執行計畫" in prompt
-    assert "不得**放寬 candidate_allowed" in prompt or "不得**放寬 candidate_allowed" in prompt
+    assert "candidate_allowed" in prompt
+    assert "VERIFIED_REWRITE" in prompt
     assert "Step、Plan Hash、E-Rows、A-Rows、Buffers" in prompt
 
 

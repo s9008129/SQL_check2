@@ -316,12 +316,16 @@ async def test_forbidden_phrase_in_one_advice_item_drops_only_that_item(settings
             {
                 "title": "全表掃描疑慮",
                 "explanation": "這段 SQL 可能發生 Full Table Scan。",
+                "example": "",
                 "impact": "high",
+                "confidence_score": 90,
             },
             {
                 "title": "調整條件寫法",
                 "explanation": "可考慮改寫查詢條件。",
+                "example": "",
                 "impact": "medium",
+                "confidence_score": 70,
             },
         ]
     )
@@ -452,6 +456,7 @@ async def test_verified_advice_example_and_before_are_unmasked(settings, chat_ur
                 "before": "A.Y = :STR_001 OR A.Y = :STR_002",
                 "example": "A.Y IN (:STR_001, :STR_002)",
                 "impact": "high",
+                "confidence_score": 90,
             }
         ]
     )
@@ -2358,22 +2363,19 @@ def test_system_prompt_calibrates_confidence_without_turning_it_into_permission(
 
 
 @respx.mock
-async def test_malformed_confidence_does_not_make_ai_unavailable(settings, chat_url):
+async def test_malformed_advice_confidence_retries_then_degrades(settings, chat_url):
     inner = _good_inner()
     inner["advice"][0]["confidence_score"] = "95"
     inner["suggested_sql"]["confidence_score"] = True
-    respx.post(chat_url).mock(
+    route = respx.post(chat_url).mock(
         return_value=httpx.Response(200, json=_ollama_envelope(json.dumps(inner, ensure_ascii=False)))
     )
 
     result = await _call(settings, _clean_select_statement())
 
-    assert result.status == "ok"
-    assert result.advice[0].title == "合併同欄位 OR 條件"
-    assert result.advice[0].confidence_score is None
-    assert result.suggested_sql is not None
-    assert result.suggested_sql.available is True
-    assert result.suggested_sql.confidence_score is None
+    assert route.call_count == 2
+    assert result.status == "unavailable"
+    assert result.degrade_code == "invalid_response"
 
 
 def test_prose_only_advice_keeps_confidence_when_server_does_not_change_it():

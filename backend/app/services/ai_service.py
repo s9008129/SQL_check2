@@ -1675,20 +1675,13 @@ def _chat_request_body(settings: Settings, payload: dict[str, Any]) -> dict[str,
     Runtime requests go through llm_provider.generate_structured_json().
     """
     user_content = "<SQL_DATA>\n" + json.dumps(payload, ensure_ascii=False) + "\n</SQL_DATA>"
-    request_max_output_tokens = max_output_tokens or settings.llm.max_output_tokens
-    num_ctx = _num_ctx_for(
-        settings,
-        SYSTEM_PROMPT,
-        user_content,
-        max_output_tokens=request_max_output_tokens,
-    )
+    num_ctx = _num_ctx_for(settings, SYSTEM_PROMPT, user_content)
     return llm_provider._ollama_body(  # noqa: SLF001 - same package compatibility hook
         settings.llm,
         system_prompt=SYSTEM_PROMPT,
         user_content=user_content,
         response_schema=RESPONSE_SCHEMA,
         context_window=num_ctx,
-        max_output_tokens=request_max_output_tokens,
     )
 
 
@@ -1736,7 +1729,13 @@ async def _one_attempt(
 ) -> _AiRawResponse:
     """Exactly one provider POST + JSON parse + Pydantic validation."""
     user_content = "<SQL_DATA>\n" + json.dumps(payload, ensure_ascii=False) + "\n</SQL_DATA>"
-    num_ctx = _num_ctx_for(settings, SYSTEM_PROMPT, user_content)
+    request_max_output_tokens = max_output_tokens or settings.llm.max_output_tokens
+    num_ctx = _num_ctx_for(
+        settings,
+        SYSTEM_PROMPT,
+        user_content,
+        max_output_tokens=request_max_output_tokens,
+    )
     if settings.llm.provider_type == "ollama" and num_ctx > settings.llm.context_window:
         logger.info(
             "ai_service: num_ctx raised to %d for a long prompt (default %d)",
@@ -1751,6 +1750,7 @@ async def _one_attempt(
         user_content=user_content,
         response_schema=RESPONSE_SCHEMA,
         context_window=num_ctx,
+        max_output_tokens=request_max_output_tokens,
     )
 
     raw = json.loads(reply.content)

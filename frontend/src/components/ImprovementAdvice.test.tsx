@@ -87,7 +87,8 @@ describe("ImprovementAdvice", () => {
     expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("SQL Language Reference");
     expect(screen.getByText("為什麼這樣可能比較快")).toBeTruthy();
     expect(screen.getByText("從固定文字開頭比對")).toBeTruthy();
-    expect(screen.getByText(/像 '13%' 這種從固定文字開頭比對的寫法/)).toBeTruthy();
+    expect(screen.getByText("LIKE 從固定文字開頭比對時，比較容易先縮小要找的資料範圍。")).toBeTruthy();
+    expect(screen.queryByText(/13%/)).toBeNull();
     expect(screen.queryByText("系統依據")).toBeNull();
     expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("Oracle 11g R2 官方");
     expect(screen.getByText("AI 分析中，約需數十秒。")).toBeTruthy();

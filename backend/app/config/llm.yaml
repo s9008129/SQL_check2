@@ -63,6 +63,7 @@ providers:
     # tokens, so 8,192 stays deliberately below the current provider/model cap.
     truncation_retry_max_output_tokens_env: OPENROUTER_TRUNCATION_RETRY_MAX_OUTPUT_TOKENS
     truncation_retry_max_output_tokens_default: 8192
+    truncation_retry_max_output_tokens_cap_default: 16384
     context_window_env: OPENROUTER_NUM_CTX
     context_window_default: 16384
     context_window_max_env: OPENROUTER_NUM_CTX_MAX

@@ -163,8 +163,16 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
   可以保留，但資料庫調校理論的英文名詞不要直接丟給使用者。除非 advice_contracts 明確要求逐字使用，
   advice title／explanation 請避免 Correlated Subquery、scalar subquery、subquery unnesting、Window Function、
   Optimizer、cardinality、access path、Filter Predicate、Index Range Scan 等字眼。
-- 遇到上述情況時，直接說使用者要做的事：例如「同一張表重複查最新資料，可評估先集中取得再 JOIN」，
-  不要寫「可改用 Window Function／ROW_NUMBER」；例如「欄位先經過函數處理」，不要解釋 access path。
+- 遇到上述情況時，直接說使用者要做的事，不要先教資料庫理論。請避免在使用者可見文字出現
+  「索引存取潛力」「索引存取」「相關子查詢」「scalar subquery」「視窗函數」「Window Function」
+  「重複列」「聚合結果」「access path」等詞。這些詞即使技術上正確，也不適合一般業務同仁。
+- 白話範例：
+  - SUBSTR 類：寫「減少欄位先做函數處理，讓資料庫少做一道工作；這一段可以優先調整。」
+    不要寫「值得評估索引存取潛力」。
+  - 每筆重複查總額／最新資料：寫「目前每筆資料都會另外查一次，可能做很多重複工作；
+    可評估先把需要的資料整理好，再和主要資料一起查。」不要寫「改用 JOIN／視窗函數／ROW_NUMBER」。
+  - 前置萬用字元：寫「目前是從任意位置找文字；如果需求允許，可以縮小比對範圍。」
+    不要解釋 Index Range Scan、selectivity 或 optimizer。
 - execution_plan_context 只用來讓你**選對重點、少講空泛建議**。不要在 title／explanation 中逐步列出
   Step、Plan Hash、E-Rows、A-Rows、Buffers、operation 名稱或執行計畫分析過程；使用者不需要學 DBA 工具，
   他只需要知道「哪個 SQL 寫法值得調整、為什麼、是否有足夠把握」。
@@ -177,7 +185,10 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
 【輸出規則】
 1. summary：用平實的繁體中文（台灣用語）簡短說明目前狀況，讓不熟悉技術的同仁也看得懂。
 2. advice：最多 3 項具體改善建議，每項包含 title（標題）、explanation（說明原因）、
-   example（示範寫法片段）、可選的 impact（low/medium/high）。impact 只保留作為模型內部
+   example（示範寫法片段）、confidence_score（0～100，**每一項都必填**）、可選的 impact（low/medium/high）。
+   confidence_score 代表你對「這一項改善方向」的把握程度；不要因為 example 留空、需先確認或屬於
+   advice_only 就省略分數。畫面會用這個分數讓使用者判斷是否要採用或進一步確認。
+   impact 只保留作為模型內部
    自評參考，系統不會拿它判斷合規、分數或建議是否安全；使用者畫面會改以「系統可確認／
    需人工確認／觀念提醒」呈現。內容需針對這段 SQL 的實際寫法給建議，不要給空泛的通用建議。
    - **example／before 只供系統可驗證的具體改寫使用。**目前只有 deterministic rewrite

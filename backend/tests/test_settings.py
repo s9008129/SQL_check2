@@ -91,6 +91,7 @@ def test_gemini_default_profile_matches_formal_gemma(monkeypatch):
         assert settings.llm.top_k == 64
         assert settings.llm.thinking_level == "minimal"
         assert settings.llm.max_output_tokens == 3072
+        assert settings.llm.truncation_retry_max_output_tokens == 3072
         assert settings.llm.context_window == 16384
         assert settings.llm.context_window_max == 32768
         assert settings.llm.allow_short_ascii_literals is True
@@ -144,9 +145,23 @@ def test_openrouter_provider_selected_from_environment(monkeypatch):
         assert settings.llm.top_p == 0.95
         assert settings.llm.top_k == 64
         assert settings.llm.max_output_tokens == 3072
+        assert settings.llm.truncation_retry_max_output_tokens == 8192
         assert settings.llm.context_window == 16384
         assert settings.llm.context_window_max == 32768
         assert settings.llm.think is False
         assert settings.llm.allow_short_ascii_literals is True
+    finally:
+        get_settings.cache_clear()
+
+
+def test_openrouter_truncation_retry_budget_can_be_overridden(monkeypatch):
+    monkeypatch.setenv("SQLCHECK_LLM_PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "secret-for-test")
+    monkeypatch.setenv("OPENROUTER_TRUNCATION_RETRY_MAX_OUTPUT_TOKENS", "6144")
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+        assert settings.llm.max_output_tokens == 3072
+        assert settings.llm.truncation_retry_max_output_tokens == 6144
     finally:
         get_settings.cache_clear()

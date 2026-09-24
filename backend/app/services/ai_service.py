@@ -1110,6 +1110,11 @@ def _filter_advice(
         assumption: str | None = None
         safety_issue = _advice_example_safety_issue(source_sql, before, example) if example else None
         if safety_issue is not None:
+            # The user-facing advice is now server-replaced because the model
+            # invented or altered unsafe SQL details. Do not keep the
+            # item-level score on text the model did not actually author; the
+            # frontend may still show overall AI assessment confidence.
+            confidence_score = None
             logger.info("ai_service: advice SQL example hidden by deterministic safety guard: %s", safety_issue)
             example = None
             before = None
@@ -1145,19 +1150,23 @@ def _filter_advice(
                 v = rewrite_rules.verify_fragment(before, example)
                 verification, assumption = v.status, v.assumption
                 if v.status == "corrected":
+                    confidence_score = None
                     logger.info("ai_service: advice fragment corrected by rule %s", v.rule)
                     example = v.example
                 elif v.status == "unverified":
+                    confidence_score = None
                     logger.info("ai_service: unverified advice SQL hidden; prose-only guidance kept")
                     example = None
                     before = None
                     assumption = None
             else:
+                confidence_score = None
                 logger.info("ai_service: advice SQL without original fragment hidden; cannot verify safely")
                 example = None
                 verification = "unverified"
 
         if before and not example:
+            confidence_score = None
             before = None
 
         if verification not in _VERIFIED:
@@ -1167,6 +1176,7 @@ def _filter_advice(
                 guard_explanation,
             )
             if prose_guard is not None:
+                confidence_score = None
                 explanation = guarded_explanation
                 verification = "unverified"
                 logger.info("ai_service: advice-only prose normalized by guard: %s", prose_guard)

@@ -191,13 +191,18 @@ def _load_llm_settings() -> LLMSettings:
         str(section.get("truncation_retry_max_output_tokens_env", "")).strip() or None,
         int(section.get("truncation_retry_max_output_tokens_default", max_output_tokens)),
     )
-    # A truncation retry is allowed to have a larger bounded budget, but
-    # never a smaller one than the normal request. Provider/model-specific
-    # limits stay in llm.yaml so changing providers does not alter product
-    # logic or the rewrite gate.
-    truncation_retry_max_output_tokens = max(
-        max_output_tokens,
-        truncation_retry_max_output_tokens,
+    truncation_retry_cap = int(
+        section.get(
+            "truncation_retry_max_output_tokens_cap_default",
+            max(max_output_tokens, truncation_retry_max_output_tokens),
+        )
+    )
+    # A truncation retry may have a larger bounded budget, but never a
+    # smaller one than the normal request and never above the reviewed
+    # provider/model cap declared by the active profile.
+    truncation_retry_max_output_tokens = min(
+        max(max_output_tokens, truncation_retry_max_output_tokens),
+        max(max_output_tokens, truncation_retry_cap),
     )
 
     return LLMSettings(

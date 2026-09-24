@@ -1,0 +1,94 @@
+name: Issue 37 OpenRouter Live Probe
+
+on:
+  push:
+    branches:
+      - test/issue-37-openrouter-live
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      SQLCHECK_LLM_PROVIDER: openrouter
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENROUTER_BASE_URL: "https://openrouter.ai/api/v1"
+      OPENROUTER_MODEL: "google/gemma-4-31b-it"
+      OPENROUTER_MAX_OUTPUT_TOKENS: "32"
+      OPENROUTER_TRUNCATION_RETRY_MAX_OUTPUT_TOKENS: "8192"
+      OPENROUTER_TIMEOUT_SECONDS: "180"
+      SQLCHECK_ARCHIVE_ENABLED: "false"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${OPENROUTER_API_KEY:-}"
+          echo "OPENROUTER_API_KEY is present."
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install --disable-pip-version-check "uv==0.12.5"
+
+      - name: Run bounded truncation fallback probe
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv sync --frozen --python 3.12
+          uv run --frozen --python 3.12 python - <<'PY'
+          import asyncio
+
+          from app.services import ai_service
+          from app.services.sql_parser import parse_sql_text
+          from app.settings import get_settings
+
+          async def main():
+              settings = get_settings()
+              sql = (
+                  "SELECT "
+                  + ", ".join(f"A.C{i} AS COL_{i}" for i in range(400))
+                  + " FROM TAX_CASE A WHERE SUBSTR(A.YEAR_CODE,1,3)='115'"
+              )
+              result = await ai_service.get_ai_result(
+                  sql_text=sql,
+                  cost=87340,
+                  compliance_status="PASS",
+                  findings=[],
+                  statements=parse_sql_text(sql).statements,
+                  settings=settings,
+              )
+
+              stats = dict(ai_service.LAST_CALL_STATS)
+              outcome = result.suggested_sql.outcome if result.suggested_sql else None
+              print(f"status={result.status}")
+              print(f"degrade_code={result.degrade_code}")
+              print(f"provider={stats.get('provider')}")
+              print(f"model={stats.get('model')}")
+              print(f"request_output_budget={stats.get('num_predict')}")
+              print(f"output_tokens={stats.get('eval_count')}")
+              print(f"advice_count={len(result.advice)}")
+              print(f"suggested_outcome={outcome}")
+
+              if result.status != "ok":
+                  raise SystemExit("Issue #37 fallback did not recover AI result")
+              if stats.get("num_predict") != 8192:
+                  raise SystemExit(
+                      "Expected successful response to come from 8192-token fallback"
+                  )
+              if outcome != "gated":
+                  raise SystemExit("Long-SQL rewrite gate was unexpectedly relaxed")
+
+          asyncio.run(main())
+          PY

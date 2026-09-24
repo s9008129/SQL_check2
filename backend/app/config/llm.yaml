@@ -57,6 +57,12 @@ providers:
     timeout_seconds_default: 180
     max_output_tokens_env: OPENROUTER_MAX_OUTPUT_TOKENS
     max_output_tokens_default: 3072
+    # Issue #37: only after a provider-reported output truncation, retry once
+    # in advice-only mode with a larger bounded budget. As of 2026-09-24
+    # google/gemma-4-31b-it on OpenRouter supports up to 16,384 completion
+    # tokens, so 8,192 stays deliberately below the current provider/model cap.
+    truncation_retry_max_output_tokens_env: OPENROUTER_TRUNCATION_RETRY_MAX_OUTPUT_TOKENS
+    truncation_retry_max_output_tokens_default: 8192
     context_window_env: OPENROUTER_NUM_CTX
     context_window_default: 16384
     context_window_max_env: OPENROUTER_NUM_CTX_MAX

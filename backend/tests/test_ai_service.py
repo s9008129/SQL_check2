@@ -1,6 +1,7 @@
 import dataclasses
 import json
 import logging
+import time
 
 import httpx
 import pytest
@@ -1541,6 +1542,199 @@ async def test_non_chinese_summary_is_retried_once_then_degraded(settings, chat_
     result = await _call(settings, _clean_select_statement())
     assert result.status == "unavailable"
     assert route.call_count == 2
+
+
+async def test_request_ai_truncation_retry_uses_larger_budget_even_when_payload_already_advice_only(
+    settings,
+    monkeypatch,
+):
+    openrouter = dataclasses.replace(
+        settings,
+        llm=dataclasses.replace(
+            settings.llm,
+            provider="openrouter",
+            provider_type="openrouter",
+            max_output_tokens=3072,
+            truncation_retry_max_output_tokens=8192,
+        ),
+    )
+    payload = {"candidate_allowed": False, "statement_type": "SELECT"}
+    calls: list[tuple[dict, int | None]] = []
+    success = ai_service._AiRawResponse.model_validate(
+        _good_inner(
+            suggested_sql={
+                "available": False,
+                "reason": "僅提供方向。",
+                "sql": None,
+                "rewrite_outcome": "advice_only",
+            }
+        )
+    )
+
+    async def fake_one_attempt(client, current_settings, current_payload, *, max_output_tokens=None):
+        del client, current_settings
+        calls.append((current_payload, max_output_tokens))
+        if len(calls) == 1:
+            raise ai_service.llm_provider.LLMOutputTruncatedError(3072)
+        return success
+
+    monkeypatch.setattr(ai_service, "_one_attempt", fake_one_attempt)
+
+    raw, failure_kind, used_retry = await ai_service._request_ai(
+        openrouter,
+        payload,
+        deadline=time.monotonic() + 120,
+        retry_payload=dict(payload),
+        retry_max_output_tokens=openrouter.llm.truncation_retry_max_output_tokens,
+    )
+
+    assert raw is success
+    assert failure_kind is None
+    assert used_retry is True
+    assert [budget for _, budget in calls] == [3072, 8192]
+    assert len(calls) == 2
+
+
+async def test_request_ai_second_truncation_degrades_without_third_attempt(settings, monkeypatch):
+    openrouter = dataclasses.replace(
+        settings,
+        llm=dataclasses.replace(
+            settings.llm,
+            provider="openrouter",
+            provider_type="openrouter",
+            max_output_tokens=3072,
+            truncation_retry_max_output_tokens=8192,
+        ),
+    )
+    payload = {"candidate_allowed": False}
+    budgets: list[int | None] = []
+
+    async def always_truncated(client, current_settings, current_payload, *, max_output_tokens=None):
+        del client, current_settings, current_payload
+        budgets.append(max_output_tokens)
+        raise ai_service.llm_provider.LLMOutputTruncatedError(max_output_tokens)
+
+    monkeypatch.setattr(ai_service, "_one_attempt", always_truncated)
+
+    raw, failure_kind, used_retry = await ai_service._request_ai(
+        openrouter,
+        payload,
+        deadline=time.monotonic() + 120,
+        retry_payload=dict(payload),
+        retry_max_output_tokens=8192,
+    )
+
+    assert raw is None
+    assert failure_kind == "output_truncated"
+    assert used_retry is True
+    assert budgets == [3072, 8192]
+
+
+async def test_request_ai_truncation_with_insufficient_deadline_does_not_retry(settings, monkeypatch):
+    openrouter = dataclasses.replace(
+        settings,
+        llm=dataclasses.replace(
+            settings.llm,
+            provider="openrouter",
+            provider_type="openrouter",
+            max_output_tokens=3072,
+            truncation_retry_max_output_tokens=8192,
+        ),
+    )
+    calls = 0
+
+    async def truncated_once(client, current_settings, current_payload, *, max_output_tokens=None):
+        nonlocal calls
+        del client, current_settings, current_payload, max_output_tokens
+        calls += 1
+        raise ai_service.llm_provider.LLMOutputTruncatedError(3072)
+
+    monkeypatch.setattr(ai_service, "_one_attempt", truncated_once)
+
+    raw, failure_kind, used_retry = await ai_service._request_ai(
+        openrouter,
+        {"candidate_allowed": False},
+        deadline=time.monotonic() + 30,
+        retry_payload={"candidate_allowed": False},
+        retry_max_output_tokens=8192,
+    )
+
+    assert raw is None
+    assert failure_kind == "output_truncated"
+    assert used_retry is False
+    assert calls == 1
+
+
+async def test_request_ai_normal_response_keeps_normal_output_budget(settings, monkeypatch):
+    openrouter = dataclasses.replace(
+        settings,
+        llm=dataclasses.replace(
+            settings.llm,
+            provider="openrouter",
+            provider_type="openrouter",
+            max_output_tokens=3072,
+            truncation_retry_max_output_tokens=8192,
+        ),
+    )
+    success = ai_service._AiRawResponse.model_validate(_good_inner())
+    budgets: list[int | None] = []
+
+    async def succeeds(client, current_settings, current_payload, *, max_output_tokens=None):
+        del client, current_settings, current_payload
+        budgets.append(max_output_tokens)
+        return success
+
+    monkeypatch.setattr(ai_service, "_one_attempt", succeeds)
+
+    raw, failure_kind, used_retry = await ai_service._request_ai(
+        openrouter,
+        {"candidate_allowed": True},
+        deadline=time.monotonic() + 120,
+        retry_payload={"candidate_allowed": False},
+        retry_max_output_tokens=8192,
+    )
+
+    assert raw is success
+    assert failure_kind is None
+    assert used_retry is False
+    assert budgets == [3072]
+
+
+async def test_request_ai_invalid_json_retry_does_not_use_truncation_budget(settings, monkeypatch):
+    openrouter = dataclasses.replace(
+        settings,
+        llm=dataclasses.replace(
+            settings.llm,
+            provider="openrouter",
+            provider_type="openrouter",
+            max_output_tokens=3072,
+            truncation_retry_max_output_tokens=8192,
+        ),
+    )
+    success = ai_service._AiRawResponse.model_validate(_good_inner())
+    budgets: list[int | None] = []
+
+    async def invalid_then_success(client, current_settings, current_payload, *, max_output_tokens=None):
+        del client, current_settings, current_payload
+        budgets.append(max_output_tokens)
+        if len(budgets) == 1:
+            raise json.JSONDecodeError("bad json", "", 0)
+        return success
+
+    monkeypatch.setattr(ai_service, "_one_attempt", invalid_then_success)
+
+    raw, failure_kind, used_retry = await ai_service._request_ai(
+        openrouter,
+        {"candidate_allowed": True},
+        deadline=time.monotonic() + 120,
+        retry_payload={"candidate_allowed": False},
+        retry_max_output_tokens=8192,
+    )
+
+    assert raw is success
+    assert failure_kind is None
+    assert used_retry is False
+    assert budgets == [3072, 3072]
 
 
 @respx.mock

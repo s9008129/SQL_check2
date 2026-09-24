@@ -105,6 +105,7 @@ class LLMSettings:
     api_key: str | None = field(repr=False)
     timeout_seconds: int
     max_output_tokens: int
+    truncation_retry_max_output_tokens: int
     context_window: int
     context_window_max: int
     temperature: float | None
@@ -182,6 +183,23 @@ def _load_llm_settings() -> LLMSettings:
     if not model:
         raise ValueError(f"LLM provider '{provider}' has no model")
 
+    max_output_tokens = _env_int(
+        str(section.get("max_output_tokens_env", "")).strip() or None,
+        int(section.get("max_output_tokens_default", 3072)),
+    )
+    truncation_retry_max_output_tokens = _env_int(
+        str(section.get("truncation_retry_max_output_tokens_env", "")).strip() or None,
+        int(section.get("truncation_retry_max_output_tokens_default", max_output_tokens)),
+    )
+    # A truncation retry is allowed to have a larger bounded budget, but
+    # never a smaller one than the normal request. Provider/model-specific
+    # limits stay in llm.yaml so changing providers does not alter product
+    # logic or the rewrite gate.
+    truncation_retry_max_output_tokens = max(
+        max_output_tokens,
+        truncation_retry_max_output_tokens,
+    )
+
     return LLMSettings(
         provider=provider,
         provider_type=provider_type,
@@ -194,10 +212,8 @@ def _load_llm_settings() -> LLMSettings:
             str(section.get("timeout_seconds_env", "")).strip() or None,
             int(section.get("timeout_seconds_default", 120)),
         ),
-        max_output_tokens=_env_int(
-            str(section.get("max_output_tokens_env", "")).strip() or None,
-            int(section.get("max_output_tokens_default", 3072)),
-        ),
+        max_output_tokens=max_output_tokens,
+        truncation_retry_max_output_tokens=truncation_retry_max_output_tokens,
         context_window=_env_int(
             str(section.get("context_window_env", "")).strip() or None,
             int(section.get("context_window_default", 16384)),

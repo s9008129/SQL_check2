@@ -87,6 +87,7 @@ def _ollama_body(
     user_content: str,
     response_schema: dict[str, Any],
     context_window: int,
+    max_output_tokens: int | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "model": settings.model,
@@ -102,7 +103,7 @@ def _ollama_body(
             **({"top_p": settings.top_p} if settings.top_p is not None else {}),
             **({"top_k": settings.top_k} if settings.top_k is not None else {}),
             "num_ctx": context_window,
-            "num_predict": settings.max_output_tokens,
+            "num_predict": max_output_tokens or settings.max_output_tokens,
         },
     }
     if settings.keep_alive is not None:
@@ -118,6 +119,7 @@ async def _generate_ollama(
     user_content: str,
     response_schema: dict[str, Any],
     context_window: int,
+    max_output_tokens: int | None = None,
 ) -> ProviderReply:
     body = _ollama_body(
         settings,
@@ -125,6 +127,7 @@ async def _generate_ollama(
         user_content=user_content,
         response_schema=response_schema,
         context_window=context_window,
+        max_output_tokens=max_output_tokens,
     )
     headers = _ollama_headers(settings)
     started = time.perf_counter()
@@ -192,6 +195,7 @@ def _openrouter_body(
     system_prompt: str,
     user_content: str,
     response_schema: dict[str, Any],
+    max_output_tokens: int | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "model": settings.model,
@@ -209,7 +213,7 @@ def _openrouter_body(
         },
         "provider": {"require_parameters": True},
         "stream": False,
-        "max_tokens": settings.max_output_tokens,
+        "max_tokens": max_output_tokens or settings.max_output_tokens,
         "temperature": settings.temperature if settings.temperature is not None else 0.2,
     }
     if settings.top_p is not None:
@@ -228,6 +232,7 @@ async def _generate_openrouter(
     system_prompt: str,
     user_content: str,
     response_schema: dict[str, Any],
+    max_output_tokens: int | None = None,
 ) -> ProviderReply:
     headers = _openrouter_headers(settings)
     body = _openrouter_body(
@@ -235,6 +240,7 @@ async def _generate_openrouter(
         system_prompt=system_prompt,
         user_content=user_content,
         response_schema=response_schema,
+        max_output_tokens=max_output_tokens,
     )
 
     started = time.perf_counter()
@@ -284,11 +290,12 @@ def _gemini_body(
     system_prompt: str,
     user_content: str,
     response_schema: dict[str, Any],
+    max_output_tokens: int | None = None,
 ) -> dict[str, Any]:
     generation_config: dict[str, Any] = {
         "responseMimeType": "application/json",
         "responseJsonSchema": response_schema,
-        "maxOutputTokens": settings.max_output_tokens,
+        "maxOutputTokens": max_output_tokens or settings.max_output_tokens,
     }
     # Temperature is provider-profile controlled. The Mac parity profile uses
     # the same 0.2 value as formal-host Ollama/Gemma so model comparison is not
@@ -316,6 +323,7 @@ async def _generate_gemini(
     system_prompt: str,
     user_content: str,
     response_schema: dict[str, Any],
+    max_output_tokens: int | None = None,
 ) -> ProviderReply:
     if not settings.api_key:
         raise LLMConfigurationError(
@@ -333,6 +341,7 @@ async def _generate_gemini(
         system_prompt=system_prompt,
         user_content=user_content,
         response_schema=response_schema,
+        max_output_tokens=max_output_tokens,
     )
 
     started = time.perf_counter()
@@ -382,8 +391,13 @@ async def generate_structured_json(
     user_content: str,
     response_schema: dict[str, Any],
     context_window: int,
+    max_output_tokens: int | None = None,
 ) -> ProviderReply:
-    """Dispatch one structured-output request to the selected provider."""
+    """Dispatch one structured-output request to the selected provider.
+
+    The optional max_output_tokens override is only for bounded recovery
+    paths. Normal requests continue to use the provider profile default.
+    """
 
     if settings.provider_type == "ollama":
         return await _generate_ollama(
@@ -393,6 +407,7 @@ async def generate_structured_json(
             user_content=user_content,
             response_schema=response_schema,
             context_window=context_window,
+            max_output_tokens=max_output_tokens,
         )
     if settings.provider_type == "openrouter":
         return await _generate_openrouter(
@@ -401,6 +416,7 @@ async def generate_structured_json(
             system_prompt=system_prompt,
             user_content=user_content,
             response_schema=response_schema,
+            max_output_tokens=max_output_tokens,
         )
     if settings.provider_type == "gemini":
         return await _generate_gemini(
@@ -409,6 +425,7 @@ async def generate_structured_json(
             system_prompt=system_prompt,
             user_content=user_content,
             response_schema=response_schema,
+            max_output_tokens=max_output_tokens,
         )
     raise LLMConfigurationError(f"Unsupported LLM provider type: {settings.provider_type}")
 

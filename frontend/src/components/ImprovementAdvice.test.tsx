@@ -80,20 +80,16 @@ describe("ImprovementAdvice", () => {
 
     expect(screen.getByTestId("oracle-evidence-count").textContent).toContain("改善重點 1 項");
     expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("Oracle 11g 官方依據");
-    expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("效能改善說明依據");
     expect(screen.getByTestId("oracle-evidence-note").textContent).toContain(
-      "Oracle Database Performance Tuning Guide 11g Release 2 (11.2)",
+      "本區效能改善原則參考 Oracle 11g R2 官方",
     );
-    expect(screen.getByTestId("oracle-evidence-note").textContent).toContain(
-      "Oracle Database SQL Language Reference 11g Release 2 (11.2)",
-    );
+    expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("Performance Tuning Guide");
+    expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("SQL Language Reference");
     expect(screen.getByText("為什麼這樣可能比較快")).toBeTruthy();
     expect(screen.getByText("從固定文字開頭比對")).toBeTruthy();
     expect(screen.getByText(/像 '13%' 這種從固定文字開頭比對的寫法/)).toBeTruthy();
     expect(screen.queryByText("系統依據")).toBeNull();
-    expect(screen.getByTestId("oracle-evidence-note").textContent).toContain(
-      "Oracle Database Performance Tuning Guide 11g Release 2",
-    );
+    expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("Oracle 11g R2 官方");
     expect(screen.getByText("AI 分析中，約需數十秒。")).toBeTruthy();
     expect(screen.queryByText(/https:\/\//)).toBeNull();
   });
@@ -366,10 +362,11 @@ it.each([
   expect(screen.getByText(text)).toBeTruthy();
 });
 
-it.each([null, undefined])("does not render a badge for %s confidence", (score) => {
+it.each([null, undefined])("falls back to overall AI confidence when item confidence is %s", (score) => {
   render(
     <ImprovementAdvice
       ai={makeAi({
+        assessment_confidence_score: 75,
         advice: [
           {
             title: "方向提醒",
@@ -383,9 +380,51 @@ it.each([null, undefined])("does not render a badge for %s confidence", (score) 
     />,
   );
 
-  expect(screen.queryByTestId("confidence-badge")).toBeNull();
+  expect(screen.getByText("AI 信心：中 75/100")).toBeTruthy();
 });
 
+
+it("shows a confidence badge on every visible AI advice card", () => {
+  render(
+    <ImprovementAdvice
+      ai={makeAi({
+        assessment_confidence_score: 75,
+        advice: [
+          {
+            title: "直接比對原始欄位",
+            explanation: "減少欄位先做函數處理。",
+            example: "A.CODE LIKE '13%'",
+            before: "SUBSTR(A.CODE,1,2)='13'",
+            impact: "high",
+            verification: "verified",
+            confidence_score: 95,
+          },
+          {
+            title: "確認模糊搜尋範圍",
+            explanation: "如果需求允許，可以縮小比對範圍。",
+            example: null,
+            impact: "medium",
+            verification: "unverified",
+            confidence_score: null,
+          },
+          {
+            title: "減少重複查詢",
+            explanation: "可評估先把需要的資料整理好，再和主要資料一起查。",
+            example: null,
+            impact: "medium",
+            verification: "unverified",
+            confidence_score: 70,
+          },
+        ],
+      })}
+    />,
+  );
+
+  expect(screen.getAllByTestId("confidence-badge")).toHaveLength(3);
+  expect(screen.getByText("AI 信心：高 95/100")).toBeTruthy();
+  expect(screen.getByText("AI 信心：中 75/100")).toBeTruthy();
+  expect(screen.getByText("AI 信心：中 70/100")).toBeTruthy();
+});
 
 it("shows overall AI assessment confidence even when no rewrite or advice is needed", () => {
   render(

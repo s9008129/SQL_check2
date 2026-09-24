@@ -1796,6 +1796,67 @@ async def test_output_truncation_when_rewrite_was_not_allowed_does_not_retry(set
     assert route.call_count == 1
 
 
+async def test_long_sql_gate_stays_closed_while_openrouter_fallback_budget_is_larger(
+    settings,
+    monkeypatch,
+):
+    openrouter = dataclasses.replace(
+        settings,
+        llm=dataclasses.replace(
+            settings.llm,
+            provider="openrouter",
+            provider_type="openrouter",
+            max_output_tokens=3072,
+            truncation_retry_max_output_tokens=8192,
+        ),
+    )
+    long_sql = "SELECT " + ", ".join(
+        f"A.C{i} AS 稅種{i}稅額_減因C" for i in range(400)
+    ) + " FROM T A WHERE A.Y = 1"
+    captured: dict[str, object] = {}
+    raw = ai_service._AiRawResponse.model_validate(
+        _good_inner(
+            advice=[],
+            suggested_sql={
+                "available": False,
+                "reason": "僅提供方向。",
+                "sql": None,
+                "rewrite_outcome": "advice_only",
+            },
+        )
+    )
+
+    async def fake_request_ai(
+        current_settings,
+        payload,
+        *,
+        deadline,
+        retry_payload=None,
+        retry_max_output_tokens=None,
+    ):
+        del current_settings, deadline
+        captured["payload"] = payload
+        captured["retry_payload"] = retry_payload
+        captured["retry_max_output_tokens"] = retry_max_output_tokens
+        return raw, None, False
+
+    monkeypatch.setattr(ai_service, "_request_ai", fake_request_ai)
+
+    result = await ai_service.get_ai_result(
+        sql_text=long_sql,
+        cost=1000,
+        compliance_status="PASS",
+        findings=[],
+        statements=parse_sql_text(long_sql).statements,
+        settings=openrouter,
+    )
+
+    assert result.status == "ok"
+    assert captured["payload"]["candidate_allowed"] is False
+    assert captured["retry_payload"]["candidate_allowed"] is False
+    assert captured["retry_max_output_tokens"] == 8192
+
+
 @respx.mock
 async def test_long_sql_is_gated_too_long_for_rewrite(settings, chat_url):
     route = respx.post(chat_url).mock(

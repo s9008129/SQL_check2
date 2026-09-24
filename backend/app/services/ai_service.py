@@ -1641,7 +1641,13 @@ def _estimate_tokens(text: str) -> int:
     return int(cjk + (len(text) - cjk) / 4) + 1
 
 
-def _num_ctx_for(settings: Settings, system_prompt: str, user_content: str) -> int:
+def _num_ctx_for(
+    settings: Settings,
+    system_prompt: str,
+    user_content: str,
+    *,
+    max_output_tokens: int | None = None,
+) -> int:
     """Choose a context tier.
 
     Ollama needs an explicit num_ctx and can silently truncate a prompt, so
@@ -1650,10 +1656,11 @@ def _num_ctx_for(settings: Settings, system_prompt: str, user_content: str) -> i
     ignores this value, but returning a stable value keeps diagnostics and
     tests provider-neutral.
     """
+    output_budget = max_output_tokens or settings.llm.max_output_tokens
     needed = (
         _estimate_tokens(system_prompt)
         + _estimate_tokens(user_content)
-        + settings.llm.max_output_tokens
+        + output_budget
         + 512
     )
     tier = settings.llm.context_window
@@ -1678,7 +1685,12 @@ def _chat_request_body(settings: Settings, payload: dict[str, Any]) -> dict[str,
     )
 
 
-def _record_call_stats(settings: Settings, reply: llm_provider.ProviderReply) -> None:
+def _record_call_stats(
+    settings: Settings,
+    reply: llm_provider.ProviderReply,
+    *,
+    max_output_tokens: int,
+) -> None:
     """Publish whitelisted diagnostics only; never prompt/SQL/model output."""
     try:
         LAST_CALL_STATS.clear()
@@ -1687,7 +1699,7 @@ def _record_call_stats(settings: Settings, reply: llm_provider.ProviderReply) ->
                 "provider": reply.provider,
                 "model": reply.model,
                 "num_ctx": reply.context_window,
-                "num_predict": settings.llm.max_output_tokens,
+                "num_predict": max_output_tokens,
                 "think": reply.think,
                 "done_reason": reply.finish_reason,
                 "eval_count": reply.output_tokens,
@@ -1712,10 +1724,18 @@ async def _one_attempt(
     client: httpx.AsyncClient,
     settings: Settings,
     payload: dict[str, Any],
+    *,
+    max_output_tokens: int | None = None,
 ) -> _AiRawResponse:
     """Exactly one provider POST + JSON parse + Pydantic validation."""
     user_content = "<SQL_DATA>\n" + json.dumps(payload, ensure_ascii=False) + "\n</SQL_DATA>"
-    num_ctx = _num_ctx_for(settings, SYSTEM_PROMPT, user_content)
+    request_max_output_tokens = max_output_tokens or settings.llm.max_output_tokens
+    num_ctx = _num_ctx_for(
+        settings,
+        SYSTEM_PROMPT,
+        user_content,
+        max_output_tokens=request_max_output_tokens,
+    )
     if settings.llm.provider_type == "ollama" and num_ctx > settings.llm.context_window:
         logger.info(
             "ai_service: num_ctx raised to %d for a long prompt (default %d)",
@@ -1730,6 +1750,7 @@ async def _one_attempt(
         user_content=user_content,
         response_schema=RESPONSE_SCHEMA,
         context_window=num_ctx,
+        max_output_tokens=request_max_output_tokens,
     )
 
     raw = json.loads(reply.content)
@@ -1748,7 +1769,11 @@ async def _one_attempt(
         reply.prompt_tokens,
         reply.total_duration_ms,
     )
-    _record_call_stats(settings, reply)
+    _record_call_stats(
+        settings,
+        reply,
+        max_output_tokens=request_max_output_tokens,
+    )
     return parsed
 
 
@@ -1772,13 +1797,15 @@ async def _request_ai(
     *,
     deadline: float,
     retry_payload: dict[str, Any] | None = None,
+    retry_max_output_tokens: int | None = None,
 ) -> tuple[_AiRawResponse | None, str | None, bool]:
     """Returns (raw, failure_kind, used_retry_payload).
 
     One overall deadline bounds the whole provider call, including retry.
     Transport/configuration failures fail immediately. A provider-reported
-    output-token truncation may retry once in advice-only mode. Invalid JSON,
-    schema, or non-Chinese output may retry once with the same payload.
+    output-token truncation may retry once in advice-only mode with a bounded
+    per-request output budget. Invalid JSON, schema, or non-Chinese output may
+    retry once with the same payload and the normal output budget.
     """
 
     def remaining() -> float:
@@ -1791,10 +1818,25 @@ async def _request_ai(
 
     try:
         async with httpx.AsyncClient(timeout=max(remaining(), 1.0)) as client:
+            normal_output_tokens = settings.llm.max_output_tokens
+            truncation_retry_tokens = max(
+                normal_output_tokens,
+                retry_max_output_tokens or normal_output_tokens,
+            )
             second_payload = payload
+            second_output_tokens = normal_output_tokens
             used_retry = False
             try:
-                return await _one_attempt(client, settings, payload), None, False
+                return (
+                    await _one_attempt(
+                        client,
+                        settings,
+                        payload,
+                        max_output_tokens=normal_output_tokens,
+                    ),
+                    None,
+                    False,
+                )
             except (httpx.RequestError, httpx.HTTPStatusError, llm_provider.LLMConfigurationError) as exc:
                 return None, _transport_failure_kind(exc), False
             except llm_provider.LLMPromptTruncatedError as exc:
@@ -1812,27 +1854,42 @@ async def _request_ai(
                         "disable provider thinking for schema-constrained JSON output",
                         exc.thinking_chars,
                     )
-                if retry_payload is None or remaining() < _MIN_RETRY_BUDGET_SECONDS:
+
+                retry_changes_payload = retry_payload is not None and retry_payload != payload
+                retry_has_more_output = truncation_retry_tokens > normal_output_tokens
+                retry_is_useful = retry_payload is not None and (
+                    retry_changes_payload or retry_has_more_output
+                )
+                if not retry_is_useful or remaining() < _MIN_RETRY_BUDGET_SECONDS:
                     logger.info(
-                        "ai_service: provider output truncated (output_tokens=%s) — "
-                        "degrading (retry_payload=%s, remaining=%.0fs)",
+                        "ai_service: provider output truncated "
+                        "(output_tokens=%s, normal_limit=%d, fallback_limit=%d) — "
+                        "degrading (retry_useful=%s, remaining=%.0fs)",
                         exc.output_tokens,
-                        retry_payload is not None,
+                        normal_output_tokens,
+                        truncation_retry_tokens,
+                        retry_is_useful,
                         remaining(),
                     )
                     return None, "output_truncated", False
                 logger.info(
-                    "ai_service: provider output truncated (output_tokens=%s) — "
-                    "retrying once in advice-only mode (remaining=%.0fs)",
+                    "ai_service: provider output truncated "
+                    "(output_tokens=%s, normal_limit=%d) — "
+                    "retrying once in advice-only mode with fallback_limit=%d "
+                    "(remaining=%.0fs)",
                     exc.output_tokens,
+                    normal_output_tokens,
+                    truncation_retry_tokens,
                     remaining(),
                 )
                 second_payload = retry_payload
+                second_output_tokens = truncation_retry_tokens
                 used_retry = True
             except _NonChineseResponseError:
                 logger.info("ai_service: response not in Chinese — retrying once")
+                second_output_tokens = normal_output_tokens
             except (json.JSONDecodeError, ValidationError, KeyError, TypeError):
-                pass
+                second_output_tokens = normal_output_tokens
 
             if settings.llm.max_retries_on_invalid_json <= 0 and not used_retry:
                 return None, "invalid_response", False
@@ -1841,7 +1898,16 @@ async def _request_ai(
 
             client.timeout = httpx.Timeout(max(remaining(), 1.0))
             try:
-                return await _one_attempt(client, settings, second_payload), None, used_retry
+                return (
+                    await _one_attempt(
+                        client,
+                        settings,
+                        second_payload,
+                        max_output_tokens=second_output_tokens,
+                    ),
+                    None,
+                    used_retry,
+                )
             except (httpx.RequestError, httpx.HTTPStatusError, llm_provider.LLMConfigurationError) as exc:
                 return None, _transport_failure_kind(exc), used_retry
             except llm_provider.LLMPromptTruncatedError:
@@ -1988,17 +2054,29 @@ async def get_ai_result(
             )
 
         payload = build(candidate_allowed)
-        # Fallback for an output-truncated first attempt: same request, but
-        # advice-only (see `_request_ai`). Only meaningful when a rewrite was
-        # allowed in the first place.
-        retry_payload = build(False) if candidate_allowed else None
+        # Issue #37: output truncation always has one bounded advice-only
+        # fallback available. When the original request was already gated,
+        # the payload may be identical, but OpenRouter can still recover by
+        # using the larger truncation-only output budget.
+        retry_payload = build(False)
 
-        raw, failure_kind, used_retry = await _request_ai(settings, payload, deadline=deadline, retry_payload=retry_payload)
+        raw, failure_kind, used_retry = await _request_ai(
+            settings,
+            payload,
+            deadline=deadline,
+            retry_payload=retry_payload,
+            retry_max_output_tokens=settings.llm.truncation_retry_max_output_tokens,
+        )
         if raw is None:
             return _unavailable(failure_kind)
-        if used_retry:
+        if used_retry and candidate_allowed:
+            # The first attempt was allowed to emit a full rewrite, but the
+            # recovery attempt is advice-only, so explain that downgrade.
             candidate_allowed = False
             decline_code = "rewrite_truncated"
+        # If the request was already gated before the provider call (for
+        # example a very long SQL), keep its original decline_code. The
+        # larger truncation fallback must not disguise the real gate reason.
 
         original_notice_count = 0
         if representative is not None:

@@ -148,8 +148,8 @@ export default function ImprovementAdvice({ ai, performanceEvidence = [] }: Impr
             <div className="evidence-source-note oracle-source-note" data-testid="oracle-evidence-note">
               <span className="badge yellow">Oracle 11g 官方依據</span>
               <span>
-                效能改善說明依據 Oracle Database Performance Tuning Guide 11g Release 2 (11.2)
-                與 Oracle Database SQL Language Reference 11g Release 2 (11.2) 官方文件整理。
+                本區效能改善原則參考 Oracle 11g R2 官方《Performance Tuning Guide》與
+                《SQL Language Reference》整理。
               </span>
             </div>
             <div className="evidence-learning-heading">為什麼這樣可能比較快</div>
@@ -201,7 +201,9 @@ export default function ImprovementAdvice({ ai, performanceEvidence = [] }: Impr
                           <span className={`badge ${evidence.badge} evidence-badge`} title={evidence.title}>
                             {evidence.label}
                           </span>
-                          <ConfidenceBadge score={item.confidence_score} />
+                          <ConfidenceBadge
+                            score={item.confidence_score ?? ai.assessment_confidence_score}
+                          />
                         </div>
                       </div>
                       {evidence.explanation && <div className="evidence-explanation">{evidence.explanation}</div>}

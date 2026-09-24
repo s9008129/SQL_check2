@@ -249,6 +249,14 @@ class _AiRawResponse(BaseModel):
         return normalized
 
 
+    @field_validator("advice")
+    @classmethod
+    def _strict_advice_confidence(cls, items: list[AdviceItem]) -> list[AdviceItem]:
+        if any(item.confidence_score is None for item in items):
+            raise ValueError("every advice item must include confidence_score from 0 to 100")
+        return items
+
+
 # ---------------------------------------------------------------------------
 # Deterministic gating (PRD §17.4, §25) — never influenced by the model.
 # ---------------------------------------------------------------------------
@@ -475,6 +483,19 @@ _UNOBSERVABLE_DB_CLAIM_RE = re.compile(
     re.IGNORECASE,
 )
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[。！？!?])")
+_BUSINESS_FRIENDLY_PROSE_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+    ("值得評估索引存取潛力", "這一段可以優先調整"),
+    ("索引存取潛力", "資料查找效率"),
+    ("索引存取", "資料查找"),
+    ("相關子查詢", "重複查詢"),
+    ("Correlated Subquery", "重複查詢"),
+    ("correlated subquery", "重複查詢"),
+    ("Scalar Subquery", "逐筆額外查詢"),
+    ("scalar subquery", "逐筆額外查詢"),
+    ("重複列", "重複資料"),
+    ("聚合結果", "加總或統計結果"),
+)
+
 _TYPED_LITERAL_RE = re.compile(
     r"\b(?P<kind>DATE|TIMESTAMP)\s*(?P<literal>'(?:[^']|'')*')",
     re.IGNORECASE,
@@ -524,6 +545,40 @@ def _sanitize_unobservable_db_claims(text: str) -> str:
     return "這項建議是依 SQL 寫法本身提出，實際效能仍需於測試環境確認。"
 
 
+def _business_friendly_ai_prose(text: str) -> str:
+    """Translate model-facing tuning jargon into business-friendly wording.
+
+    This is presentation normalization only. It must not invent a new rewrite,
+    claim an index/runtime result, or change any deterministic authority.
+    """
+
+    if not text:
+        return text
+
+    # Rewrite common "JOIN / window function" phrasing as an action the SQL
+    # author can understand without learning optimizer terminology.
+    text = re.sub(
+        r"可評估改用\s*JOIN\s*或\s*(?:視窗函數|Window\s+Function)\s*集中取得",
+        "可評估先把需要的資料整理好，再和主要資料一起查",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"可評估改用\s*JOIN\s*集中取得",
+        "可評估先把需要的資料整理好，再和主要資料一起查",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    for old, new in _BUSINESS_FRIENDLY_PROSE_REPLACEMENTS:
+        text = text.replace(old, new)
+
+    # If a window-function term still appears in another sentence, remove the
+    # DBA vocabulary while retaining the actionable direction.
+    text = re.sub(r"(?:視窗函數|Window\s+Function)", "先整理資料", text, flags=re.IGNORECASE)
+    return text
+
+
 def _sanitize_user_prose(
     text: str,
     vocab: dict[str, str],
@@ -531,7 +586,8 @@ def _sanitize_user_prose(
 ) -> str:
     text = _apply_vocabulary(text, vocab)
     text = _humanize_internal_placeholders(text, literal_hints)
-    return _sanitize_unobservable_db_claims(text)
+    text = _sanitize_unobservable_db_claims(text)
+    return _business_friendly_ai_prose(text)
 
 
 def _configured_cost_threshold(rules_config: dict[str, Any]) -> int | None:
@@ -1035,12 +1091,11 @@ def _filter_advice(
             continue
         title = _sanitize_user_prose(raw_title, {}, literal_hints)
         explanation = _sanitize_user_prose(raw_explanation, {}, literal_hints)
+        # The score belongs to the AI suggestion direction, while the
+        # verification badge separately tells the user what the system could
+        # prove. Business-friendly wording normalization therefore must not
+        # erase a valid model-provided confidence score.
         confidence_score = normalize_confidence_score(item.confidence_score)
-        # A confidence score describes the model's own advice. If the server
-        # had to alter the prose while sanitizing it, the final wording is no
-        # longer the exact advice the model scored.
-        if title != item.title or explanation != item.explanation:
-            confidence_score = None
         # Keep the sanitized model wording for pattern classification even if
         # a lower safety layer later replaces the user-facing text.
         guard_title = title
@@ -1055,6 +1110,10 @@ def _filter_advice(
         assumption: str | None = None
         safety_issue = _advice_example_safety_issue(source_sql, before, example) if example else None
         if safety_issue is not None:
+            # The user-facing advice is now server-replaced because the model
+            # invented or altered unsafe SQL details. Do not keep the
+            # item-level score on text the model did not actually author; the
+            # frontend may still show overall AI assessment confidence.
             confidence_score = None
             logger.info("ai_service: advice SQL example hidden by deterministic safety guard: %s", safety_issue)
             example = None

@@ -1838,7 +1838,7 @@ async def test_long_sql_gate_stays_closed_while_openrouter_fallback_budget_is_la
         captured["payload"] = payload
         captured["retry_payload"] = retry_payload
         captured["retry_max_output_tokens"] = retry_max_output_tokens
-        return raw, None, False
+        return raw, None, True
 
     monkeypatch.setattr(ai_service, "_request_ai", fake_request_ai)
 
@@ -1855,6 +1855,8 @@ async def test_long_sql_gate_stays_closed_while_openrouter_fallback_budget_is_la
     assert captured["payload"]["candidate_allowed"] is False
     assert captured["retry_payload"]["candidate_allowed"] is False
     assert captured["retry_max_output_tokens"] == 8192
+    assert result.suggested_sql.outcome == "gated"
+    assert "AI 不整段重寫" in result.suggested_sql.reason
 
 
 @respx.mock

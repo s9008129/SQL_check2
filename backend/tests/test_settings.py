@@ -165,3 +165,16 @@ def test_openrouter_truncation_retry_budget_can_be_overridden(monkeypatch):
         assert settings.llm.truncation_retry_max_output_tokens == 6144
     finally:
         get_settings.cache_clear()
+
+
+def test_openrouter_truncation_retry_budget_is_clamped_to_profile_cap(monkeypatch):
+    monkeypatch.setenv("SQLCHECK_LLM_PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "secret-for-test")
+    monkeypatch.setenv("OPENROUTER_TRUNCATION_RETRY_MAX_OUTPUT_TOKENS", "50000")
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+        assert settings.llm.max_output_tokens == 3072
+        assert settings.llm.truncation_retry_max_output_tokens == 16384
+    finally:
+        get_settings.cache_clear()

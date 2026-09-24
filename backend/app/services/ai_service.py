@@ -2069,9 +2069,14 @@ async def get_ai_result(
         )
         if raw is None:
             return _unavailable(failure_kind)
-        if used_retry:
+        if used_retry and candidate_allowed:
+            # The first attempt was allowed to emit a full rewrite, but the
+            # recovery attempt is advice-only, so explain that downgrade.
             candidate_allowed = False
             decline_code = "rewrite_truncated"
+        # If the request was already gated before the provider call (for
+        # example a very long SQL), keep its original decline_code. The
+        # larger truncation fallback must not disguise the real gate reason.
 
         original_notice_count = 0
         if representative is not None:

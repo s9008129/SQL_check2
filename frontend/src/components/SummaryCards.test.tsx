@@ -69,13 +69,40 @@ describe("SummaryCards — improvement colour states", () => {
     expect(list.textContent).not.toContain("+60 分");
   });
 
-  it("renders the green 目前良好 state", () => {
+  it("renders the green 目前良好 state when there are no rule suggestions", () => {
     const result = makeResult({
       improvement: { score: 20, level: "GOOD", label: "目前良好", color: "green", breakdown: [] },
+      rules: [
+        {
+          rule_id: "R001",
+          name: "COST",
+          status: "PASS",
+          evidence: "20,000",
+          note: "符合規範門檻",
+        },
+      ],
     });
     render(<SummaryCards result={result} />);
     expect(screen.getByText("20 / 100")).toBeTruthy();
     expect(screen.getByText("目前良好")).toBeTruthy();
+    expect(screen.queryByText("可再改善")).toBeNull();
+  });
+
+  it("shows 可再改善 for a GOOD score when deterministic rules still have suggestions", () => {
+    const result = makeResult({
+      improvement: { score: 58, level: "GOOD", label: "目前良好", color: "green", breakdown: [] },
+      compliance: { status: "PASS", label: "符合中心規範", notice_count: 2, block_count: 0 },
+      rules: [
+        { rule_id: "R001", name: "COST", status: "PASS", evidence: "88,640", note: "符合規範門檻" },
+        { rule_id: "R004", name: "LIKE 前置萬用字元", status: "NOTICE", evidence: "1 處", note: "建議" },
+        { rule_id: "R006", name: "OR 條件", status: "NOTICE", evidence: "1 處", note: "建議" },
+      ],
+    });
+    const { container } = render(<SummaryCards result={result} />);
+    expect(screen.getByText("58 / 100")).toBeTruthy();
+    expect(screen.getByTestId("improvement-level").textContent).toBe("可再改善");
+    expect(screen.queryByText("目前良好")).toBeNull();
+    expect(container.querySelector(".tone-green")).toBeTruthy();
   });
 
   it("renders the red 優先改善 state", () => {

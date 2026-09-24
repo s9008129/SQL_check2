@@ -23,7 +23,7 @@ const FRIENDLY_EVIDENCE_COPY: Record<string, FriendlyEvidenceCopy> = {
   },
   ORACLE11G_PREFIX_LIKE_RANGE_SCAN: {
     title: "從固定文字開頭比對",
-    summary: "像 '13%' 這種從固定文字開頭比對的寫法，比較容易先縮小要找的資料範圍。",
+    summary: "LIKE 從固定文字開頭比對時，比較容易先縮小要找的資料範圍。",
   },
   ORACLE11G_LEADING_WILDCARD_RANGE_LIMIT: {
     title: "前面有萬用字元",

@@ -38,6 +38,10 @@ function findCostRule(rules: RuleRow[]): RuleRow | undefined {
   return rules.find((r) => r.rule_id === "R001") ?? rules.find((r) => r.name.includes("COST"));
 }
 
+function hasRuleSuggestions(rules: RuleRow[]): boolean {
+  return rules.some((rule) => rule.status === "NOTICE" || rule.status === "REVIEW");
+}
+
 const STATUS_VALUE_STYLE: React.CSSProperties = { fontSize: 26 };
 
 /**
@@ -66,6 +70,11 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
   const aiPending = ai.status === "pending";
   const aiUnavailable = ai.status === "unavailable";
   const improvementColor = improvementTone(improvement.color);
+  // 保留後端已定版的改善指數分數／等級與色彩，只修正使用者可見語意：
+  // GOOD 代表整體優先度較低，不代表「完全沒有建議」。當 deterministic
+  // 規則仍有 NOTICE / REVIEW 時，以「可再改善」避免和同頁的建議數互相矛盾。
+  const improvementDisplayLabel =
+    improvement.level === "GOOD" && hasRuleSuggestions(rules) ? "可再改善" : improvement.label;
 
   return (
     <section className="summary" aria-label="檢核摘要">
@@ -93,7 +102,7 @@ export default function SummaryCards({ result }: SummaryCardsProps) {
         <div className="m-top">
           <div className="m-label">改善指數</div>
           <div className="m-icon m-icon-text" data-testid="improvement-level">
-            {improvement.label}
+            {improvementDisplayLabel}
           </div>
         </div>
         <div className="score-line">

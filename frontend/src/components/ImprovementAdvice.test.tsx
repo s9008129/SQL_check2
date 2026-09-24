@@ -78,7 +78,7 @@ describe("ImprovementAdvice", () => {
       />,
     );
 
-    expect(screen.getByTestId("oracle-evidence-count").textContent).toContain("改善重點 1 項");
+    expect(screen.getByTestId("oracle-evidence-count").textContent).toContain("Oracle 依據 1 項");
     expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("Oracle 11g 官方依據");
     expect(screen.getByTestId("oracle-evidence-note").textContent).toContain(
       "本區效能改善原則參考 Oracle 11g R2 官方",

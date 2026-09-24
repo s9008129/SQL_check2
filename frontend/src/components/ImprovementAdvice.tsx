@@ -126,7 +126,7 @@ export default function ImprovementAdvice({ ai, performanceEvidence = [] }: Impr
           <div className="advice-badges">
             {performanceEvidence.length > 0 && (
               <span className="badge yellow" data-testid="oracle-evidence-count">
-                改善重點 {performanceEvidence.length} 項
+                Oracle 依據 {performanceEvidence.length} 項
               </span>
             )}
             {ai.status === "ok" && <span className="badge purple">AI 建議 {visibleAdvice.length} 項</span>}

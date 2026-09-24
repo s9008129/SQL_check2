@@ -49,6 +49,7 @@ def _good_inner(**overrides) -> dict:
                 "before": "A.Y = :STR_001 OR A.Y = :STR_002",
                 "example": "A.Y IN (:STR_001, :STR_002)",
                 "impact": "high",
+                "confidence_score": 90,
             }
         ],
         "suggested_sql": {
@@ -521,8 +522,12 @@ def test_system_prompt_targets_business_sql_writers_and_avoids_dba_jargon():
     assert "會寫 SQL 的業務同仁，不是 DBA" in prompt
     assert "explanation **優先只寫 1 句**" in prompt
     assert "30～60 個中文字" in prompt
-    assert "同一張表重複查最新資料，可評估先集中取得再 JOIN" in prompt
-    assert "不要寫「可改用 Window Function／ROW_NUMBER」" in prompt
+    assert "索引存取潛力" in prompt
+    assert "相關子查詢" in prompt
+    assert "視窗函數" in prompt
+    assert "目前每筆資料都會另外查一次" in prompt
+    assert "可評估先把需要的資料整理好，再和主要資料一起查" in prompt
+    assert "不要寫「改用 JOIN／視窗函數／ROW_NUMBER」" in prompt
     assert "不要使用「評估相關子查詢結構」「分析執行路徑」" in prompt
     assert "智慧改善建議只處理「效能改善」" in prompt
     assert "更簡潔、更容易閱讀" in prompt
@@ -617,6 +622,70 @@ def test_system_prompt_tells_model_how_to_word_advice_only_reason():
     assert "suggested_sql.reason 也必須**逐字等於**" in prompt
     assert "這段 required_explanation 是完整答案" in prompt
     assert "不得再加" in prompt
+
+
+def test_filter_advice_translates_dba_jargon_and_keeps_ai_confidence():
+    from app.schemas import AdviceItem
+
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="減少重複查詢",
+                explanation=(
+                    "目前在 SELECT 中使用相關子查詢計算總額，可評估改用 JOIN 或視窗函數集中取得，"
+                    "但需確認是否會影響重複列或聚合結果。"
+                ),
+                example="",
+                impact="medium",
+                confidence_score=70,
+            )
+        ],
+        [],
+        {},
+        source_sql="SELECT A.X FROM T A",
+    )
+
+    assert result[0].confidence_score == 70
+    assert "相關子查詢" not in result[0].explanation
+    assert "視窗函數" not in result[0].explanation
+    assert "重複列" not in result[0].explanation
+    assert "聚合結果" not in result[0].explanation
+    assert "先把需要的資料整理好，再和主要資料一起查" in result[0].explanation
+    assert "重複資料" in result[0].explanation
+    assert "加總或統計結果" in result[0].explanation
+
+
+def test_filter_advice_replaces_index_access_potential_with_plain_language_and_keeps_confidence():
+    from app.schemas import AdviceItem
+
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                title="直接比對原始欄位",
+                explanation="減少欄位端函數處理，讓條件直接比對原始欄位，值得評估索引存取潛力。",
+                before="SUBSTR(A.CODE, 1, 2) = '13'",
+                example="A.CODE LIKE '13%'",
+                impact="high",
+                confidence_score=95,
+            )
+        ],
+        [],
+        {},
+        source_sql="SELECT A.X FROM T A WHERE SUBSTR(A.CODE, 1, 2) = '13'",
+    )
+
+    assert result[0].confidence_score == 95
+    assert "索引存取潛力" not in result[0].explanation
+    assert "這一段可以優先調整" in result[0].explanation
+
+
+def test_raw_ai_response_requires_confidence_for_every_advice_item():
+    from pydantic import ValidationError
+
+    raw = _good_inner()
+    raw["advice"][0].pop("confidence_score")
+    with pytest.raises(ValidationError):
+        ai_service._AiRawResponse.model_validate(raw)
 
 
 def test_cross_column_or_advice_is_normalized_without_union_or_performance_claim():

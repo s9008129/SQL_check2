@@ -365,6 +365,44 @@ async def test_openrouter_adapter_uses_chat_completions_and_strict_json_schema(b
     assert reply.provider == "openrouter"
 
 
+@respx.mock
+async def test_openrouter_per_request_output_budget_overrides_profile_default(base_llm):
+    settings = _openrouter_settings(base_llm)
+    route = respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": '{"summary":"ok"}'},
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 25,
+                    "completion_tokens": 6,
+                    "total_tokens": 31,
+                },
+            },
+        )
+    )
+
+    async with httpx.AsyncClient() as client:
+        await llm_provider.generate_structured_json(
+            client,
+            settings,
+            system_prompt="system",
+            user_content="user",
+            response_schema={"type": "object"},
+            context_window=16384,
+            max_output_tokens=8192,
+        )
+
+    body = json.loads(route.calls[0].request.content)
+    assert settings.max_output_tokens == 3072
+    assert body["max_tokens"] == 8192
+
+
 async def test_openrouter_missing_api_key_fails_as_configuration(base_llm):
     settings = dataclasses.replace(_openrouter_settings(base_llm), api_key=None)
     async with httpx.AsyncClient() as client:

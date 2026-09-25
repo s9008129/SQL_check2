@@ -20,11 +20,11 @@ jobs:
     timeout-minutes: 60
     env:
       SQLCHECK_LLM_PROVIDER: openrouter
-      OPENROUTER_API_KEY: \${{ secrets.OPENROUTER_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       OPENROUTER_BASE_URL: "https://openrouter.ai/api/v1"
       OPENROUTER_MODEL: "google/gemma-4-31b-it"
       SQLCHECK_ARCHIVE_ENABLED: "false"
-      RUN_ROOT: data/e2e_openrouter_complex_\${{ github.run_id }}_\${{ github.run_attempt }}
+      RUN_ROOT: data/e2e_openrouter_complex_${{ github.run_id }}_${{ github.run_attempt }}
 
     steps:
       - name: Checkout QA branch
@@ -108,24 +108,23 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          uv run --frozen --python 3.12 \
-            python ../.github/e2e/qa_openrouter_complex_acceptance.py "../$RUN_ROOT" \
-            2>&1 | tee "../$RUN_ROOT/logs/complex_live.txt"
+          uv run --frozen --python 3.12             python ../.github/e2e/qa_openrouter_complex_acceptance.py "../$RUN_ROOT"             2>&1 | tee "../$RUN_ROOT/logs/complex_live.txt"
 
       - name: Install Chromium for browser acceptance
         shell: bash
         run: |
           set -o pipefail
-          uv run --with "playwright==1.55.0" playwright install --with-deps chromium \
-            2>&1 | tee "$RUN_ROOT/logs/playwright_install.txt"
+          uv run --with "playwright==1.55.0" playwright install --with-deps chromium             2>&1 | tee "$RUN_ROOT/logs/playwright_install.txt"
 
       - name: Start SQLCheck production-style frontend server
         working-directory: backend
         shell: bash
         run: |
           set -euo pipefail
-          uv run --frozen --python 3.12 uvicorn app.main:app --host 127.0.0.1 --port 8000 \
-            > "../$RUN_ROOT/logs/ui_server.txt" 2>&1 &
+          rm -rf static
+          mkdir -p static
+          cp -R ../frontend/dist/. static/
+          uv run --frozen --python 3.12 uvicorn app.main:app --host 127.0.0.1 --port 8000             > "../$RUN_ROOT/logs/ui_server.txt" 2>&1 &
           echo $! > "../$RUN_ROOT/ui_server.pid"
           for i in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:8000/ >/dev/null; then
@@ -134,18 +133,14 @@ jobs:
             sleep 1
           done
           echo "::error::UI server did not become ready"
+          cat "../$RUN_ROOT/logs/ui_server.txt" || true
           exit 30
 
       - name: Run 1920x1080 browser UI acceptance
         shell: bash
         run: |
           set -o pipefail
-          uv run --with "playwright==1.55.0" \
-            python .github/e2e/qa_ui_acceptance.py \
-            --results "$RUN_ROOT/results.json" \
-            --out "$RUN_ROOT" \
-            --base-url "http://127.0.0.1:8000" \
-            2>&1 | tee "$RUN_ROOT/logs/ui_acceptance.txt"
+          uv run --with "playwright==1.55.0"             python .github/e2e/qa_ui_acceptance.py             --results "$RUN_ROOT/results.json"             --out "$RUN_ROOT"             --base-url "http://127.0.0.1:8000"             2>&1 | tee "$RUN_ROOT/logs/ui_acceptance.txt"
 
       - name: Build combined automated report
         if: always()
@@ -197,8 +192,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -R -n -E 'Authorization:[[:space:]]*Bearer|Bearer[[:space:]]+[A-Za-z0-9._-]{20,}|sk-or-v1-[A-Za-z0-9._-]+' \
-            "$RUN_ROOT" --exclude='secret_scan.txt' > "$RUN_ROOT/secret_scan.txt"; then
+          if grep -R -n -E 'Authorization:[[:space:]]*Bearer|Bearer[[:space:]]+[A-Za-z0-9._-]{20,}|sk-or-v1-[A-Za-z0-9._-]+'             "$RUN_ROOT" --exclude='secret_scan.txt' > "$RUN_ROOT/secret_scan.txt"; then
             echo "::error::Potential credential material detected in evidence."
             exit 31
           else
@@ -226,10 +220,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qa-openrouter-complex-e2e-\${{ github.run_id }}-\${{ github.run_attempt }}
+          name: qa-openrouter-complex-e2e-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            \${{ env.RUN_ROOT }}
-            \${{ env.RUN_ROOT }}.zip
+            ${{ env.RUN_ROOT }}
+            ${{ env.RUN_ROOT }}.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -241,8 +235,13 @@ jobs:
           import json, os
           from pathlib import Path
           root=Path(os.environ["RUN_ROOT"])
-          model=json.loads((root/"results.json").read_text(encoding="utf-8"))
-          ui=json.loads((root/"ui_results.json").read_text(encoding="utf-8"))
+          model_path=root/"results.json"
+          ui_path=root/"ui_results.json"
+          if not model_path.exists() or not ui_path.exists():
+              print("acceptance_gate=False missing results")
+              raise SystemExit(2)
+          model=json.loads(model_path.read_text(encoding="utf-8"))
+          ui=json.loads(ui_path.read_text(encoding="utf-8"))
           ms=model["summary"]; us=ui["summary"]
           ok = bool(ms.get("all_case_model_api_pass")) and bool(ms.get("controlled_truncation_probe",{}).get("passed")) and bool(us.get("all_ui_pass"))
           print(f"acceptance_gate={ok}")

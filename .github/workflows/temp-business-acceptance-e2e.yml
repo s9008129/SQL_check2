@@ -77,6 +77,15 @@ jobs:
           npm ci 2>&1 | tee "../$RUN_ROOT/logs/npm_ci.txt"
           npm run build 2>&1 | tee "../$RUN_ROOT/logs/frontend_build.txt"
 
+      - name: Stage built frontend for FastAPI static serving
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf backend/static
+          mkdir -p backend/static
+          cp -R frontend/dist/. backend/static/
+          test -f backend/static/index.html
+
       - name: Install Chromium for visual acceptance
         shell: bash
         run: |
@@ -100,6 +109,8 @@ jobs:
             fi
             sleep 2
           done
+          curl -fsS http://127.0.0.1:8000/ > "$RUN_ROOT/logs/index.html"
+          grep -q '<div id="root"></div>' "$RUN_ROOT/logs/index.html"
           python - <<'PY'
           import json
           import os

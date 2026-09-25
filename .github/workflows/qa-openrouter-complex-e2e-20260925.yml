@@ -1,0 +1,250 @@
+name: QA OpenRouter Complex E2E 20260925
+
+on:
+  push:
+    branches:
+      - qa/openrouter-complex-e2e-20260925
+    paths:
+      - ".github/workflows/qa-openrouter-complex-e2e-20260925.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-openrouter-complex-e2e-20260925
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SQLCHECK_LLM_PROVIDER: openrouter
+      OPENROUTER_API_KEY: \${{ secrets.OPENROUTER_API_KEY }}
+      OPENROUTER_BASE_URL: "https://openrouter.ai/api/v1"
+      OPENROUTER_MODEL: "google/gemma-4-31b-it"
+      SQLCHECK_ARCHIVE_ENABLED: "false"
+      RUN_ROOT: data/e2e_openrouter_complex_\${{ github.run_id }}_\${{ github.run_attempt }}
+
+    steps:
+      - name: Checkout QA branch
+        uses: actions/checkout@v4
+
+      - name: Prepare evidence tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUN_ROOT/logs"
+
+      - name: Verify OpenRouter secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "::error::OPENROUTER_API_KEY secret is unavailable."
+            exit 20
+          fi
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install uv
+        run: python -m pip install --disable-pip-version-check "uv==0.12.5"
+
+      - name: Backend regression and Ruff
+        working-directory: backend
+        env:
+          SQLCHECK_LLM_PROVIDER: ollama
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run --frozen --python 3.12 pytest -p no:cacheprovider -q 2>&1 | tee "../$RUN_ROOT/logs/backend_pytest.txt"
+          uv run --frozen --python 3.12 ruff check . 2>&1 | tee "../$RUN_ROOT/logs/ruff.txt"
+
+      - name: Frontend regression and production build
+        working-directory: frontend
+        shell: bash
+        run: |
+          set -o pipefail
+          npm ci 2>&1 | tee "../$RUN_ROOT/logs/npm_ci.txt"
+          npm test -- --run 2>&1 | tee "../$RUN_ROOT/logs/frontend_tests.txt"
+          npm run build 2>&1 | tee "../$RUN_ROOT/logs/frontend_build.txt"
+
+      - name: OpenRouter preflight
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --frozen --python 3.12 python - <<'PY' > "../$RUN_ROOT/logs/provider_preflight.txt" 2>&1
+          import asyncio
+          from app.settings import get_settings
+          from app.services import llm_provider
+          s = get_settings().llm
+          print(f"provider={s.provider}")
+          print(f"base_url={s.base_url}")
+          print(f"model={s.model}")
+          print(f"api_key_present={bool(s.api_key)}")
+          available = asyncio.run(llm_provider.check_available(s))
+          print(f"provider_available={available}")
+          if s.provider != "openrouter":
+              raise SystemExit("provider mismatch")
+          if s.model != "google/gemma-4-31b-it":
+              raise SystemExit("model mismatch")
+          if not s.api_key or not available:
+              raise SystemExit("provider unavailable")
+          PY
+
+      - name: Run 12 complex live OpenRouter cases
+        working-directory: backend
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run --frozen --python 3.12 \
+            python ../.github/e2e/qa_openrouter_complex_acceptance.py "../$RUN_ROOT" \
+            2>&1 | tee "../$RUN_ROOT/logs/complex_live.txt"
+
+      - name: Install Chromium for browser acceptance
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run --with "playwright==1.55.0" playwright install --with-deps chromium \
+            2>&1 | tee "$RUN_ROOT/logs/playwright_install.txt"
+
+      - name: Start SQLCheck production-style frontend server
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --frozen --python 3.12 uvicorn app.main:app --host 127.0.0.1 --port 8000 \
+            > "../$RUN_ROOT/logs/ui_server.txt" 2>&1 &
+          echo $! > "../$RUN_ROOT/ui_server.pid"
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8000/ >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::UI server did not become ready"
+          exit 30
+
+      - name: Run 1920x1080 browser UI acceptance
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run --with "playwright==1.55.0" \
+            python .github/e2e/qa_ui_acceptance.py \
+            --results "$RUN_ROOT/results.json" \
+            --out "$RUN_ROOT" \
+            --base-url "http://127.0.0.1:8000" \
+            2>&1 | tee "$RUN_ROOT/logs/ui_acceptance.txt"
+
+      - name: Build combined automated report
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["RUN_ROOT"])
+          model_path = root / "results.json"
+          ui_path = root / "ui_results.json"
+          model = json.loads(model_path.read_text(encoding="utf-8")) if model_path.exists() else {"summary":{"problems":["results.json missing"]},"cases":[]}
+          ui = json.loads(ui_path.read_text(encoding="utf-8")) if ui_path.exists() else {"summary":{"problems":["ui_results.json missing"]},"cases":[]}
+          ms = model["summary"]
+          us = ui["summary"]
+          model_ok = bool(ms.get("all_case_model_api_pass")) and bool(ms.get("controlled_truncation_probe",{}).get("passed"))
+          ui_ok = bool(us.get("all_ui_pass"))
+          verdict = "PASS_AUTOMATED" if model_ok and ui_ok else "FAIL_OR_REVIEW"
+          lines = [
+              "# SQLCheck AI — OpenRouter Gemma 4 31B 複雜 SQL E2E 自動驗收",
+              "",
+              f"- Automated verdict: **{verdict}**",
+              f"- Live model/API cases: {ms.get('case_pass_count',0)}/{ms.get('case_count',0)}",
+              f"- 1920×1080 browser UI cases: {us.get('ui_pass_count',0)}/{us.get('case_count',0)}",
+              f"- Issue #37 controlled 32→8192 fallback: {'PASS' if ms.get('controlled_truncation_probe',{}).get('passed') else 'FAIL'}",
+              "- Provider: OpenRouter",
+              "- Model: google/gemma-4-31b-it",
+              "- SQL data: synthetic only",
+              "",
+              "## 自動檢查問題",
+          ]
+          problems = list(ms.get("problems") or []) + list(us.get("problems") or [])
+          if problems:
+              lines.extend(f"- {x}" for x in problems)
+          else:
+              lines.append("- 無。")
+          lines += [
+              "",
+              "## 注意",
+              "- Apple 簡約淺色系屬視覺設計判斷，自動檢查只量測字級、字重、圖卡、背景亮度、色系區分與溢位；仍需人工看 screenshot。",
+              "- Browser screenshots 使用同一輪 live OpenRouter final API 結果 replay，不再次呼叫模型。",
+              "- 本輪未執行 Native Print Preview；使用者本次驗收標準未要求列印。",
+          ]
+          (root / "AUTOMATED_REPORT.md").write_text("\n".join(lines)+"\n", encoding="utf-8")
+          PY
+
+      - name: Scan evidence for secrets
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R -n -E 'Authorization:[[:space:]]*Bearer|Bearer[[:space:]]+[A-Za-z0-9._-]{20,}|sk-or-v1-[A-Za-z0-9._-]+' \
+            "$RUN_ROOT" --exclude='secret_scan.txt' > "$RUN_ROOT/secret_scan.txt"; then
+            echo "::error::Potential credential material detected in evidence."
+            exit 31
+          else
+            echo "NO_CREDENTIAL_PATTERN_HITS" > "$RUN_ROOT/secret_scan.txt"
+          fi
+          {
+            echo "sha=$GITHUB_SHA"
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+            echo "branch=$GITHUB_REF_NAME"
+          } > "$RUN_ROOT/run_info.txt"
+          find "$RUN_ROOT" -type f -printf '%P\t%s bytes\n' | sort > "$RUN_ROOT/manifest.txt"
+
+      - name: Package complete evidence ZIP
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$RUN_ROOT.zip"
+          python -m zipfile -c "$ZIP" "$RUN_ROOT"
+          python -m zipfile -l "$ZIP" > "$RUN_ROOT/zip_manifest.txt"
+          test -s "$ZIP"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-openrouter-complex-e2e-\${{ github.run_id }}-\${{ github.run_attempt }}
+          path: |
+            \${{ env.RUN_ROOT }}
+            \${{ env.RUN_ROOT }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce acceptance gate
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ["RUN_ROOT"])
+          model=json.loads((root/"results.json").read_text(encoding="utf-8"))
+          ui=json.loads((root/"ui_results.json").read_text(encoding="utf-8"))
+          ms=model["summary"]; us=ui["summary"]
+          ok = bool(ms.get("all_case_model_api_pass")) and bool(ms.get("controlled_truncation_probe",{}).get("passed")) and bool(us.get("all_ui_pass"))
+          print(f"acceptance_gate={ok}")
+          raise SystemExit(0 if ok else 2)
+          PY

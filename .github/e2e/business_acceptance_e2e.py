@@ -514,6 +514,42 @@ def main(out: Path) -> int:
             flush=True,
         )
 
+    # Reliability follow-up: Q08 exposed an unusually verbose DISTINCT + leading-wildcard
+    # combination in the first run. Re-run it three independent times so a one-off
+    # provider/model sample is not mistaken for a deterministic product failure.
+    reliability_dir = out / "reliability"
+    reliability_dir.mkdir(exist_ok=True)
+    q08 = next(case for case in CASES if case["id"] == "Q08")
+    reliability_rows: list[dict[str, Any]] = []
+    for repeat in range(1, 4):
+        print(f"[REPEAT] Q08 r{repeat}", flush=True)
+        started = time.perf_counter()
+        try:
+            repeated = post_analyze(q08)
+            transport = None
+        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+            repeated = {}
+            transport = type(exc).__name__
+        elapsed = round(time.perf_counter() - started, 2)
+        if repeated:
+            (reliability_dir / f"Q08_r{repeat}.json").write_text(
+                json.dumps(repeated, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            )
+        repeated_ai = repeated.get("ai") or {}
+        reliability_rows.append({
+            "repeat": repeat,
+            "elapsed_seconds": elapsed,
+            "transport_error": transport,
+            "ai_status": repeated_ai.get("status"),
+            "degrade_code": repeated_ai.get("degrade_code"),
+            "advice_count": len(repeated_ai.get("advice") or []),
+            "evidence_count": len(repeated.get("performance_evidence") or []),
+            "outcome": (repeated_ai.get("suggested_sql") or {}).get("outcome"),
+        })
+    (out / "q08_reliability.json").write_text(
+        json.dumps(reliability_rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
     (out / "api_acceptance.json").write_text(
         json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
@@ -537,6 +573,7 @@ def main(out: Path) -> int:
     for row in rows:
         problems = (
             ([f"transport={row['transport_error']}"] if row["transport_error"] else [])
+            + ([f"ai_status={row['ai_status']} degrade_code={row['degrade_code']}"] if row["ai_status"] != "ok" else [])
             + row["safety_problems"]
             + row["friendly_heuristic_problems"]
             + row["evidence_problems"]
@@ -546,6 +583,12 @@ def main(out: Path) -> int:
             md.append(f"- **{row['id']}**：" + "；".join(problems))
     if not any_problem:
         md.append("- 無。")
+    md += ["", "## Q08 可靠度重跑（另做 3 次，不覆蓋第一次結果）"]
+    for item in reliability_rows:
+        md.append(
+            f"- r{item['repeat']}: ai={item['ai_status']}, degrade={item['degrade_code']}, "
+            f"advice={item['advice_count']}, outcome={item['outcome']}, {item['elapsed_seconds']}s"
+        )
 
     (out / "API_MACHINE_REPORT.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return 2 if overall_fail else 0

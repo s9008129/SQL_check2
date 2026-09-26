@@ -1742,7 +1742,7 @@ def _finalize(
 # reply without opening the container log. Unknown kinds fall back to the
 # PRD §56 sentence.
 DEGRADE_MESSAGES: dict[str, str] = {
-    "output_truncated": "SQL 內容較長，AI 回覆超出長度上限，本次未能完成分析；可縮短或拆分 SQL 後再試。",
+    "output_truncated": "AI 回覆內容超出長度上限，本次未能完整產生建議；請再試一次，若仍發生可改為分段檢視。",
     "prompt_truncated": "SQL 內容過長，超出 AI 可處理範圍，請拆分後再試。",
     "timeout": "AI 分析逾時（SQL 較長時約需 2～3 分鐘），請稍後再試一次。",
     "connection": "無法連線 AI 服務，仍可依上方規則檢核結果進行確認。",

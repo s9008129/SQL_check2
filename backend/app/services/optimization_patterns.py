@@ -168,6 +168,45 @@ def _is_plain_column(expr: exp.Expression | None) -> bool:
     return isinstance(expr, exp.Column)
 
 
+def _direct_predicate_function_flags(tree: exp.Expression) -> set[str]:
+    """Detect only functions that are the direct operand of a predicate.
+
+    This deliberately does not descend through another function. For example
+    ``HAVING SUM(NVL(P.AMT, 0)) > 0`` is an aggregate expression whose direct
+    predicate operand is SUM(...), not an NVL condition. Treating any nested
+    ``NVL(`` substring as a predicate produced a real false-positive in the
+    first business E2E acceptance run.
+
+    Rendering with the Oracle dialect keeps vendor spellings such as NVL and
+    TO_CHAR available without relying on sqlglot's internal expression class
+    names, which may change across versions.
+    """
+    flags: set[str] = set()
+    for select in _select_nodes(tree):
+        for root in _condition_roots(select):
+            for pred in _nodes_including_self(root, exp.Predicate):
+                if isinstance(pred, (exp.Between, exp.In)):
+                    sides = (pred.this,)
+                else:
+                    sides = (pred.args.get("this"), pred.args.get("expression"))
+                for side in sides:
+                    if (
+                        not isinstance(side, exp.Func)
+                        or isinstance(side, exp.Connector)
+                        or side.find(exp.Column) is None
+                    ):
+                        continue
+                    rendered = side.sql(dialect="oracle").lstrip().upper()
+                    if rendered.startswith("NVL("):
+                        flags.add("nvl_predicate")
+                    elif rendered.startswith("TRUNC("):
+                        flags.add("trunc_predicate")
+                    elif rendered.startswith("TO_CHAR("):
+                        flags.add("to_char_predicate")
+                    elif rendered.startswith(("UPPER(", "LOWER(")):
+                        flags.add("case_fold_predicate")
+    return flags
+
 def _has_column_expression_join(tree: exp.Expression) -> bool:
     """JOIN ON compares table columns and at least one side transforms a column.
 
@@ -282,4 +321,5 @@ def detect_optimization_patterns(tree: exp.Expression, statement_type: str) -> s
         flags.add("repeated_scalar_aggregate")
     if _has_repeated_source_set_operation(tree):
         flags.add("repeated_source_set_operation")
+    flags.update(_direct_predicate_function_flags(tree))
     return flags

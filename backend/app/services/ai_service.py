@@ -739,6 +739,10 @@ _GUARD_PATTERN_IDS: dict[str, str] = {
 # one card can never borrow the prose guard of another card merely because
 # both patterns appear somewhere in the same SQL.
 _PATTERN_PRESENTATION: dict[str, tuple[str, str]] = {
+    "SUBSTR_EQ_TO_LIKE": (
+        "直接比對原始欄位",
+        "這段 SUBSTR 等式可由系統安全整理成 LIKE，減少欄位先做函數處理；實際效能仍需在測試環境確認。",
+    ),
     "LEADING_WILDCARD_LIKE": (
         "確認模糊搜尋範圍",
         "目前使用前置萬用字元。若業務需求允許縮小比對範圍，可評估其他比對方式；調整前請先確認實際比對需求。",
@@ -1384,26 +1388,26 @@ def _filter_advice(
                 continue
             seen_patterns.add(pattern_id)
 
-        if verification not in _VERIFIED:
-            if pattern_id in _PATTERN_PRESENTATION:
-                server_title, server_explanation = _PATTERN_PRESENTATION[pattern_id]
-                title = server_title
-                explanation = server_explanation
+        if pattern_id in _PATTERN_PRESENTATION:
+            server_title, server_explanation = _PATTERN_PRESENTATION[pattern_id]
+            title = server_title
+            explanation = server_explanation
+            if verification not in _VERIFIED:
                 confidence_score = None
                 verification = "unverified"
-                logger.info("ai_service: advice-only presentation normalized by pattern id")
-            else:
-                guarded_explanation, prose_guard = _guard_unverified_advice_prose(
-                    source_sql,
-                    guard_title,
-                    guard_explanation,
-                    pattern_id=pattern_id,
-                )
-                if prose_guard is not None:
-                    confidence_score = None
-                    explanation = guarded_explanation
-                    verification = "unverified"
-                    logger.info("ai_service: advice-only prose normalized by guard: %s", prose_guard)
+            logger.info("ai_service: advice presentation normalized by pattern id")
+        elif verification not in _VERIFIED:
+            guarded_explanation, prose_guard = _guard_unverified_advice_prose(
+                source_sql,
+                guard_title,
+                guard_explanation,
+                pattern_id=pattern_id,
+            )
+            if prose_guard is not None:
+                confidence_score = None
+                explanation = guarded_explanation
+                verification = "unverified"
+                logger.info("ai_service: advice-only prose normalized by guard: %s", prose_guard)
 
         kept.append(
             AdviceItem(
@@ -2282,6 +2286,7 @@ async def get_ai_result(
             pattern_id
             for pattern_id in exact_pattern_ids | contract_pattern_ids
             if _pattern_evidence_ids(pattern_id)
+            and pattern_id != "OR_SAME_COLUMN_TO_IN"
         }
 
         logger.info(

@@ -261,6 +261,54 @@ COMPACT_RESPONSE_SCHEMA: dict[str, Any] = {
     "required": ["summary", "assessment_confidence_score", "advice", "suggested_sql"],
 }
 
+
+COMPACT_RECOVERY_PROMPT = """
+你是 SQLCheck 的「AI 回覆截斷恢復模式」。前一個模型回覆太長，系統已先用規則引擎完成 SQL 結構判讀；
+你不需要、也不應重新分析完整 SQL，因為這次只會收到已驗證的 pattern 清單與少量結構資訊。
+
+只輸出符合指定 JSON schema 的 JSON，不要 Markdown、不要解釋 JSON 以外的文字。
+- summary：繁體中文 1 句，最多 50 個中文字。
+- advice：只可使用 allowed_advice_pattern_ids；清單有 1～2 個 id 時，每個 id 各輸出 1 項且不得重複；清單空白時輸出空陣列。
+- 每項 title 最多 16 個中文字；explanation 最多 55 個中文字；example 一律輸出空字串。
+- 不得輸出 SQL 改寫、索引使用、Full Table Scan、Execution Plan、改善百分比、改善後 COST 或任何實測效能宣稱。
+- suggested_sql.available 必須是 false；rewrite_outcome 必須是 "advice_only"；reason 只要 1 句短句。
+- 不要重述 SQL，不要重述資料表或欄位名稱，不要補充清單以外的建議。
+"""
+
+
+def _compact_retry_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Strip long SQL/model context before the one truncation-recovery call.
+
+    Exact pattern selection has already happened deterministically. Recovery
+    therefore needs only the reviewed pattern ids plus tiny server-owned
+    contracts; resending the entire SQL caused Gemma to produce runaway
+    responses even with a compact JSON schema in round-2 E2E.
+    """
+    allowed = [str(x) for x in payload.get("allowed_advice_pattern_ids") or []][:2]
+    contracts: list[dict[str, Any]] = []
+    for item in payload.get("advice_contracts") or []:
+        if not isinstance(item, dict):
+            continue
+        pattern_id = str(item.get("pattern_id") or "")
+        if pattern_id and pattern_id not in allowed:
+            continue
+        compact_item = {
+            "id": item.get("id"),
+            "pattern_id": pattern_id or None,
+            "required_explanation": item.get("required_explanation"),
+        }
+        contracts.append(compact_item)
+
+    return {
+        "mode": "compact_truncation_recovery",
+        "statement_type": payload.get("statement_type"),
+        "compliance": payload.get("compliance"),
+        "cost_context": payload.get("cost_context") or {},
+        "structure_flags": list(payload.get("structure_flags") or [])[:12],
+        "allowed_advice_pattern_ids": allowed,
+        "advice_contracts": contracts[:2],
+    }
+
 class _RawSuggestedSql(BaseModel):
     """The model's own view of suggested_sql. `rewrite_outcome` is optional
     here (a schema-constrained Ollama reply always has it, but a mocked or
@@ -1959,14 +2007,16 @@ async def _one_attempt(
     *,
     max_output_tokens: int | None = None,
     response_schema: dict[str, Any] | None = None,
+    system_prompt: str | None = None,
 ) -> _AiRawResponse:
     """Exactly one provider POST + JSON parse + Pydantic validation."""
 
     user_content = "<SQL_DATA>\n" + json.dumps(payload, ensure_ascii=False) + "\n</SQL_DATA>"
     request_max_output_tokens = max_output_tokens or settings.llm.max_output_tokens
+    active_system_prompt = system_prompt or SYSTEM_PROMPT
     num_ctx = _num_ctx_for(
         settings,
-        SYSTEM_PROMPT,
+        active_system_prompt,
         user_content,
         max_output_tokens=request_max_output_tokens,
     )
@@ -1980,7 +2030,7 @@ async def _one_attempt(
     reply = await llm_provider.generate_structured_json(
         client,
         settings.llm,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=active_system_prompt,
         user_content=user_content,
         response_schema=response_schema or RESPONSE_SCHEMA,
         context_window=num_ctx,
@@ -2116,9 +2166,14 @@ async def _request_ai(
                     truncation_retry_tokens,
                     remaining(),
                 )
-                second_payload = retry_payload
+                second_payload = _compact_retry_payload(retry_payload)
                 second_output_tokens = truncation_retry_tokens
                 used_retry = True
+                logger.info(
+                    "ai_service: compact truncation recovery allowed_patterns=%d structure_flags=%d",
+                    len(second_payload.get("allowed_advice_pattern_ids") or []),
+                    len(second_payload.get("structure_flags") or []),
+                )
             except _NonChineseResponseError:
                 logger.info("ai_service: response not in Chinese — retrying once")
                 second_output_tokens = normal_output_tokens
@@ -2139,6 +2194,7 @@ async def _request_ai(
                         second_payload,
                         max_output_tokens=second_output_tokens,
                         response_schema=COMPACT_RESPONSE_SCHEMA if used_retry else None,
+                        system_prompt=COMPACT_RECOVERY_PROMPT if used_retry else None,
                     ),
                     None,
                     used_retry,

@@ -679,6 +679,85 @@ _ADVICE_ONLY_PROSE_GUARDS: tuple[tuple[str, re.Pattern[str], re.Pattern[str], st
     ),
 )
 
+
+_GUARD_PATTERN_IDS: dict[str, str] = {
+    "leading_wildcard_like": "LEADING_WILDCARD_LIKE",
+    "trunc_condition": "TRUNC_EQ_TO_RANGE",
+    "to_char_condition": "PREDICATE_FUNCTION_GENERIC",
+    "nvl_condition": "NVL_EQ_TO_OR_IS_NULL",
+    "distinct_removal": "DISTINCT_REMOVAL",
+}
+
+# Known ADVICE_ONLY patterns use server-owned presentation copy after the model
+# nominates a valid pattern id. This makes multi-pattern SQL deterministic:
+# one card can never borrow the prose guard of another card merely because
+# both patterns appear somewhere in the same SQL.
+_PATTERN_PRESENTATION: dict[str, tuple[str, str]] = {
+    "LEADING_WILDCARD_LIKE": (
+        "確認模糊搜尋範圍",
+        "目前是從任意位置找文字；如果業務需求允許，可以縮小比對範圍。調整前請先確認實際搜尋需求。",
+    ),
+    "TRUNC_EQ_TO_RANGE": (
+        "直接比對日期欄位",
+        "目前條件先用 TRUNC() 處理欄位再比對。可評估改用原始日期欄位；調整前請先確認欄位型態與比對值是否包含時間。",
+    ),
+    "NVL_EQ_TO_OR_IS_NULL": (
+        "確認空值比對方式",
+        "目前條件用 NVL() 處理空值。可評估改成直接比對原始欄位；調整前請先確認欄位型態與原本的空值規則。",
+    ),
+    "PREDICATE_FUNCTION_GENERIC": (
+        "直接比對原始欄位",
+        "目前條件先把欄位做轉換再比對。若業務條件允許，可評估直接使用原始欄位；調整前請先確認欄位型態與比對需求。",
+    ),
+    "DISTINCT_REMOVAL": (
+        "確認是否真的需要去除重複",
+        "移除 DISTINCT 前，請先確認 JOIN 後是否仍可能出現重複資料；如果會，就不要移除。",
+    ),
+    "OR_CROSS_COLUMN_TO_UNION_ALL": (
+        "確認跨欄位 OR 條件",
+        "這段 OR 連接不同欄位。若要拆開查詢，請先確認兩個條件是否可能同時成立，以及重複資料要如何處理；未確認前不建議改寫。",
+    ),
+    "COMPOSITE_KEY_EXPRESSION_JOIN": (
+        "評估原始欄位勾稽",
+        "目前 JOIN 前先加工欄位再比對。若資料結構允許，可評估直接使用原始欄位勾稽；調整前請先確認欄位寬度、空值與正確關聯鍵。",
+    ),
+    "STRING_CONCAT_PREDICATE_SPLIT": (
+        "確認代碼欄位怎麼拆",
+        "目前先把多個欄位串起來再比對。若要改成分欄位條件，請先確認每個欄位的固定寬度、空值與補空白規則。",
+    ),
+    "LATEST_ROW_CORRELATED_MAX": (
+        "減少重複查詢",
+        "這種寫法可能讓同一來源被重複處理。可評估先整理需要的最新資料，再和主要資料一起查；調整前請先確認同一日期時間是否可能有多筆。",
+    ),
+    "REPEATED_SCALAR_AGGREGATE": (
+        "集中處理重複統計",
+        "這種寫法可能重複計算同一來源的統計資料。可評估先集中計算一次再重用；調整前請先確認各子查詢的條件與空值規則是否相同。",
+    ),
+    "REPEATED_SOURCE_UNION_BRANCH": (
+        "減少重複讀取",
+        "多個查詢區塊重複使用相同來源。可評估把共同資料先整理一次再集中處理；調整前請先確認各區塊的業務條件與合併後結果是否一致。",
+    ),
+}
+
+_REWRITE_RULE_PATTERN_ID: dict[str, str] = {
+    "or_eq_to_in": "OR_SAME_COLUMN_TO_IN",
+    "substr_eq_to_like": "SUBSTR_EQ_TO_LIKE",
+}
+
+def _pattern_evidence_ids(pattern_id: str | None) -> list[str]:
+    """Return only reviewed Oracle evidence ids for one catalog pattern."""
+    if not pattern_id:
+        return []
+    pattern = pattern_selector.get_catalog_pattern(pattern_id)
+    if pattern is None:
+        return []
+    ids: list[str] = []
+    for raw_id in pattern.get("evidence_refs") or ():
+        evidence_id = str(raw_id)
+        if performance_evidence.get_evidence_entry(evidence_id) is not None:
+            ids.append(evidence_id)
+    return ids
+
 _COPYABLE_SQL_IN_PROSE_RE = re.compile(
     r"(?:\b[A-Z_][A-Z0-9_$#]*\.)?[A-Z_][A-Z0-9_$#]*\s*"
     r"(?:=|<>|!=|>=|<=|>|<|\bLIKE\b|\bIN\s*\(|\bIS\s+(?:NOT\s+)?NULL\b)",

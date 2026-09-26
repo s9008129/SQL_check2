@@ -199,6 +199,7 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
 
     # Oracle 11g evidence is selected by deterministic facts, never by AI.
     # A registry/configuration defect must not take down the core rule review.
+    selected_patterns = pattern_selector.PatternSelection()
     try:
         selected_patterns = pattern_selector.select_patterns(
             parsed.statements,
@@ -252,6 +253,16 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
             ai_result = AiResult(status="unavailable", message=_AI_UNAVAILABLE_MESSAGE)
     else:
         ai_result = AiResult(status="pending")
+
+    if payload.include_ai and ai_result.status == "ok" and ai_result.advice:
+        try:
+            performance_evidence_items = performance_evidence.merge_advice_evidence(
+                performance_evidence_items,
+                selected_patterns,
+                ai_result.advice,
+            )
+        except Exception as exc:  # noqa: BLE001 - evidence remains supplemental
+            _log_exception_type_only("AI advice evidence merge failed", exc)
 
     # 2026-09-17 使用者決策：指數完全由確定性事實計算，AI 建議（數量與 impact）
     # 不得影響分數；因此這裡不再傳入任何 AI 輸出。

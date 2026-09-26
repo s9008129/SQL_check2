@@ -1571,7 +1571,7 @@ async def test_request_ai_truncation_retry_uses_larger_budget_even_when_payload_
         )
     )
 
-    async def fake_one_attempt(client, current_settings, current_payload, *, max_output_tokens=None):
+    async def fake_one_attempt(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
         del client, current_settings
         calls.append((current_payload, max_output_tokens))
         if len(calls) == 1:
@@ -1609,7 +1609,7 @@ async def test_request_ai_second_truncation_degrades_without_third_attempt(setti
     payload = {"candidate_allowed": False}
     budgets: list[int | None] = []
 
-    async def always_truncated(client, current_settings, current_payload, *, max_output_tokens=None):
+    async def always_truncated(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
         del client, current_settings, current_payload
         budgets.append(max_output_tokens)
         raise ai_service.llm_provider.LLMOutputTruncatedError(max_output_tokens)
@@ -1643,7 +1643,7 @@ async def test_request_ai_truncation_with_insufficient_deadline_does_not_retry(s
     )
     calls = 0
 
-    async def truncated_once(client, current_settings, current_payload, *, max_output_tokens=None):
+    async def truncated_once(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
         nonlocal calls
         del client, current_settings, current_payload, max_output_tokens
         calls += 1
@@ -1679,7 +1679,7 @@ async def test_request_ai_normal_response_keeps_normal_output_budget(settings, m
     success = ai_service._AiRawResponse.model_validate(_good_inner())
     budgets: list[int | None] = []
 
-    async def succeeds(client, current_settings, current_payload, *, max_output_tokens=None):
+    async def succeeds(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
         del client, current_settings, current_payload
         budgets.append(max_output_tokens)
         return success
@@ -1714,7 +1714,7 @@ async def test_request_ai_invalid_json_retry_does_not_use_truncation_budget(sett
     success = ai_service._AiRawResponse.model_validate(_good_inner())
     budgets: list[int | None] = []
 
-    async def invalid_then_success(client, current_settings, current_payload, *, max_output_tokens=None):
+    async def invalid_then_success(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
         del client, current_settings, current_payload
         budgets.append(max_output_tokens)
         if len(budgets) == 1:

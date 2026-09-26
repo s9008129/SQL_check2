@@ -1600,7 +1600,10 @@ def _finalize_suggested_sql(
         outcome = "advice_only"
 
     source_sql = representative.raw_sql if representative is not None else ""
-    policy_reason = _server_owned_advice_only_reason(source_sql)
+    policy_reason = _server_owned_advice_only_reason(
+        source_sql,
+        representative.complexity_flags if representative is not None else (),
+    )
     if not available and policy_reason is not None and outcome not in {"gated", "rejected"}:
         # A known ADVICE_ONLY pattern cannot become "not_needed" merely
         # because the model overlooked it. The server already knows this

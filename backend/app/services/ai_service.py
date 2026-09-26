@@ -849,7 +849,15 @@ def _build_advice_contracts(
     the token NVL.
     """
     contracts: list[dict[str, Any]] = []
-    flags = set(structure_flags or ())
+    if structure_flags is None:
+        try:
+            parsed = parse_sql_text(source_sql)
+            parsed_statement = next((s for s in parsed.statements if s.parse_status == "ok"), None)
+            flags = set(parsed_statement.complexity_flags if parsed_statement is not None else ())
+        except Exception:
+            flags = set()
+    else:
+        flags = set(structure_flags)
 
     if rewrite_rules.has_cross_column_or(source_sql):
         contracts.append(

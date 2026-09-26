@@ -309,6 +309,77 @@ def _compact_retry_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "advice_contracts": contracts[:2],
     }
 
+COMPACT_SUMMARY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "maxLength": 160},
+        "assessment_confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
+    },
+    "required": ["summary", "assessment_confidence_score"],
+}
+
+_COMPACT_AI_OUTPUT_TOKENS = 512
+
+
+class _CompactAiResponse(BaseModel):
+    summary: str
+    assessment_confidence_score: int
+
+    @field_validator("assessment_confidence_score", mode="before")
+    @classmethod
+    def _strict_confidence(cls, value: object) -> int:
+        normalized = normalize_confidence_score(value)
+        if normalized is None:
+            raise ValueError("assessment_confidence_score must be an integer from 0 to 100")
+        return normalized
+
+
+def _compact_to_raw(parsed: _CompactAiResponse, payload: dict[str, Any]) -> "_AiRawResponse":
+    """Combine a tiny Gemma summary with deterministic Oracle-backed advice.
+
+    Pattern applicability was already decided by the rule engine / Pattern
+    Catalog before the model call. In compact mode the model explains the
+    result; it does not get to invent or veto advice patterns. This sharply
+    reduces output variance while preserving the architecture boundary that
+    AI explains and deterministic rules decide.
+    """
+    allowed = [str(x) for x in payload.get("allowed_advice_pattern_ids") or []][:2]
+    advice: list[AdviceItem] = []
+    for pattern_id in allowed:
+        title: str
+        explanation: str
+        presentation = _PATTERN_PRESENTATION.get(pattern_id)
+        if presentation is not None:
+            title, explanation = presentation
+        else:
+            pattern = pattern_selector.get_catalog_pattern(pattern_id) or {}
+            title = str(pattern.get("name_zh_tw") or "改善方向")
+            explanation = str(
+                pattern.get("model_guidance_zh_tw")
+                or pattern.get("rationale_zh_tw")
+                or "可依 Oracle 官方原則評估此項改善方向。"
+            )
+        advice.append(
+            AdviceItem(
+                pattern_id=pattern_id,
+                title=title,
+                explanation=explanation,
+                example="",
+                confidence_score=parsed.assessment_confidence_score,
+            )
+        )
+
+    return _AiRawResponse(
+        summary=parsed.summary,
+        assessment_confidence_score=parsed.assessment_confidence_score,
+        advice=advice,
+        suggested_sql=_RawSuggestedSql(
+            available=False,
+            reason="本次採用精簡建議模式，只提供已確認的改善方向。",
+            rewrite_outcome="advice_only",
+        ),
+    )
+
 class _RawSuggestedSql(BaseModel):
     """The model's own view of suggested_sql. `rewrite_outcome` is optional
     here (a schema-constrained Ollama reply always has it, but a mocked or
@@ -430,6 +501,7 @@ _DECLINE_REASON_TEXT: dict[str, str] = {
     # "不自動產生建議寫法" read as if nothing followed.
     "too_long_for_rewrite": "這份 SQL 較長，AI 不整段重寫，改為針對可改善的地方逐段提供建議寫法。",
     "rewrite_truncated": "AI 嘗試整段重寫時超出回覆長度上限，改為針對可改善的地方逐段提供建議寫法。",
+    "advice_only_pattern": "這支 SQL 含需要先確認業務前提的改善項目，本次提供逐項建議，不自動整段改寫。",
 }
 
 
@@ -2061,6 +2133,45 @@ async def _one_attempt(
     return parsed
 
 
+async def _one_compact_attempt(
+    client: httpx.AsyncClient,
+    settings: Settings,
+    payload: dict[str, Any],
+    *,
+    max_output_tokens: int = _COMPACT_AI_OUTPUT_TOKENS,
+) -> _AiRawResponse:
+    """One tiny Gemma call used for advice-only or truncation recovery."""
+    compact_payload = _compact_retry_payload(payload)
+    user_content = "<SQL_DATA>\n" + json.dumps(compact_payload, ensure_ascii=False) + "\n</SQL_DATA>"
+    num_ctx = _num_ctx_for(
+        settings,
+        COMPACT_RECOVERY_PROMPT,
+        user_content,
+        max_output_tokens=max_output_tokens,
+    )
+    reply = await llm_provider.generate_structured_json(
+        client,
+        settings.llm,
+        system_prompt=COMPACT_RECOVERY_PROMPT,
+        user_content=user_content,
+        response_schema=COMPACT_SUMMARY_SCHEMA,
+        context_window=num_ctx,
+        max_output_tokens=max_output_tokens,
+    )
+    parsed = _CompactAiResponse.model_validate(json.loads(reply.content))
+    if len(parsed.summary) >= _MIN_SUMMARY_LEN_FOR_LANGUAGE_CHECK and not _CJK_RE.search(parsed.summary):
+        raise _NonChineseResponseError("summary contains no Chinese")
+    logger.info(
+        "ai_service: compact provider=%s model=%s done_reason=%s output_tokens=%s allowed_patterns=%d",
+        reply.provider,
+        reply.model,
+        reply.finish_reason,
+        reply.output_tokens,
+        len(compact_payload.get("allowed_advice_pattern_ids") or []),
+    )
+    _record_call_stats(settings, reply, max_output_tokens=max_output_tokens)
+    return _compact_to_raw(parsed, compact_payload)
+
 # A second attempt only makes sense if the provider still has time to answer.
 _MIN_RETRY_BUDGET_SECONDS = 60.0
 
@@ -2343,6 +2454,16 @@ async def get_ai_result(
             for pattern_id in exact_pattern_ids | contract_pattern_ids
             if _pattern_evidence_ids(pattern_id)
         }
+        exact_advice_only_pattern_ids = {
+            match.pattern_id
+            for match in selection.exact
+            if match.classification == "ADVICE_ONLY"
+            and representative_index is not None
+            and representative_index in match.statement_indexes
+        }
+        if candidate_allowed and exact_advice_only_pattern_ids:
+            candidate_allowed = False
+            decline_code = "advice_only_pattern"
 
         logger.info(
             "ai_service: gate candidate=%s decline_code=%s stmt_type=%s flags=%s where_kind=%s sql_tokens=%d",

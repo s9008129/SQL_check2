@@ -2185,6 +2185,15 @@ async def get_ai_result(
                 and representative_index not in evidence_item.statement_indexes
             ):
                 continue
+            # OR→IN has an Oracle syntax-boundary source (1000 values), not
+            # evidence of a general performance benefit. Keep that source in
+            # the system evidence layer, but do not authorize it as a
+            # user-facing AI performance advice in the real API path.
+            if (
+                performance_evidence_items is not None
+                and evidence_item.pattern_id == "OR_SAME_COLUMN_TO_IN"
+            ):
+                continue
             bucket = evidence_by_pattern_lists.setdefault(evidence_item.pattern_id, [])
             if evidence_item.evidence_id not in bucket:
                 bucket.append(evidence_item.evidence_id)

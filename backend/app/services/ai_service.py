@@ -2228,7 +2228,14 @@ async def _request_ai(
             len(compact_payload.get("structure_flags") or []),
             compact_budget,
         )
-        attempts = 2 if settings.llm.max_retries_on_invalid_json > 0 else 1
+        # A truncation recovery is already the second provider call, so it
+        # never gets a third attempt. A request that starts directly in compact
+        # advice-only mode may retry once for invalid/non-Chinese output.
+        attempts = (
+            1
+            if used_recovery
+            else (2 if settings.llm.max_retries_on_invalid_json > 0 else 1)
+        )
         for attempt in range(attempts):
             if remaining() <= 0:
                 return None, "timeout", used_recovery

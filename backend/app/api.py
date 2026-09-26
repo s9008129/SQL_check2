@@ -245,6 +245,7 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
                 findings=findings,
                 statements=parsed.statements,
                 execution_plan_context=plan_ai_context,
+                performance_evidence_items=performance_evidence_items,
                 settings=settings,
             )
         except Exception as exc:  # noqa: BLE001 - AI must never be a single point of failure (PRD §51)

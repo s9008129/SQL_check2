@@ -531,7 +531,8 @@ def test_system_prompt_targets_business_sql_writers_and_avoids_dba_jargon():
     assert "索引存取潛力" in prompt
     assert "相關子查詢" in prompt
     assert "視窗函數" in prompt
-    assert "目前每筆資料都會另外查一次" in prompt
+    assert "這種寫法可能讓同一來源被重複處理" in prompt
+    assert "目前每筆資料都會另外查一次" not in prompt
     assert "可評估先把需要的資料整理好，再和主要資料一起查" in prompt
     assert "不要寫「改用 JOIN／視窗函數／ROW_NUMBER」" in prompt
     assert "不要使用「評估相關子查詢結構」「分析執行路徑」" in prompt

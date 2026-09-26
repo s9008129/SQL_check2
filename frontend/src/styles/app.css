@@ -492,8 +492,26 @@ mark.legend{margin:0 3px}
   padding-top:8px;
   border-top:1px solid rgba(79,93,112,.12);
   color:#667085;
-  font-size:12px;
+  font-size:14px;
   line-height:1.55;
+}
+.advice-oracle-evidence{
+  display:flex;
+  align-items:flex-start;
+  gap:8px;
+  margin-top:11px;
+  padding:9px 10px;
+  border:1px solid #eadfb9;
+  border-radius:11px;
+  background:#fffdf6;
+  color:#5f5437;
+  font-size:14px;
+  line-height:1.5;
+}
+.advice-oracle-evidence strong{
+  flex:0 0 auto;
+  color:#765d14;
+  font-weight:800;
 }
 .ai-source-badge{
   background:#6c5ce7;

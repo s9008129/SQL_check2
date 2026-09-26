@@ -2286,7 +2286,6 @@ async def get_ai_result(
             pattern_id
             for pattern_id in exact_pattern_ids | contract_pattern_ids
             if _pattern_evidence_ids(pattern_id)
-            and pattern_id != "OR_SAME_COLUMN_TO_IN"
         }
 
         logger.info(

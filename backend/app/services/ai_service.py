@@ -1814,7 +1814,7 @@ def _chat_request_body(settings: Settings, payload: dict[str, Any]) -> dict[str,
         settings.llm,
         system_prompt=SYSTEM_PROMPT,
         user_content=user_content,
-        response_schema=RESPONSE_SCHEMA,
+        response_schema=response_schema or RESPONSE_SCHEMA,
         context_window=num_ctx,
     )
 
@@ -1860,8 +1860,10 @@ async def _one_attempt(
     payload: dict[str, Any],
     *,
     max_output_tokens: int | None = None,
+    response_schema: dict[str, Any] | None = None,
 ) -> _AiRawResponse:
     """Exactly one provider POST + JSON parse + Pydantic validation."""
+
     user_content = "<SQL_DATA>\n" + json.dumps(payload, ensure_ascii=False) + "\n</SQL_DATA>"
     request_max_output_tokens = max_output_tokens or settings.llm.max_output_tokens
     num_ctx = _num_ctx_for(
@@ -2038,6 +2040,7 @@ async def _request_ai(
                         settings,
                         second_payload,
                         max_output_tokens=second_output_tokens,
+                        response_schema=COMPACT_RESPONSE_SCHEMA if used_retry else None,
                     ),
                     None,
                     used_retry,

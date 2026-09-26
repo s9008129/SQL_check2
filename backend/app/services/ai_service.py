@@ -1967,7 +1967,7 @@ async def _one_attempt(
         settings.llm,
         system_prompt=SYSTEM_PROMPT,
         user_content=user_content,
-        response_schema=RESPONSE_SCHEMA,
+        response_schema=response_schema or RESPONSE_SCHEMA,
         context_window=num_ctx,
         max_output_tokens=request_max_output_tokens,
     )

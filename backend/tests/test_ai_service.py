@@ -1758,7 +1758,9 @@ async def test_output_truncation_retries_once_in_advice_only_mode(settings, chat
     first = json.loads(route.calls[0].request.content)["messages"][1]["content"]
     second = json.loads(route.calls[1].request.content)["messages"][1]["content"]
     assert '"candidate_allowed": true' in first
-    assert '"candidate_allowed": false' in second
+    assert '"mode": "compact_truncation_recovery"' in second
+    assert '"candidate_allowed"' not in second
+    assert '"sanitized_sql"' not in second
     assert result.suggested_sql.available is False
     assert result.suggested_sql.outcome == "gated"
     assert "超出回覆長度上限" in result.suggested_sql.reason

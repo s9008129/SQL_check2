@@ -184,6 +184,10 @@ export interface AdviceItem {
   explanation: string;
   example: string | null;
   impact: ImpactLevel | null;
+  /** Server-validated deterministic pattern behind this advice. */
+  pattern_id?: string | null;
+  /** Oracle evidence ids attached by the server; the model cannot invent these. */
+  evidence_ids?: string[];
   /** Model self-assessment of whether this advice applies to the current SQL. */
   confidence_score?: number | null;
   // Original fragment that `example` replaces (verbatim); optional on the

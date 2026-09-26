@@ -47,7 +47,7 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlglot import exp, parse_one
 
-from app.schemas import AdviceItem, AiResult, Finding, SuggestedSql, normalize_confidence_score
+from app.schemas import AdviceItem, AiResult, Finding, PerformanceEvidence, SuggestedSql, normalize_confidence_score
 from app.services import context_adapter, llm_provider, pattern_selector, rewrite_rules, rule_engine
 from app.services.cost_utils import classify_cost_relation, cost_formal_summary, cost_threshold_note
 from app.services.masking import (
@@ -166,7 +166,7 @@ _LLM_SEMAPHORE = asyncio.Semaphore(1)
 RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "summary": {"type": "string"},
+        "summary": {"type": "string", "maxLength": 260},
         # Overall confidence in the whole AI assessment. This is intentionally
         # separate from advice/rewrite confidence so a clean "no change needed"
         # assessment still carries a confidence signal.
@@ -177,37 +177,76 @@ RESPONSE_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "title": {"type": "string"},
-                    "explanation": {"type": "string"},
-                    "example": {"type": "string"},
+                    # The model labels which deterministic exact pattern it is
+                    # explaining. The server treats this as an untrusted claim:
+                    # it must match Pattern Selector evidence before the advice
+                    # can reach the user.
+                    "pattern_id": {"type": "string", "maxLength": 80},
+                    "title": {"type": "string", "maxLength": 80},
+                    "explanation": {"type": "string", "maxLength": 420},
+                    "example": {"type": "string", "maxLength": 1800},
                     # The original fragment `example` replaces (verbatim),
                     # for a precise per-advice before/after diff in the UI.
-                    "before": {"type": "string"},
+                    "before": {"type": "string", "maxLength": 1800},
                     "impact": {"type": "string", "enum": ["low", "medium", "high"]},
                     "confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
                 },
-                # `example` is required (empty string for prose-only advice):
-                # once `before` was added, the model started returning
-                # `before` *instead of* `example` (confirmed live), leaving
-                # nothing to diff against.
-                "required": ["title", "explanation", "example", "confidence_score"],
+                # `example` is required (empty string for prose-only advice).
+                # pattern_id is also required so multi-pattern SQL can never
+                # rely on a fuzzy prose regex to decide which guard applies.
+                "required": ["pattern_id", "title", "explanation", "example", "confidence_score"],
             },
         },
         "suggested_sql": {
             "type": "object",
             "properties": {
                 "available": {"type": "boolean"},
-                "reason": {"type": "string"},
-                "sql": {"type": "string"},
+                "reason": {"type": "string", "maxLength": 260},
+                "sql": {"type": "string", "maxLength": 12000},
                 "confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
-                # 2026-09-17: the model must say *which kind* of "no rewrite"
-                # this is, so the UI never shows the same fixed sentence for
-                # "SQL is already fine" and "needs a business assumption".
                 "rewrite_outcome": {"type": "string", "enum": ["provided", "not_needed", "advice_only"]},
             },
-            # Full-rewrite confidence is only meaningful when a rewrite is
-            # actually provided. Overall assessment confidence is always
-            # required at the response root instead.
+            "required": ["available", "reason", "rewrite_outcome"],
+        },
+    },
+    "required": ["summary", "assessment_confidence_score", "advice", "suggested_sql"],
+}
+
+# A truncation fallback must be *smaller*, not just be given more tokens.
+# It deliberately forbids copyable SQL and caps prose much more tightly.
+# This addresses the Round-1 case where a short SQL still caused Gemma to
+# exhaust both 3072 and 8192 output tokens with an overlong structured reply.
+COMPACT_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "maxLength": 180},
+        "assessment_confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "advice": {
+            "type": "array",
+            "maxItems": 2,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "pattern_id": {"type": "string", "maxLength": 80},
+                    "title": {"type": "string", "maxLength": 60},
+                    "explanation": {"type": "string", "maxLength": 220},
+                    "example": {"type": "string", "maxLength": 0},
+                    "before": {"type": "string", "maxLength": 0},
+                    "impact": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
+                },
+                "required": ["pattern_id", "title", "explanation", "example", "confidence_score"],
+            },
+        },
+        "suggested_sql": {
+            "type": "object",
+            "properties": {
+                "available": {"type": "boolean"},
+                "reason": {"type": "string", "maxLength": 180},
+                "sql": {"type": "string", "maxLength": 0},
+                "confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
+                "rewrite_outcome": {"type": "string", "enum": ["not_needed", "advice_only"]},
+            },
             "required": ["available", "reason", "rewrite_outcome"],
         },
     },

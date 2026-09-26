@@ -1288,7 +1288,7 @@ def _filter_advice(
 
         evidence_ids: list[str] = []
         if evidence_by_pattern is not None:
-            if canonical_pattern is None and len(supported_patterns) == 1:
+            if canonical_pattern is None and proposed_pattern is None and len(supported_patterns) == 1:
                 canonical_pattern = supported_patterns[0]
             if canonical_pattern is None:
                 dropped += 1
@@ -1821,7 +1821,7 @@ def _chat_request_body(settings: Settings, payload: dict[str, Any]) -> dict[str,
         settings.llm,
         system_prompt=SYSTEM_PROMPT,
         user_content=user_content,
-        response_schema=response_schema,
+        response_schema=RESPONSE_SCHEMA,
         context_window=num_ctx,
     )
 
@@ -1967,7 +1967,6 @@ async def _request_ai(
             )
             second_payload = payload
             second_output_tokens = normal_output_tokens
-            second_response_schema = RESPONSE_SCHEMA
             used_retry = False
             try:
                 return (
@@ -2028,7 +2027,6 @@ async def _request_ai(
                 second_payload = dict(retry_payload)
                 second_payload["response_mode"] = "compact_recovery"
                 second_output_tokens = truncation_retry_tokens
-                second_response_schema = COMPACT_RESPONSE_SCHEMA
                 used_retry = True
             except _NonChineseResponseError:
                 logger.info("ai_service: response not in Chinese — retrying once")
@@ -2049,7 +2047,6 @@ async def _request_ai(
                         settings,
                         second_payload,
                         max_output_tokens=second_output_tokens,
-                        response_schema=second_response_schema,
                     ),
                     None,
                     used_retry,
@@ -2251,7 +2248,7 @@ async def get_ai_result(
         # fallback available. When the original request was already gated,
         # the payload may be identical, but OpenRouter can still recover by
         # using the larger truncation-only output budget.
-        retry_payload = build(False, response_mode="compact_recovery")
+        retry_payload = build(False)
 
         raw, failure_kind, used_retry = await _request_ai(
             settings,

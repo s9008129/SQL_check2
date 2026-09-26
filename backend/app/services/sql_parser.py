@@ -280,6 +280,11 @@ def _build_statement(index: int, raw_sql: str) -> ParsedStatement:
     stmt.like_findings = _find_leading_wildcard_like(scope_roots)
     stmt.function_findings = _find_function_on_condition(scope_roots)
     stmt.complexity_flags = _safe_complexity_flags(tree, stype)
+    # Exact function-family flags are derived only from a function that is the
+    # direct condition operand. This deliberately does NOT turn an NVL nested
+    # inside SUM(NVL(...)) into the NVL predicate pattern (the Round-1 Q01
+    # false positive that produced an irrelevant "split NULL condition" tip).
+    stmt.complexity_flags.update(_function_pattern_flags(stmt.function_findings))
     return stmt
 
 
@@ -613,6 +618,32 @@ def _find_function_on_condition(scope_roots: list[exp.Expression]) -> list[str]:
                         seen.add(text)
                         findings.append(text)
     return findings
+
+
+def _function_pattern_flags(function_findings: list[str]) -> set[str]:
+    """Turn direct condition-function facts into exact optimization flags.
+
+    The strings come from sqlglot's Oracle renderer, not from free-text regex
+    over the whole SQL.  In particular, only the *outermost direct predicate
+    operand* is classified.  That is what prevents SUM(NVL(col, 0)) > 0 from
+    being mislabeled as the NVL(col, default)=value advice pattern.
+
+    sqlglot may normalize Oracle NVL to COALESCE internally/rendered output in
+    some versions, so both names are accepted for this one semantic family.
+    """
+
+    flags: set[str] = set()
+    for finding in function_findings:
+        head = finding.lstrip().upper()
+        if head.startswith(("NVL(", "COALESCE(")):
+            flags.add("nvl_condition_predicate")
+        elif head.startswith("TRUNC("):
+            flags.add("trunc_condition_predicate")
+        elif head.startswith("TO_CHAR("):
+            flags.add("to_char_condition_predicate")
+        elif head.startswith(("UPPER(", "LOWER(")):
+            flags.add("case_fold_condition_predicate")
+    return flags
 
 
 # ---------------------------------------------------------------------------

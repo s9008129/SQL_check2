@@ -166,7 +166,7 @@ _LLM_SEMAPHORE = asyncio.Semaphore(1)
 RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "summary": {"type": "string"},
+        "summary": {"type": "string", "maxLength": 360},
         # Overall confidence in the whole AI assessment. This is intentionally
         # separate from advice/rewrite confidence so a clean "no change needed"
         # assessment still carries a confidence signal.
@@ -177,12 +177,13 @@ RESPONSE_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "title": {"type": "string"},
-                    "explanation": {"type": "string"},
-                    "example": {"type": "string"},
+                    "pattern_id": {"type": "string", "maxLength": 80},
+                    "title": {"type": "string", "maxLength": 80},
+                    "explanation": {"type": "string", "maxLength": 520},
+                    "example": {"type": "string", "maxLength": 4000},
                     # The original fragment `example` replaces (verbatim),
                     # for a precise per-advice before/after diff in the UI.
-                    "before": {"type": "string"},
+                    "before": {"type": "string", "maxLength": 4000},
                     "impact": {"type": "string", "enum": ["low", "medium", "high"]},
                     "confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
                 },
@@ -190,15 +191,15 @@ RESPONSE_SCHEMA: dict[str, Any] = {
                 # once `before` was added, the model started returning
                 # `before` *instead of* `example` (confirmed live), leaving
                 # nothing to diff against.
-                "required": ["title", "explanation", "example", "confidence_score"],
+                "required": ["pattern_id", "title", "explanation", "example", "confidence_score"],
             },
         },
         "suggested_sql": {
             "type": "object",
             "properties": {
                 "available": {"type": "boolean"},
-                "reason": {"type": "string"},
-                "sql": {"type": "string"},
+                "reason": {"type": "string", "maxLength": 420},
+                "sql": {"type": "string", "maxLength": 12000},
                 "confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
                 # 2026-09-17: the model must say *which kind* of "no rewrite"
                 # this is, so the UI never shows the same fixed sentence for
@@ -214,6 +215,44 @@ RESPONSE_SCHEMA: dict[str, Any] = {
     "required": ["summary", "assessment_confidence_score", "advice", "suggested_sql"],
 }
 
+
+
+# A truncation retry is intentionally not just a larger token budget. It also
+# uses a much smaller response contract so the model has fewer places to
+# generate runaway text. The retry remains advice-only and cannot regain
+# full-rewrite authority.
+COMPACT_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "maxLength": 240},
+        "assessment_confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "advice": {
+            "type": "array",
+            "maxItems": 2,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "pattern_id": {"type": "string", "maxLength": 80},
+                    "title": {"type": "string", "maxLength": 60},
+                    "explanation": {"type": "string", "maxLength": 320},
+                    "example": {"type": "string", "maxLength": 1},
+                    "confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
+                },
+                "required": ["pattern_id", "title", "explanation", "example", "confidence_score"],
+            },
+        },
+        "suggested_sql": {
+            "type": "object",
+            "properties": {
+                "available": {"type": "boolean", "enum": [False]},
+                "reason": {"type": "string", "maxLength": 320},
+                "rewrite_outcome": {"type": "string", "enum": ["not_needed", "advice_only"]},
+            },
+            "required": ["available", "reason", "rewrite_outcome"],
+        },
+    },
+    "required": ["summary", "assessment_confidence_score", "advice", "suggested_sql"],
+}
 
 class _RawSuggestedSql(BaseModel):
     """The model's own view of suggested_sql. `rewrite_outcome` is optional

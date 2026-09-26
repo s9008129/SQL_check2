@@ -235,6 +235,12 @@ class AdviceItem(BaseModel):
     example: str | None = None
     impact: ImpactLevel | None = None
     confidence_score: int | None = None
+    # Server-validated provenance. The model may nominate a Pattern Catalog id,
+    # but only ids deterministically allowed for the current statement survive
+    # post-processing. evidence_ids are always populated by the server from the
+    # reviewed Oracle registry; the model never chooses authority sources.
+    pattern_id: str | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
 
     @field_validator("confidence_score", mode="before")
     @classmethod

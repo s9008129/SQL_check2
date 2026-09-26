@@ -48,7 +48,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlglot import exp, parse_one
 
 from app.schemas import AdviceItem, AiResult, Finding, PerformanceEvidence, SuggestedSql, normalize_confidence_score
-from app.services import context_adapter, llm_provider, pattern_selector, rewrite_rules, rule_engine
+from app.services import context_adapter, llm_provider, pattern_selector, performance_evidence, rewrite_rules, rule_engine
 from app.services.cost_utils import classify_cost_relation, cost_formal_summary, cost_threshold_note
 from app.services.masking import (
     MaskResult,

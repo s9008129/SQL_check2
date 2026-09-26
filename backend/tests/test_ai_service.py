@@ -914,7 +914,8 @@ async def test_trunc_to_range_full_rewrite_is_rejected(settings, chat_url):
     result = await _call(settings, trunc_stmt)
 
     assert result.suggested_sql.available is False
-    assert result.suggested_sql.outcome == "rejected"
+    assert result.suggested_sql.outcome == "gated"
+    assert "需要先確認業務前提" in result.suggested_sql.reason
     assert result.suggested_sql.sql is None
 
 
@@ -1442,7 +1443,8 @@ async def test_rewrite_not_in_to_not_exists_is_rejected(settings, chat_url):
     rewrite = "SELECT A.X FROM T A WHERE A.Y = 'A' AND NOT EXISTS (SELECT 1 FROM U B WHERE B.K = A.K AND B.Z = 'A')"
     result = await _call_rewrite(settings, chat_url, original, rewrite)
     assert result.suggested_sql.available is False
-    assert "改變了查詢結構" in result.suggested_sql.reason
+    assert result.suggested_sql.outcome == "gated"
+    assert "需要先確認業務前提" in result.suggested_sql.reason
 
 
 @respx.mock
@@ -1804,9 +1806,9 @@ async def test_output_truncation_twice_degrades_with_specific_message(settings, 
 
 @respx.mock
 async def test_output_truncation_without_time_budget_does_not_retry(settings, chat_url):
-    # Deadline is OLLAMA_TIMEOUT_SECONDS from the start; with only 30s in
-    # total there is no room for a second attempt (< 60s budget rule).
-    short = dataclasses.replace(settings, llm=dataclasses.replace(settings.llm, timeout_seconds=30))
+    # Compact recovery only needs a small window; with 10s total there is
+    # deliberately no room for a second provider call.
+    short = dataclasses.replace(settings, llm=dataclasses.replace(settings.llm, timeout_seconds=10))
     route = respx.post(chat_url).mock(return_value=httpx.Response(200, json=_truncated_envelope()))
     result = await _call(short, _clean_select_statement())
     assert result.status == "unavailable"
@@ -3065,13 +3067,12 @@ async def test_to_char_year_value_is_hidden_from_model_but_format_role_remains(s
     body = json.loads(route.calls[0].request.content)
     user_message = next(m["content"] for m in body["messages"] if m["role"] == "user")
     payload = json.loads(user_message.removeprefix("<SQL_DATA>\n").removesuffix("\n</SQL_DATA>"))
-    assert "'YYYY'" in payload["sanitized_sql"]
-    assert "'2024'" not in payload["sanitized_sql"]
-    year_hints = [h for h in payload["literal_hints"].values() if h.get("semantic_role") == "year_value"]
-    assert len(year_hints) == 1
-    assert year_hints[0]["shape"] == "digits"
-    ids = {item["id"] for item in payload["advice_contracts"]}
-    assert "to_char_condition" in ids
+    # TO_CHAR is now an exact ADVICE_ONLY pattern. Compact mode strengthens
+    # privacy by sending no raw SQL/literal text to the model at all.
+    assert "sanitized_sql" not in payload
+    assert "2024" not in user_message
+    assert payload["mode"] == "compact_truncation_recovery"
+    assert "PREDICATE_FUNCTION_GENERIC" in payload["allowed_advice_pattern_ids"]
 
 
 @respx.mock
@@ -3101,9 +3102,9 @@ async def test_cross_column_or_advice_only_reason_is_server_owned_and_never_ment
     )
 
     assert result.suggested_sql is not None
-    assert result.suggested_sql.outcome == "advice_only"
+    assert result.suggested_sql.outcome == "gated"
+    assert "需要先確認業務前提" in result.suggested_sql.reason
     assert "UNION" not in result.suggested_sql.reason
-    assert result.suggested_sql.reason == ai_service._CROSS_COLUMN_OR_SAFE_COPY
 
 
 @respx.mock

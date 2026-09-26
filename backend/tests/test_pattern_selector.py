@@ -150,8 +150,8 @@ def test_family_signals_stay_separate_from_exact_matches():
     function_selection = select_patterns(
         _parsed("SELECT A.X FROM T A WHERE UPPER(A.N)='ABC'"), [_finding("R005")], _rules()
     )
-    assert "UPPER_CASE_FOLD_REMOVAL" not in function_selection.exact_ids
-    assert "UPPER_CASE_FOLD_REMOVAL" in function_selection.family_signal_ids
+    assert "UPPER_CASE_FOLD_REMOVAL" in function_selection.exact_ids
+    assert "UPPER_CASE_FOLD_REMOVAL" not in function_selection.family_signal_ids
     assert "PREDICATE_FUNCTION_GENERIC" in function_selection.family_signal_ids
 
     outer = select_patterns(

@@ -441,7 +441,9 @@ def _build_payload(
     knowledge_context: list[dict[str, str]] | None = None,
     cost_context: dict[str, Any] | None = None,
     advice_contracts: list[dict[str, Any]] | None = None,
+    evidence_supported_pattern_ids: list[str] | None = None,
     execution_plan_context: dict[str, Any] | None = None,
+    response_mode: str = "normal",
 ) -> dict[str, Any]:
     """Build the de-identified <SQL_DATA> object sent to Gemma.
 
@@ -481,6 +483,13 @@ def _build_payload(
         # The model may choose whether a suggestion is worth surfacing, but it
         # may not invent executable details outside these bounded explanations.
         "advice_contracts": advice_contracts or [],
+        # Only these deterministic exact patterns have reviewed Oracle
+        # evidence for this statement. The model must label each advice with
+        # one of these ids; the server validates again before display.
+        "evidence_supported_pattern_ids": sorted(evidence_supported_pattern_ids or []),
+        # A truncation retry uses a smaller response contract. This flag is
+        # advisory to the model; the JSON schema is the actual enforcement.
+        "response_mode": response_mode,
         # Optional deterministic summary of a user-supplied SQL Developer
         # execution plan. Raw plan text, predicates, SQL_ID and Plan Hash are
         # intentionally excluded before this service is called.
@@ -1629,6 +1638,7 @@ def _finalize(
     *,
     original_sql: str = "",
     literal_hints: dict[str, dict[str, Any]] | None = None,
+    evidence_by_pattern: dict[str, tuple[str, ...]] | None = None,
 ) -> AiResult:
     forbidden = ai_guard_cfg.get("forbidden_phrases", [])
     vocab = ai_guard_cfg.get("vocabulary_replacements", {})
@@ -1648,6 +1658,7 @@ def _finalize(
         reverse_map,
         source_sql=representative.raw_sql if representative is not None else original_sql,
         literal_hints=literal_hints,
+        evidence_by_pattern=evidence_by_pattern,
     )
     suggested_sql = _finalize_suggested_sql(
         raw.suggested_sql,
@@ -1738,7 +1749,7 @@ def _finalize(
 # reply without opening the container log. Unknown kinds fall back to the
 # PRD §56 sentence.
 DEGRADE_MESSAGES: dict[str, str] = {
-    "output_truncated": "SQL 內容較長，AI 回覆超出長度上限，本次未能完成分析；可縮短或拆分 SQL 後再試。",
+    "output_truncated": "AI 回覆內容超出長度上限，本次未能完成智慧建議；請稍後再試。上方規則檢核結果仍可正常使用。",
     "prompt_truncated": "SQL 內容過長，超出 AI 可處理範圍，請拆分後再試。",
     "timeout": "AI 分析逾時（SQL 較長時約需 2～3 分鐘），請稍後再試一次。",
     "connection": "無法連線 AI 服務，仍可依上方規則檢核結果進行確認。",
@@ -1810,7 +1821,7 @@ def _chat_request_body(settings: Settings, payload: dict[str, Any]) -> dict[str,
         settings.llm,
         system_prompt=SYSTEM_PROMPT,
         user_content=user_content,
-        response_schema=RESPONSE_SCHEMA,
+        response_schema=response_schema,
         context_window=num_ctx,
     )
 
@@ -1856,6 +1867,7 @@ async def _one_attempt(
     payload: dict[str, Any],
     *,
     max_output_tokens: int | None = None,
+    response_schema: dict[str, Any] = RESPONSE_SCHEMA,
 ) -> _AiRawResponse:
     """Exactly one provider POST + JSON parse + Pydantic validation."""
     user_content = "<SQL_DATA>\n" + json.dumps(payload, ensure_ascii=False) + "\n</SQL_DATA>"
@@ -1955,6 +1967,7 @@ async def _request_ai(
             )
             second_payload = payload
             second_output_tokens = normal_output_tokens
+            second_response_schema = RESPONSE_SCHEMA
             used_retry = False
             try:
                 return (
@@ -2012,8 +2025,10 @@ async def _request_ai(
                     truncation_retry_tokens,
                     remaining(),
                 )
-                second_payload = retry_payload
+                second_payload = dict(retry_payload)
+                second_payload["response_mode"] = "compact_recovery"
                 second_output_tokens = truncation_retry_tokens
+                second_response_schema = COMPACT_RESPONSE_SCHEMA
                 used_retry = True
             except _NonChineseResponseError:
                 logger.info("ai_service: response not in Chinese — retrying once")
@@ -2034,6 +2049,7 @@ async def _request_ai(
                         settings,
                         second_payload,
                         max_output_tokens=second_output_tokens,
+                        response_schema=second_response_schema,
                     ),
                     None,
                     used_retry,
@@ -2068,6 +2084,7 @@ async def get_ai_result(
     findings: list[Finding],
     statements: list[ParsedStatement],
     execution_plan_context: dict[str, Any] | None = None,
+    performance_evidence_items: list[PerformanceEvidence] | None = None,
     settings: Settings,
 ) -> AiResult:
     """Never raises — any failure anywhere in this path (provider down,
@@ -2147,6 +2164,41 @@ async def get_ai_result(
         except Exception as exc:  # noqa: BLE001 - context is advisory and fail-open
             logger.warning("ai_service: knowledge_context failed: %s", type(exc).__name__)
 
+        # Round-2 acceptance contract: every visible performance advice must
+        # have reviewed Oracle evidence chosen by deterministic exact matches.
+        # The API normally supplies the richer evidence list (including
+        # SUBSTR prefix/leading-wildcard refinements). Direct service tests
+        # and older callers fall back to the catalog evidence refs.
+        resolved_evidence_items = performance_evidence_items
+        if resolved_evidence_items is None:
+            try:
+                resolved_evidence_items = performance_evidence.build_performance_evidence(selection, [])
+            except Exception as exc:  # noqa: BLE001 - evidence remains supplemental
+                logger.warning("ai_service: evidence fallback failed: %s", type(exc).__name__)
+                resolved_evidence_items = []
+
+        evidence_by_pattern_lists: dict[str, list[str]] = {}
+        representative_index = representative.index if representative is not None else None
+        for evidence_item in resolved_evidence_items:
+            if (
+                representative_index is not None
+                and representative_index not in evidence_item.statement_indexes
+            ):
+                continue
+            bucket = evidence_by_pattern_lists.setdefault(evidence_item.pattern_id, [])
+            if evidence_item.evidence_id not in bucket:
+                bucket.append(evidence_item.evidence_id)
+        evidence_by_pattern = {
+            pattern_id: tuple(evidence_ids)
+            for pattern_id, evidence_ids in evidence_by_pattern_lists.items()
+            if evidence_ids
+        }
+        evidence_supported_pattern_ids = list(evidence_by_pattern)
+        logger.info(
+            "ai_service: evidence_supported_pattern_ids=%s",
+            evidence_supported_pattern_ids,
+        )
+
         where_evidence = None
         if representative is not None and representative.restriction_kind is not None:
             where_evidence = {
@@ -2164,7 +2216,7 @@ async def get_ai_result(
             sql_tokens,
         )
 
-        def build(candidate: bool) -> dict[str, Any]:
+        def build(candidate: bool, *, response_mode: str = "normal") -> dict[str, Any]:
             return _build_payload(
                 statement_type=statement_type,
                 sanitized_sql=mask_result.masked_sql,
@@ -2180,7 +2232,9 @@ async def get_ai_result(
                 advice_contracts=_build_advice_contracts(
                     representative.raw_sql if representative is not None else sql_text
                 ),
+                evidence_supported_pattern_ids=evidence_supported_pattern_ids,
                 execution_plan_context=execution_plan_context,
+                response_mode=response_mode,
             )
 
         payload = build(candidate_allowed)
@@ -2188,7 +2242,7 @@ async def get_ai_result(
         # fallback available. When the original request was already gated,
         # the payload may be identical, but OpenRouter can still recover by
         # using the larger truncation-only output budget.
-        retry_payload = build(False)
+        retry_payload = build(False, response_mode="compact_recovery")
 
         raw, failure_kind, used_retry = await _request_ai(
             settings,
@@ -2227,6 +2281,7 @@ async def get_ai_result(
             settings.important_tables_config,
             original_sql=sql_text,
             literal_hints=mask_result.literal_hints,
+            evidence_by_pattern=evidence_by_pattern,
         )
         level, basis = improvement_potential(result, findings)
         return result.model_copy(update={"improvement_potential": level, "improvement_potential_basis": basis})

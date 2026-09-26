@@ -1724,17 +1724,13 @@ def _finalize_suggested_sql(
 
     if not candidate_allowed:
         outcome = "gated"
-        # Length-based gates are facts the server knows and the model does
-        # not; the model's own reason (often the generic PRD sentence it
-        # copied from the prompt) must not hide them.
-        length_gate = decline_code in ("too_long_for_rewrite", "rewrite_truncated")
-        if raw.available or length_gate or reason.strip() == _NO_REWRITE_REASON:
-            # The model's own `reason` was almost certainly written to
-            # justify *providing* a rewrite (available=true), so surfacing it
-            # verbatim once we flip available to false would read as
-            # self-contradictory. Replace it with a reason specific to *why*
-            # candidate_allowed is false (decline_code).
-            reason = _decline_reason_text(decline_code)
+        # A gate is a deterministic server decision. Never surface the
+        # model-authored reason for a gated rewrite: it can contradict the
+        # actual gate or smuggle an unsafe suggestion (for example "split
+        # into UNION/UNION ALL and see which is faster"). The decline reason
+        # is therefore always owned by the server and tied to decline_code.
+        reason = _decline_reason_text(decline_code)
+        confidence_score = None
 
     if _contains_forbidden(reason, forbidden):
         logger.info("ai_service: suggested_sql.reason discarded on forbidden-phrase match")

@@ -958,33 +958,41 @@ def _calibrate_assessment_confidence(
     return score
 
 
-def _guard_unverified_advice_prose(source_sql: str, title: str, explanation: str) -> tuple[str, str | None]:
-    """Keep ADVICE_ONLY content useful without leaking copy-paste SQL.
+def _guard_unverified_advice_prose(
+    source_sql: str,
+    title: str,
+    explanation: str,
+    *,
+    pattern_id: str | None = None,
+) -> tuple[str, str | None]:
+    """Keep ADVICE_ONLY content useful without allowing pattern cross-talk.
 
-    Prompt rules are guidance; this function is enforcement. Known semantic
-    traps get short server-owned wording. Any remaining unverified prose that
-    still contains a copyable predicate or an invented date literal is
-    replaced by a generic confirmation-first sentence.
+    When the server has validated a Pattern Catalog id, known advice-only
+    patterns use fixed business-facing copy owned by SQLCheck. This is
+    deliberately stricter than scanning the whole SQL for keywords: a LIKE
+    pattern elsewhere in the statement can no longer overwrite the wording
+    of a JOIN-expression advice card.
     """
     if not explanation:
         return explanation, None
 
+    if pattern_id in _PATTERN_PRESENTATION:
+        _server_title, safe_copy = _PATTERN_PRESENTATION[pattern_id]
+        return safe_copy, f"pattern:{pattern_id}"
+
     combined = f"{title}\n{explanation}"
+    # Legacy/no-provenance paths retain only the generic safety guards. They
+    # never select a pattern-specific copy from another part of the SQL.
     if rewrite_rules.has_cross_column_or(source_sql) and _CROSS_COLUMN_OR_ADVICE_RE.search(combined):
         return _CROSS_COLUMN_OR_SAFE_COPY, "cross_column_or"
 
     if _source_has_no_main_where(source_sql) and _NO_MAIN_WHERE_INVENTED_FIELD_RE.search(combined):
         return _NO_MAIN_WHERE_SAFE_COPY, "no_main_where_invented_field"
 
-    for guard_id, source_re, advice_re, safe_copy in _ADVICE_ONLY_PROSE_GUARDS:
-        if source_re.search(source_sql) and advice_re.search(combined):
-            return safe_copy, guard_id
-
     if _COPYABLE_SQL_IN_PROSE_RE.search(explanation) or _DATE_LITERAL_IN_PROSE_RE.search(explanation):
         return "這個改善方向可能改變查詢結果。請先確認業務條件後，再決定是否調整。", "generic_unverified_sql"
 
     return explanation, None
-
 
 def _parse_sql_or_fragment(text: str) -> exp.Expression | None:
     if not text or not text.strip():

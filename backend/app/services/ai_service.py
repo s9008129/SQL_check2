@@ -798,19 +798,25 @@ def _source_has_no_main_where(source_sql: str) -> bool:
         return False
 
 
-def _build_advice_contracts(source_sql: str) -> list[dict[str, Any]]:
+def _build_advice_contracts(
+    source_sql: str,
+    structure_flags: set[str] | list[str] | tuple[str, ...] | None = None,
+) -> list[dict[str, Any]]:
     """Return deterministic, SQL-free output contracts for known ADVICE_ONLY traps.
 
-    These are not new compliance rules. They only bound how the model may
-    explain patterns whose safe rewrite depends on schema/business facts that
-    SQLCheck cannot observe.
+    Function contracts are activated from parser flags, not a whole-SQL
+    substring scan. This prevents SUM(NVL(...)) in a SELECT/HAVING aggregate
+    from being mistaken for an NVL predicate merely because the text contains
+    the token NVL.
     """
     contracts: list[dict[str, Any]] = []
+    flags = set(structure_flags or ())
 
     if rewrite_rules.has_cross_column_or(source_sql):
         contracts.append(
             {
                 "id": "cross_column_or",
+                "pattern_id": "OR_CROSS_COLUMN_TO_UNION_ALL",
                 "classification": "ADVICE_ONLY",
                 "required_explanation": _CROSS_COLUMN_OR_SAFE_COPY,
                 "max_confidence_score": 79,
@@ -827,43 +833,45 @@ def _build_advice_contracts(source_sql: str) -> list[dict[str, Any]]:
             }
         )
 
+    flag_by_guard = {
+        "trunc_condition": "trunc_predicate",
+        "to_char_condition": "to_char_predicate",
+        "nvl_condition": "nvl_predicate",
+    }
     for guard_id, source_re, _advice_re, safe_copy in _ADVICE_ONLY_PROSE_GUARDS:
-        if source_re.search(source_sql):
-            contracts.append(
-                {
-                    "id": guard_id,
-                    "classification": "ADVICE_ONLY",
-                    "required_explanation": safe_copy,
-                    "max_confidence_score": 79,
-                }
-            )
+        if guard_id in flag_by_guard:
+            active = flag_by_guard[guard_id] in flags
+        elif guard_id == "distinct_removal":
+            active = "distinct" in flags
+        else:
+            active = bool(source_re.search(source_sql))
+        if not active:
+            continue
+        contract = {
+            "id": guard_id,
+            "classification": "ADVICE_ONLY",
+            "required_explanation": safe_copy,
+            "max_confidence_score": 79,
+        }
+        pattern_id = _GUARD_PATTERN_IDS.get(guard_id)
+        if pattern_id:
+            contract["pattern_id"] = pattern_id
+        contracts.append(contract)
 
-    # The same priority order is used by _server_owned_advice_only_reason().
-    # Mark exactly one contract as the canonical source for
-    # suggested_sql.reason so a smaller model does not "helpfully" append
-    # business-field examples that the SQL never supplied. This is model
-    # guidance only; the server still enforces the final reason independently.
     if contracts:
         contracts[0]["use_as_suggested_sql_reason"] = True
     return contracts
 
 
-def _server_owned_advice_only_reason(source_sql: str) -> str | None:
-    """Canonical reason for ADVICE_ONLY cases that previously leaked details.
-
-    The same safe copy is used for advice explanations and for the
-    suggested_sql.reason field so a model cannot bypass the prose guard by
-    moving UNION/date/filter examples into another field.
-    """
-    if rewrite_rules.has_cross_column_or(source_sql):
-        return _CROSS_COLUMN_OR_SAFE_COPY
-    if _source_has_no_main_where(source_sql):
-        return _NO_MAIN_WHERE_SAFE_COPY
-    for _guard_id, source_re, _advice_re, safe_copy in _ADVICE_ONLY_PROSE_GUARDS:
-        if source_re.search(source_sql):
-            return safe_copy
-    return None
-
+def _server_owned_advice_only_reason(
+    source_sql: str,
+    structure_flags: set[str] | list[str] | tuple[str, ...] | None = None,
+) -> str | None:
+    """Canonical reason for the highest-priority deterministic advice contract."""
+    contracts = _build_advice_contracts(source_sql, structure_flags)
+    if not contracts:
+        return None
+    return str(contracts[0]["required_explanation"])
 
 _TO_CHAR_YEAR_VALUE_RE = re.compile(
     r"(?P<prefix>\bTO_CHAR\s*\([^)]*,\s*'YYYY'\s*\)\s*=\s*)"

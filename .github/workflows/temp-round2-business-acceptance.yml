@@ -161,8 +161,7 @@ jobs:
           else
             echo "NO_CREDENTIAL_PATTERN_HITS" > "$RUN_ROOT/secret_scan.txt"
           fi
-          find "$RUN_ROOT" -type f -printf '%P	%s bytes
-' | sort > "$RUN_ROOT/manifest.txt"
+          find "$RUN_ROOT" -type f -printf '%P\\t%s bytes\\n' | sort > "$RUN_ROOT/manifest.txt"
 
       - name: Upload round-2 evidence
         if: always()

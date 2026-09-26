@@ -1546,10 +1546,7 @@ async def test_non_chinese_summary_is_retried_once_then_degraded(settings, chat_
     assert route.call_count == 2
 
 
-async def test_request_ai_truncation_retry_uses_larger_budget_even_when_payload_already_advice_only(
-    settings,
-    monkeypatch,
-):
+async def test_request_ai_truncation_recovers_with_tiny_summary_call(settings, monkeypatch):
     openrouter = dataclasses.replace(
         settings,
         llm=dataclasses.replace(
@@ -1560,8 +1557,16 @@ async def test_request_ai_truncation_retry_uses_larger_budget_even_when_payload_
             truncation_retry_max_output_tokens=8192,
         ),
     )
-    payload = {"candidate_allowed": False, "statement_type": "SELECT"}
-    calls: list[tuple[dict, int | None]] = []
+    payload = {
+        "candidate_allowed": True,
+        "statement_type": "SELECT",
+        "allowed_advice_pattern_ids": ["SUBSTR_EQ_TO_LIKE"],
+    }
+    retry_payload = {
+        "candidate_allowed": False,
+        "statement_type": "SELECT",
+        "allowed_advice_pattern_ids": ["SUBSTR_EQ_TO_LIKE"],
+    }
     success = ai_service._AiRawResponse.model_validate(
         _good_inner(
             suggested_sql={
@@ -1572,30 +1577,37 @@ async def test_request_ai_truncation_retry_uses_larger_budget_even_when_payload_
             }
         )
     )
+    full_budgets: list[int | None] = []
+    compact_budgets: list[int | None] = []
 
-    async def fake_one_attempt(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
+    async def truncated_full(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
+        del client, current_settings, current_payload
+        full_budgets.append(max_output_tokens)
+        raise ai_service.llm_provider.LLMOutputTruncatedError(3072)
+
+    async def compact_success(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
         del client, current_settings
-        calls.append((current_payload, max_output_tokens))
-        if len(calls) == 1:
-            raise ai_service.llm_provider.LLMOutputTruncatedError(3072)
+        assert current_payload["mode"] == "compact_truncation_recovery"
+        assert "sanitized_sql" not in current_payload
+        compact_budgets.append(max_output_tokens)
         return success
 
-    monkeypatch.setattr(ai_service, "_one_attempt", fake_one_attempt)
+    monkeypatch.setattr(ai_service, "_one_attempt", truncated_full)
+    monkeypatch.setattr(ai_service, "_one_compact_attempt", compact_success)
 
     raw, failure_kind, used_retry = await ai_service._request_ai(
         openrouter,
         payload,
         deadline=time.monotonic() + 120,
-        retry_payload=dict(payload),
+        retry_payload=retry_payload,
         retry_max_output_tokens=openrouter.llm.truncation_retry_max_output_tokens,
     )
 
     assert raw is success
     assert failure_kind is None
     assert used_retry is True
-    assert [budget for _, budget in calls] == [3072, 8192]
-    assert len(calls) == 2
-
+    assert full_budgets == [3072]
+    assert compact_budgets == [ai_service._COMPACT_AI_OUTPUT_TOKENS]
 
 async def test_request_ai_second_truncation_degrades_without_third_attempt(settings, monkeypatch):
     openrouter = dataclasses.replace(
@@ -1608,29 +1620,41 @@ async def test_request_ai_second_truncation_degrades_without_third_attempt(setti
             truncation_retry_max_output_tokens=8192,
         ),
     )
-    payload = {"candidate_allowed": False}
-    budgets: list[int | None] = []
+    payload = {
+        "candidate_allowed": True,
+        "allowed_advice_pattern_ids": ["SUBSTR_EQ_TO_LIKE"],
+    }
+    retry_payload = {
+        "candidate_allowed": False,
+        "allowed_advice_pattern_ids": ["SUBSTR_EQ_TO_LIKE"],
+    }
+    calls = {"full": 0, "compact": 0}
 
-    async def always_truncated(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
-        del client, current_settings, current_payload
-        budgets.append(max_output_tokens)
-        raise ai_service.llm_provider.LLMOutputTruncatedError(max_output_tokens)
+    async def full_truncated(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
+        del client, current_settings, current_payload, max_output_tokens
+        calls["full"] += 1
+        raise ai_service.llm_provider.LLMOutputTruncatedError(3072)
 
-    monkeypatch.setattr(ai_service, "_one_attempt", always_truncated)
+    async def compact_truncated(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
+        del client, current_settings, current_payload, max_output_tokens
+        calls["compact"] += 1
+        raise ai_service.llm_provider.LLMOutputTruncatedError(ai_service._COMPACT_AI_OUTPUT_TOKENS)
+
+    monkeypatch.setattr(ai_service, "_one_attempt", full_truncated)
+    monkeypatch.setattr(ai_service, "_one_compact_attempt", compact_truncated)
 
     raw, failure_kind, used_retry = await ai_service._request_ai(
         openrouter,
         payload,
         deadline=time.monotonic() + 120,
-        retry_payload=dict(payload),
+        retry_payload=retry_payload,
         retry_max_output_tokens=8192,
     )
 
     assert raw is None
     assert failure_kind == "output_truncated"
     assert used_retry is True
-    assert budgets == [3072, 8192]
-
+    assert calls == {"full": 1, "compact": 1}
 
 async def test_request_ai_truncation_with_insufficient_deadline_does_not_retry(settings, monkeypatch):
     openrouter = dataclasses.replace(
@@ -3230,16 +3254,14 @@ def test_response_schema_requires_pattern_id_and_bounds_text():
     assert ai_service.RESPONSE_SCHEMA["properties"]["summary"]["maxLength"] <= 360
 
 
-def test_compact_truncation_schema_is_advice_only_and_smaller():
-    compact = ai_service.COMPACT_RESPONSE_SCHEMA
-    assert compact["properties"]["advice"]["maxItems"] == 2
-    suggested = compact["properties"]["suggested_sql"]["properties"]
-    assert suggested["available"]["enum"] == [False]
-    assert "sql" not in suggested
+def test_compact_summary_schema_is_tiny_and_sql_free():
+    compact = ai_service.COMPACT_SUMMARY_SCHEMA
+    assert set(compact["properties"]) == {"summary", "assessment_confidence_score"}
+    assert compact["properties"]["summary"]["maxLength"] <= 160
+    assert ai_service._COMPACT_AI_OUTPUT_TOKENS <= 512
     assert compact["properties"]["summary"]["maxLength"] < ai_service.RESPONSE_SCHEMA["properties"]["summary"]["maxLength"]
 
-
-async def test_request_ai_uses_compact_schema_only_for_truncation_retry(settings, monkeypatch):
+async def test_request_ai_starts_compact_when_request_is_already_advice_only(settings, monkeypatch):
     openrouter = dataclasses.replace(
         settings,
         llm=dataclasses.replace(
@@ -3251,50 +3273,49 @@ async def test_request_ai_uses_compact_schema_only_for_truncation_retry(settings
         ),
     )
     success = ai_service._AiRawResponse.model_validate(
-        _good_inner(advice=[], suggested_sql={
-            "available": False,
-            "reason": "僅提供方向。",
-            "rewrite_outcome": "advice_only",
-        })
+        _good_inner(
+            advice=[],
+            suggested_sql={
+                "available": False,
+                "reason": "僅提供方向。",
+                "rewrite_outcome": "advice_only",
+            },
+        )
     )
-    schemas = []
-    prompts = []
-    payloads = []
+    compact_calls = []
 
-    async def fake_attempt(
-        client,
-        current_settings,
-        current_payload,
-        *,
-        max_output_tokens=None,
-        response_schema=None,
-        system_prompt=None,
-    ):
-        del client, current_settings, max_output_tokens
-        schemas.append(response_schema)
-        prompts.append(system_prompt)
-        payloads.append(current_payload)
-        if len(schemas) == 1:
-            raise ai_service.llm_provider.LLMOutputTruncatedError(3072)
+    async def should_not_run(*_args, **_kwargs):
+        raise AssertionError("full response path must not run for deterministic advice-only mode")
+
+    async def compact_success(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
+        del client, current_settings
+        compact_calls.append((current_payload, max_output_tokens))
         return success
 
-    monkeypatch.setattr(ai_service, "_one_attempt", fake_attempt)
+    monkeypatch.setattr(ai_service, "_one_attempt", should_not_run)
+    monkeypatch.setattr(ai_service, "_one_compact_attempt", compact_success)
+
     raw, failure_kind, used_retry = await ai_service._request_ai(
         openrouter,
-        {"candidate_allowed": True},
+        {
+            "candidate_allowed": False,
+            "statement_type": "SELECT",
+            "sanitized_sql": "SELECT A.X FROM T A",
+            "allowed_advice_pattern_ids": ["NVL_EQ_TO_OR_IS_NULL"],
+        },
         deadline=time.monotonic() + 120,
-        retry_payload={"candidate_allowed": False},
+        retry_payload=None,
         retry_max_output_tokens=8192,
     )
 
     assert raw is success
     assert failure_kind is None
-    assert used_retry is True
-    assert schemas == [None, ai_service.COMPACT_RESPONSE_SCHEMA]
-    assert prompts == [None, ai_service.COMPACT_RECOVERY_PROMPT]
-    assert payloads[1]["mode"] == "compact_truncation_recovery"
-    assert "sanitized_sql" not in payloads[1]
-
+    assert used_retry is False
+    assert len(compact_calls) == 1
+    compact_payload, budget = compact_calls[0]
+    assert compact_payload["mode"] == "compact_truncation_recovery"
+    assert "sanitized_sql" not in compact_payload
+    assert budget == ai_service._COMPACT_AI_OUTPUT_TOKENS
 
 def test_compact_retry_payload_drops_sql_and_keeps_only_two_allowed_patterns():
     source = {

@@ -2196,6 +2196,35 @@ async def get_ai_result(
                 "detail": representative.restriction_detail,
             }
 
+        source_sql_for_advice = representative.raw_sql if representative is not None else sql_text
+        structure_flags_for_advice = representative.complexity_flags if representative is not None else set()
+        advice_contracts = _build_advice_contracts(
+            source_sql_for_advice,
+            structure_flags_for_advice,
+        )
+        representative_index = representative.index if representative is not None else None
+        exact_pattern_ids = {
+            match.pattern_id
+            for match in selection.exact
+            if match.classification != "OUT_OF_SCOPE"
+            and representative_index is not None
+            and representative_index in match.statement_indexes
+        }
+        contract_pattern_ids = {
+            str(contract["pattern_id"])
+            for contract in advice_contracts
+            if contract.get("pattern_id")
+        }
+        # Visible AI performance advice is stricter than model context: every
+        # card must have reviewed Oracle evidence. Unsupported/info-only
+        # patterns can still affect deterministic UI/rules, but cannot become
+        # an evidence-free AI recommendation.
+        allowed_pattern_ids = {
+            pattern_id
+            for pattern_id in exact_pattern_ids | contract_pattern_ids
+            if _pattern_evidence_ids(pattern_id)
+        }
+
         logger.info(
             "ai_service: gate candidate=%s decline_code=%s stmt_type=%s flags=%s where_kind=%s sql_tokens=%d",
             candidate_allowed,
@@ -2207,7 +2236,7 @@ async def get_ai_result(
         )
 
         def build(candidate: bool) -> dict[str, Any]:
-            return _build_payload(
+            built = _build_payload(
                 statement_type=statement_type,
                 sanitized_sql=mask_result.masked_sql,
                 cost=cost,
@@ -2219,11 +2248,11 @@ async def get_ai_result(
                 structure_flags=sorted(representative.complexity_flags) if representative else [],
                 knowledge_context=knowledge_context,
                 cost_context=_cost_context(cost, settings.rules_config),
-                advice_contracts=_build_advice_contracts(
-                    representative.raw_sql if representative is not None else sql_text
-                ),
+                advice_contracts=advice_contracts,
                 execution_plan_context=execution_plan_context,
             )
+            built["allowed_advice_pattern_ids"] = sorted(allowed_pattern_ids)
+            return built
 
         payload = build(candidate_allowed)
         # Issue #37: output truncation always has one bounded advice-only
@@ -2269,6 +2298,7 @@ async def get_ai_result(
             settings.important_tables_config,
             original_sql=sql_text,
             literal_hints=mask_result.literal_hints,
+            allowed_pattern_ids=allowed_pattern_ids,
         )
         level, basis = improvement_potential(result, findings)
         return result.model_copy(update={"improvement_potential": level, "improvement_potential_basis": basis})

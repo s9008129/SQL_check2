@@ -910,17 +910,83 @@ def _calibrate_assessment_confidence(
     return score
 
 
-def _guard_unverified_advice_prose(source_sql: str, title: str, explanation: str) -> tuple[str, str | None]:
-    """Keep ADVICE_ONLY content useful without leaking copy-paste SQL.
+_PATTERN_GUARD_ID: dict[str, str] = {
+    "LEADING_WILDCARD_LIKE": "leading_wildcard_like",
+    "TRUNC_EQ_TO_RANGE": "trunc_condition",
+    "TO_CHAR_CONDITION_PREDICATE": "to_char_condition",
+    "NVL_EQ_TO_OR_IS_NULL": "nvl_condition",
+    "DISTINCT_REMOVAL": "distinct_removal",
+}
 
-    Prompt rules are guidance; this function is enforcement. Known semantic
-    traps get short server-owned wording. Any remaining unverified prose that
-    still contains a copyable predicate or an invented date literal is
-    replaced by a generic confirmation-first sentence.
+# These patterns are exact server facts but their safe action still depends on
+# business/schema semantics. A short server-owned explanation prevents the
+# model from drifting into a different pattern when several issues coexist.
+_PATTERN_SAFE_ADVICE_COPY: dict[str, str] = {
+    "LATEST_ROW_CORRELATED_MAX": (
+        "這種寫法可能讓同一來源被重複處理。可評估先把最新資料整理好，再和主要資料一起查；"
+        "但要先確認同一天或同一時間是否可能有多筆，避免改變查詢結果。"
+    ),
+    "REPEATED_SOURCE_UNION_BRANCH": (
+        "多個查詢區塊重複讀取相同來源，可評估把共同資料先整理一次再使用；"
+        "但 UNION／UNION ALL 可能是業務上需要的結果，未確認前不要直接合併。"
+    ),
+    "COMPOSITE_KEY_EXPRESSION_JOIN": (
+        "這段 JOIN 在比對前先加工欄位。可先確認是否能直接用原始欄位勾稽；"
+        "欄位寬度、NULL、補空白與正確關聯鍵未確認前，不要直接改寫。"
+    ),
+    "STRING_CONCAT_PREDICATE_SPLIT": (
+        "這段條件先把欄位串接後再比對。請先確認各欄位固定長度、NULL 與補空白規則，"
+        "再評估是否能改成直接比對原始欄位。"
+    ),
+}
+
+_REWRITE_RULE_TO_PATTERN: dict[str, str] = {
+    "substr_eq_to_like": "SUBSTR_EQ_TO_LIKE",
+    "or_eq_to_in": "OR_SAME_COLUMN_TO_IN",
+}
+
+
+def _guard_unverified_advice_prose(
+    source_sql: str,
+    title: str,
+    explanation: str,
+    *,
+    pattern_id: str | None = None,
+) -> tuple[str, str | None]:
+    """Keep ADVICE_ONLY content useful without cross-pattern prose drift.
+
+    When the server has a validated pattern_id, only that pattern's guard may
+    rewrite the explanation. This is the Round-2 fix for SQL that has both an
+    expression JOIN and a leading-wildcard LIKE: the LIKE guard can no longer
+    overwrite the JOIN card merely because the word 「比對」 appears.
+
+    Calls without pattern_id retain the legacy broad behavior for unit helpers
+    and backward compatibility. Production advice is finalized with a
+    server-validated pattern id.
     """
     if not explanation:
         return explanation, None
 
+    if pattern_id is not None:
+        fixed = _PATTERN_SAFE_ADVICE_COPY.get(pattern_id)
+        if fixed is not None:
+            return fixed, pattern_id
+
+        guard_id = _PATTERN_GUARD_ID.get(pattern_id)
+        if guard_id is not None:
+            for known_id, _source_re, _advice_re, safe_copy in _ADVICE_ONLY_PROSE_GUARDS:
+                if known_id == guard_id:
+                    return safe_copy, guard_id
+
+        if _COPYABLE_SQL_IN_PROSE_RE.search(explanation) or _DATE_LITERAL_IN_PROSE_RE.search(explanation):
+            return (
+                "這個改善方向可能改變查詢結果。請先確認業務條件後，再決定是否調整。",
+                "generic_unverified_sql",
+            )
+        return explanation, None
+
+    # Legacy fallback: used only when no deterministic pattern attribution is
+    # available. Production evidence-grounded advice does not take this path.
     combined = f"{title}\n{explanation}"
     if rewrite_rules.has_cross_column_or(source_sql) and _CROSS_COLUMN_OR_ADVICE_RE.search(combined):
         return _CROSS_COLUMN_OR_SAFE_COPY, "cross_column_or"
@@ -1116,53 +1182,56 @@ def _filter_advice(
     *,
     source_sql: str = "",
     literal_hints: dict[str, dict[str, Any]] | None = None,
+    evidence_by_pattern: dict[str, tuple[str, ...]] | None = None,
 ) -> list[AdviceItem]:
+    """Finalize advice with deterministic pattern/evidence attribution.
+
+    evidence_by_pattern is server-owned. When supplied, an advice item is
+    visible only if it can be tied to one deterministic exact pattern that has
+    Oracle evidence. The model's pattern_id is merely a proposal; verified
+    rewrite fragments can override it from deterministic rewrite_rules.
+    """
     kept: list[AdviceItem] = []
     dropped = 0
+    seen_patterns: set[str] = set()
+    supported_patterns = tuple(
+        pattern_id
+        for pattern_id, evidence_ids in (evidence_by_pattern or {}).items()
+        if evidence_ids
+    )
+
     for item in advice[:3]:  # RESPONSE_SCHEMA already caps at 3; defensive
-        # Keep the established hard-drop behavior for explicit forbidden
-        # phrases before the sentence-level sanitizer removes softer
-        # unsupported database-behavior claims.
         raw_title = _apply_vocabulary(item.title, vocab)
         raw_explanation = _apply_vocabulary(item.explanation, vocab)
         if _contains_forbidden(raw_title, forbidden) or _contains_forbidden(raw_explanation, forbidden):
             dropped += 1
             continue
+
         title = _sanitize_user_prose(raw_title, {}, literal_hints)
         explanation = _sanitize_user_prose(raw_explanation, {}, literal_hints)
-        # The score belongs to the AI suggestion direction, while the
-        # verification badge separately tells the user what the system could
-        # prove. Business-friendly wording normalization therefore must not
-        # erase a valid model-provided confidence score.
         confidence_score = normalize_confidence_score(item.confidence_score)
-        # Keep the sanitized model wording for pattern classification even if
-        # a lower safety layer later replaces the user-facing text.
         guard_title = title
         guard_explanation = explanation
-        # 2026-09-17: code fragments are shown to the reviewer who owns the
-        # data, so restore masked literals there too (previously `:STR_002`
-        # leaked through into the advice card — confirmed in a production
-        # printout). Prose fields are never un-masked.
+
+        proposed_pattern = (item.pattern_id or "").strip() or None
+        canonical_pattern = (
+            proposed_pattern
+            if evidence_by_pattern is None or proposed_pattern in (evidence_by_pattern or {})
+            else None
+        )
+
         example = unmask_sql(item.example, reverse_map or {}) if item.example else None
         before = unmask_sql(item.before, reverse_map or {}) if item.before else None
         verification: str | None = None
         assumption: str | None = None
         safety_issue = _advice_example_safety_issue(source_sql, before, example) if example else None
+
         if safety_issue is not None:
-            # The user-facing advice is now server-replaced because the model
-            # invented or altered unsafe SQL details. Do not keep the
-            # item-level score on text the model did not actually author; the
-            # frontend may still show overall AI assessment confidence.
             confidence_score = None
             logger.info("ai_service: advice SQL example hidden by deterministic safety guard: %s", safety_issue)
             example = None
             before = None
             verification = "unverified"
-            # Once the model has demonstrated that this advice depends on an
-            # invented identifier/value or lost typed-literal context, do not
-            # keep its accompanying prose: the same hallucinated detail may
-            # be repeated there. Replace it with a server-owned, useful
-            # business instruction instead of merely appending a warning.
             if safety_issue == "unknown_identifier":
                 title = "請先確認查詢條件或資料表關聯"
                 explanation = (
@@ -1183,11 +1252,11 @@ def _filter_advice(
                 )
         elif example:
             if before:
-                # Concrete SQL is a privilege, not a warning label. Only a
-                # deterministic verified/corrected rewrite may reach the API
-                # as copyable SQL.
                 v = rewrite_rules.verify_fragment(before, example)
                 verification, assumption = v.status, v.assumption
+                deterministic_pattern = _REWRITE_RULE_TO_PATTERN.get(v.rule or "")
+                if deterministic_pattern is not None:
+                    canonical_pattern = deterministic_pattern
                 if v.status == "corrected":
                     confidence_score = None
                     logger.info("ai_service: advice fragment corrected by rule %s", v.rule)
@@ -1208,17 +1277,40 @@ def _filter_advice(
             confidence_score = None
             before = None
 
+        evidence_ids: list[str] = []
+        if evidence_by_pattern is not None:
+            if canonical_pattern is None and len(supported_patterns) == 1:
+                canonical_pattern = supported_patterns[0]
+            if canonical_pattern is None:
+                dropped += 1
+                logger.info("ai_service: dropped advice without deterministic pattern attribution")
+                continue
+            evidence_ids = list(evidence_by_pattern.get(canonical_pattern, ()))
+            if not evidence_ids:
+                dropped += 1
+                logger.info("ai_service: dropped advice without Oracle evidence pattern=%s", canonical_pattern)
+                continue
+            if canonical_pattern in seen_patterns:
+                dropped += 1
+                logger.info("ai_service: dropped duplicate advice pattern=%s", canonical_pattern)
+                continue
+
         if verification not in _VERIFIED:
             guarded_explanation, prose_guard = _guard_unverified_advice_prose(
                 source_sql,
                 guard_title,
                 guard_explanation,
+                pattern_id=canonical_pattern,
             )
             if prose_guard is not None:
                 confidence_score = None
                 explanation = guarded_explanation
                 verification = "unverified"
                 logger.info("ai_service: advice-only prose normalized by guard: %s", prose_guard)
+
+        if canonical_pattern is not None:
+            seen_patterns.add(canonical_pattern)
+
         kept.append(
             AdviceItem(
                 title=title,
@@ -1226,17 +1318,16 @@ def _filter_advice(
                 example=example,
                 impact=item.impact,
                 confidence_score=confidence_score,
+                pattern_id=canonical_pattern,
+                evidence_ids=evidence_ids,
                 before=before,
                 verification=verification,
                 assumption=assumption,
             )
         )
+
     if dropped:
-        # PRD: log a counter on a forbidden-phrase hit, never the content
-        # that triggered it. INFO (not debug) so this decision is visible in
-        # production logs without needing debug-level logging enabled — see
-        # tasks/lessons.md "決策 log 用 debug 等於沒有 log".
-        logger.info("ai_service: dropped %d advice item(s) on forbidden-phrase match", dropped)
+        logger.info("ai_service: dropped %d advice item(s) during safety/evidence finalization", dropped)
     return kept
 
 

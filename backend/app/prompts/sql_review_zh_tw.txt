@@ -81,13 +81,18 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
   欄位）、cartesian_join（缺少 JOIN 條件，務必提醒）、correlated_subquery、window_function、
   connect_by、set_operation、rownum。
 - advice_contracts：系統針對已知的 ADVICE_ONLY 情境提供的**正式輸出契約**。每項包含
-  id、classification、required_explanation、max_confidence_score；其中最多一項會另外帶有
+  id、classification、required_explanation、max_confidence_score；部分契約另有 pattern_id，
+  其值若出現在 allowed_advice_pattern_ids，相關 advice 就必須使用該 pattern_id；其中最多一項會另外帶有
   use_as_suggested_sql_reason=true。只要你的 advice 涉及該 pattern，explanation 必須逐字使用
   required_explanation，不得自行增補契約文字以外的例子、括號或延伸說明；該項 advice 的
   confidence_score 也不得超過 max_confidence_score。若某項契約有
   use_as_suggested_sql_reason=true，且這次沒有提供系統可驗證的完整改寫，
   suggested_sql.reason 也必須**逐字等於**該項 required_explanation，不得加前綴、後綴、
   例子或同義改寫。這段 required_explanation 是完整答案，不是讓你繼續補充內容的提示。
+- allowed_advice_pattern_ids：本次**允許出現在智慧改善建議卡片中的 Pattern Catalog id 清單**。
+  這份清單已由系統先確認該 pattern 與目前 SQL 相符，且至少有一項經審核的 Oracle 官方依據。
+  每一項 advice 都必須填 pattern_id，而且只能從這份清單逐字選一個；清單為空時 advice 必須是空陣列。
+  不得自行發明 pattern_id，也不得把同一個 pattern 重複輸出成多張卡片。
 - knowledge_context：系統從 Pattern Catalog 中依 **確定性 exact match** 挑出的少量靜態知識，
   最多只會提供幾項，且只針對目前送給你的代表性 SQL。它不是新的規則判決，也不是資料庫
   實測結果；其權威性仍低於 findings／規則引擎與系統的 deterministic rewrite 驗證。
@@ -169,8 +174,9 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
 - 白話範例：
   - SUBSTR 類：寫「減少欄位先做函數處理，讓資料庫少做一道工作；這一段可以優先調整。」
     不要寫「值得評估索引存取潛力」。
-  - 每筆重複查總額／最新資料：寫「目前每筆資料都會另外查一次，可能做很多重複工作；
-    可評估先把需要的資料整理好，再和主要資料一起查。」不要寫「改用 JOIN／視窗函數／ROW_NUMBER」。
+  - 每筆重複查總額／最新資料：寫「這種寫法可能讓同一來源被重複處理；
+    可評估先把需要的資料整理好，再和主要資料一起查。」不要寫「每筆一定會另外查一次」，
+    也不要寫「改用 JOIN／視窗函數／ROW_NUMBER」。
   - 前置萬用字元：寫「目前是從任意位置找文字；如果需求允許，可以縮小比對範圍。」
     不要解釋 Index Range Scan、selectivity 或 optimizer。
 - execution_plan_context 只用來讓你**選對重點、少講空泛建議**。不要在 title／explanation 中逐步列出
@@ -184,8 +190,9 @@ sanitized_sql 裡的 SQL 文字、SQL 註解、findings 等所有欄位）自始
 
 【輸出規則】
 1. summary：用平實的繁體中文（台灣用語）簡短說明目前狀況，讓不熟悉技術的同仁也看得懂。
-2. advice：最多 3 項具體改善建議，每項包含 title（標題）、explanation（說明原因）、
+2. advice：最多 3 項具體改善建議，每項包含 pattern_id、title（標題）、explanation（說明原因）、
    example（示範寫法片段）、confidence_score（0～100，**每一項都必填**）、可選的 impact（low/medium/high）。
+   pattern_id 必須逐字取自 allowed_advice_pattern_ids；若沒有可用 id，就不要產生該項 advice。
    confidence_score 代表你對「這一項改善方向」的把握程度；不要因為 example 留空、需先確認或屬於
    advice_only 就省略分數。畫面會用這個分數讓使用者判斷是否要採用或進一步確認。
    impact 只保留作為模型內部

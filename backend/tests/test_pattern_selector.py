@@ -150,8 +150,8 @@ def test_family_signals_stay_separate_from_exact_matches():
     function_selection = select_patterns(
         _parsed("SELECT A.X FROM T A WHERE UPPER(A.N)='ABC'"), [_finding("R005")], _rules()
     )
-    assert "UPPER_CASE_FOLD_REMOVAL" not in function_selection.exact_ids
-    assert "UPPER_CASE_FOLD_REMOVAL" in function_selection.family_signal_ids
+    assert "UPPER_CASE_FOLD_REMOVAL" in function_selection.exact_ids
+    assert "UPPER_CASE_FOLD_REMOVAL" not in function_selection.family_signal_ids
     assert "PREDICATE_FUNCTION_GENERIC" in function_selection.family_signal_ids
 
     outer = select_patterns(
@@ -228,3 +228,45 @@ def test_out_of_scope_exact_match_can_never_become_context_candidate():
     )
     assert selection.exact_ids == ("INDEX_ADVISORY", "SELECT_STAR")
     assert selection.context_candidate_ids == ("SELECT_STAR",)
+
+
+def test_direct_predicate_function_patterns_are_exact_but_nested_aggregate_nvl_is_not():
+    nvl = select_patterns(
+        _parsed("SELECT A.ID FROM T A WHERE NVL(A.STATUS,'N')='N'"),
+        [_finding("R005")],
+        _rules(),
+    )
+    assert "NVL_EQ_TO_OR_IS_NULL" in nvl.exact_ids
+
+    trunc = select_patterns(
+        _parsed("SELECT A.ID FROM T A WHERE TRUNC(A.TXN_DATE)=:D"),
+        [_finding("R005")],
+        _rules(),
+    )
+    assert "TRUNC_EQ_TO_RANGE" in trunc.exact_ids
+
+    to_char = select_patterns(
+        _parsed("SELECT A.ID FROM T A WHERE TO_CHAR(A.TXN_DATE,'YYYY')='2026'"),
+        [_finding("R005")],
+        _rules(),
+    )
+    assert "PREDICATE_FUNCTION_GENERIC" in to_char.exact_ids
+
+    upper = select_patterns(
+        _parsed("SELECT A.ID FROM T A WHERE UPPER(A.NAME)='ABC'"),
+        [_finding("R005")],
+        _rules(),
+    )
+    assert "UPPER_CASE_FOLD_REMOVAL" in upper.exact_ids
+
+    aggregate_nvl = select_patterns(
+        _parsed(
+            "SELECT A.ID, SUM(NVL(P.AMT,0)) TOTAL "
+            "FROM T A JOIN P P ON P.ID=A.ID "
+            "WHERE A.STATUS='A' "
+            "GROUP BY A.ID HAVING SUM(NVL(P.AMT,0)) > 0"
+        ),
+        [_finding("R005")],
+        _rules(),
+    )
+    assert "NVL_EQ_TO_OR_IS_NULL" not in aggregate_nvl.exact_ids

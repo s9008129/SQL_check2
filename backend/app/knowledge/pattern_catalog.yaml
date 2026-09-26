@@ -224,11 +224,16 @@ patterns:
 
   - id: TRUNC_EQ_TO_RANGE
     name_zh_tw: TRUNC 日期等式改為範圍比對
+    model_guidance_zh_tw: >
+      已確定 TRUNC() 是條件式的直接比較端，而且包住資料欄位。只能用白話說明「欄位先做函數再比對」
+      的改善方向；欄位型態與綁定值是否含時間看不到，因此不得自行產生日期範圍 SQL，也不得宣稱一定變快。
     category: predicate
     classification: ADVICE_ONLY
     oracle_applicable: true
+    evidence_refs: [ORACLE11G_TRANSFORMED_COLUMN]
     detection:
-      source: prompt_heuristic_only
+      source: sql_parser_complexity_flag
+      complexity_flags: [trunc_predicate]
       family_signals:
         rule_ids: [R005]
         qualifier_zh_tw: >
@@ -264,11 +269,17 @@ patterns:
 
   - id: NVL_EQ_TO_OR_IS_NULL
     name_zh_tw: NVL 預設值比對改為明確條件
+    model_guidance_zh_tw: >
+      已確定 NVL() 是條件式的直接比較端，而且包住資料欄位。可提醒使用者先確認空值規則與欄位型態，
+      再評估是否能直接用原始欄位比對；不得把 SELECT／SUM 等其他位置的 NVL 誤當成此 pattern，
+      也不得自行輸出可直接貼上的 OR／IS NULL 改寫。
     category: predicate
     classification: ADVICE_ONLY
     oracle_applicable: true
+    evidence_refs: [ORACLE11G_TRANSFORMED_COLUMN]
     detection:
-      source: prompt_heuristic_only
+      source: sql_parser_complexity_flag
+      complexity_flags: [nvl_predicate]
       family_signals:
         rule_ids: [R005]
         qualifier_zh_tw: >
@@ -365,11 +376,16 @@ patterns:
   # ===========================================================================
   - id: PREDICATE_FUNCTION_GENERIC
     name_zh_tw: 條件欄位使用函數（一般情況）
+    model_guidance_zh_tw: >
+      已確定條件式直接對欄位做 TO_CHAR() 等轉換後再比較。只能提醒評估直接使用原始欄位型態；
+      欄位型態與格式需求看不到，因此不得自行組日期範圍或其他可直接貼上的替代條件。
     category: predicate
     classification: ADVICE_ONLY
     oracle_applicable: true
+    evidence_refs: [ORACLE11G_TRANSFORMED_COLUMN]
     detection:
-      source: prompt_heuristic_only
+      source: sql_parser_complexity_flag
+      complexity_flags: [to_char_predicate]
       family_signals:
         rule_ids: [R005]
         qualifier_zh_tw: >
@@ -404,11 +420,16 @@ patterns:
 
   - id: UPPER_CASE_FOLD_REMOVAL
     name_zh_tw: 移除 UPPER／LOWER 大小寫轉換
+    model_guidance_zh_tw: >
+      已確定 UPPER()／LOWER() 是條件式的直接比較端。可提醒使用者確認資料大小寫規則，
+      再評估是否能直接比對原始欄位；不得假設資料本來就全部同一大小寫，也不得自行移除函數。
     category: predicate
     classification: ADVICE_ONLY
     oracle_applicable: true
+    evidence_refs: [ORACLE11G_TRANSFORMED_COLUMN]
     detection:
-      source: prompt_heuristic_only
+      source: sql_parser_complexity_flag
+      complexity_flags: [case_fold_predicate]
       family_signals:
         rule_ids: [R005]
         qualifier_zh_tw: >
@@ -680,6 +701,7 @@ patterns:
     category: subquery
     classification: ADVICE_ONLY
     oracle_applicable: true
+    evidence_refs: [ORACLE11G_VISIT_DATA_FEWER_TIMES]
     detection:
       source: sql_parser_complexity_flag
       complexity_flags: [repeated_scalar_aggregate]

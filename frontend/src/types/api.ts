@@ -186,6 +186,10 @@ export interface AdviceItem {
   impact: ImpactLevel | null;
   /** Model self-assessment of whether this advice applies to the current SQL. */
   confidence_score?: number | null;
+  /** Server-validated Pattern Catalog provenance for this visible advice. */
+  pattern_id?: string | null;
+  /** Oracle evidence ids populated only by the server, never chosen by the model. */
+  evidence_ids?: string[];
   // Original fragment that `example` replaces (verbatim); optional on the
   // wire for backward compatibility with an older backend.
   before?: string | null;

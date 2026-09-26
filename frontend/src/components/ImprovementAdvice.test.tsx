@@ -85,7 +85,7 @@ describe("ImprovementAdvice", () => {
     );
     expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("Performance Tuning Guide");
     expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("SQL Language Reference");
-    expect(screen.getByText("為什麼這樣可能比較快")).toBeTruthy();
+    expect(screen.getByText("Oracle 11g 依據與原則")).toBeTruthy();
     expect(screen.getByText("從固定文字開頭比對")).toBeTruthy();
     expect(screen.getByText("LIKE 從固定文字開頭比對時，比較容易先縮小要找的資料範圍。")).toBeTruthy();
     expect(screen.queryByText(/13%/)).toBeNull();
@@ -158,7 +158,7 @@ describe("ImprovementAdvice", () => {
     );
 
     expect(screen.getAllByText("Oracle 11g 官方依據")).toHaveLength(1);
-    expect(screen.getAllByText("為什麼這樣可能比較快")).toHaveLength(1);
+    expect(screen.getAllByText("Oracle 11g 依據與原則")).toHaveLength(1);
     expect(screen.getByText("直接比對原始欄位")).toBeTruthy();
     expect(screen.getByText("從固定文字開頭比對")).toBeTruthy();
   });
@@ -495,4 +495,43 @@ it("keeps overall confidence separate from verified/review evidence labels", () 
   expect(screen.getByText("需先確認再改")).toBeTruthy();
   expect(screen.getByText("AI 信心：中 72/100")).toBeTruthy();
   expect(screen.queryByText("可使用此改寫")).toBeNull();
+});
+
+
+it("shows the Oracle source directly on the matching AI advice card", () => {
+  render(
+    <ImprovementAdvice
+      ai={makeAi({
+        advice: [
+          {
+            title: "直接比對原始欄位",
+            explanation: "減少欄位端函數處理。",
+            before: "SUBSTR(A.CODE,1,2)='13'",
+            example: "A.CODE LIKE '13%'",
+            impact: "high",
+            verification: "verified",
+            confidence_score: 90,
+            pattern_id: "SUBSTR_EQ_TO_LIKE",
+            evidence_ids: ["ORACLE11G_TRANSFORMED_COLUMN"],
+          },
+        ],
+      })}
+      performanceEvidence={[
+        {
+          evidence_id: "ORACLE11G_TRANSFORMED_COLUMN",
+          pattern_id: "SUBSTR_EQ_TO_LIKE",
+          statement_indexes: [0],
+          source_label: "Oracle Database 11g 官方文件",
+          source_document: "Oracle Database Performance Tuning Guide 11g Release 2",
+          claim_zh_tw: "欄位先做函數處理後再比對，值得評估直接比對原始欄位。",
+          applicability_zh_tw: "本案符合 transformed column 原則。",
+          caveat_zh_tw: "實際效能仍需測試。",
+          strength: "strong",
+        },
+      ]}
+    />,
+  );
+
+  const links = screen.getByTestId("advice-oracle-evidence");
+  expect(links.textContent).toContain("Oracle 依據：直接比對原始欄位");
 });

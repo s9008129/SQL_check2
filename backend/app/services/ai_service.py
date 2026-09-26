@@ -48,7 +48,14 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlglot import exp, parse_one
 
 from app.schemas import AdviceItem, AiResult, Finding, SuggestedSql, normalize_confidence_score
-from app.services import context_adapter, llm_provider, pattern_selector, rewrite_rules, rule_engine
+from app.services import (
+    context_adapter,
+    llm_provider,
+    pattern_selector,
+    performance_evidence,
+    rewrite_rules,
+    rule_engine,
+)
 from app.services.cost_utils import classify_cost_relation, cost_formal_summary, cost_threshold_note
 from app.services.masking import (
     MaskResult,
@@ -166,7 +173,7 @@ _LLM_SEMAPHORE = asyncio.Semaphore(1)
 RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "summary": {"type": "string"},
+        "summary": {"type": "string", "maxLength": 360},
         # Overall confidence in the whole AI assessment. This is intentionally
         # separate from advice/rewrite confidence so a clean "no change needed"
         # assessment still carries a confidence signal.
@@ -177,12 +184,13 @@ RESPONSE_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "title": {"type": "string"},
-                    "explanation": {"type": "string"},
-                    "example": {"type": "string"},
+                    "pattern_id": {"type": "string", "maxLength": 80},
+                    "title": {"type": "string", "maxLength": 80},
+                    "explanation": {"type": "string", "maxLength": 520},
+                    "example": {"type": "string", "maxLength": 4000},
                     # The original fragment `example` replaces (verbatim),
                     # for a precise per-advice before/after diff in the UI.
-                    "before": {"type": "string"},
+                    "before": {"type": "string", "maxLength": 4000},
                     "impact": {"type": "string", "enum": ["low", "medium", "high"]},
                     "confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
                 },
@@ -190,15 +198,15 @@ RESPONSE_SCHEMA: dict[str, Any] = {
                 # once `before` was added, the model started returning
                 # `before` *instead of* `example` (confirmed live), leaving
                 # nothing to diff against.
-                "required": ["title", "explanation", "example", "confidence_score"],
+                "required": ["pattern_id", "title", "explanation", "example", "confidence_score"],
             },
         },
         "suggested_sql": {
             "type": "object",
             "properties": {
                 "available": {"type": "boolean"},
-                "reason": {"type": "string"},
-                "sql": {"type": "string"},
+                "reason": {"type": "string", "maxLength": 420},
+                "sql": {"type": "string", "maxLength": 12000},
                 "confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
                 # 2026-09-17: the model must say *which kind* of "no rewrite"
                 # this is, so the UI never shows the same fixed sentence for
@@ -214,6 +222,163 @@ RESPONSE_SCHEMA: dict[str, Any] = {
     "required": ["summary", "assessment_confidence_score", "advice", "suggested_sql"],
 }
 
+
+
+# A truncation retry is intentionally not just a larger token budget. It also
+# uses a much smaller response contract so the model has fewer places to
+# generate runaway text. The retry remains advice-only and cannot regain
+# full-rewrite authority.
+COMPACT_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "maxLength": 240},
+        "assessment_confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "advice": {
+            "type": "array",
+            "maxItems": 2,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "pattern_id": {"type": "string", "maxLength": 80},
+                    "title": {"type": "string", "maxLength": 60},
+                    "explanation": {"type": "string", "maxLength": 320},
+                    "example": {"type": "string", "maxLength": 1},
+                    "confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
+                },
+                "required": ["pattern_id", "title", "explanation", "example", "confidence_score"],
+            },
+        },
+        "suggested_sql": {
+            "type": "object",
+            "properties": {
+                "available": {"type": "boolean", "enum": [False]},
+                "reason": {"type": "string", "maxLength": 320},
+                "rewrite_outcome": {"type": "string", "enum": ["not_needed", "advice_only"]},
+            },
+            "required": ["available", "reason", "rewrite_outcome"],
+        },
+    },
+    "required": ["summary", "assessment_confidence_score", "advice", "suggested_sql"],
+}
+
+
+COMPACT_RECOVERY_PROMPT = """
+你是 SQLCheck 的「AI 回覆截斷恢復模式」。前一個模型回覆太長，系統已先用規則引擎完成 SQL 結構判讀；
+你不需要、也不應重新分析完整 SQL，因為這次只會收到已驗證的 pattern 清單與少量結構資訊。
+
+只輸出符合指定 JSON schema 的 JSON，不要 Markdown、不要解釋 JSON 以外的文字。
+- summary：繁體中文 1 句，最多 50 個中文字。
+- advice：只可使用 allowed_advice_pattern_ids；清單有 1～2 個 id 時，每個 id 各輸出 1 項且不得重複；清單空白時輸出空陣列。
+- 每項 title 最多 16 個中文字；explanation 最多 55 個中文字；example 一律輸出空字串。
+- 不得輸出 SQL 改寫、索引使用、Full Table Scan、Execution Plan、改善百分比、改善後 COST 或任何實測效能宣稱。
+- suggested_sql.available 必須是 false；rewrite_outcome 必須是 "advice_only"；reason 只要 1 句短句。
+- 不要重述 SQL，不要重述資料表或欄位名稱，不要補充清單以外的建議。
+"""
+
+
+def _compact_retry_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Strip long SQL/model context before the one truncation-recovery call.
+
+    Exact pattern selection has already happened deterministically. Recovery
+    therefore needs only the reviewed pattern ids plus tiny server-owned
+    contracts; resending the entire SQL caused Gemma to produce runaway
+    responses even with a compact JSON schema in round-2 E2E.
+    """
+    allowed = [str(x) for x in payload.get("allowed_advice_pattern_ids") or []][:2]
+    contracts: list[dict[str, Any]] = []
+    for item in payload.get("advice_contracts") or []:
+        if not isinstance(item, dict):
+            continue
+        pattern_id = str(item.get("pattern_id") or "")
+        if pattern_id and pattern_id not in allowed:
+            continue
+        compact_item = {
+            "id": item.get("id"),
+            "pattern_id": pattern_id or None,
+            "required_explanation": item.get("required_explanation"),
+        }
+        contracts.append(compact_item)
+
+    return {
+        "mode": "compact_truncation_recovery",
+        "statement_type": payload.get("statement_type"),
+        "compliance": payload.get("compliance"),
+        "cost_context": payload.get("cost_context") or {},
+        "structure_flags": list(payload.get("structure_flags") or [])[:12],
+        "allowed_advice_pattern_ids": allowed,
+        "advice_contracts": contracts[:2],
+    }
+
+COMPACT_SUMMARY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "maxLength": 160},
+        "assessment_confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
+    },
+    "required": ["summary", "assessment_confidence_score"],
+}
+
+_COMPACT_AI_OUTPUT_TOKENS = 512
+
+
+class _CompactAiResponse(BaseModel):
+    summary: str
+    assessment_confidence_score: int
+
+    @field_validator("assessment_confidence_score", mode="before")
+    @classmethod
+    def _strict_confidence(cls, value: object) -> int:
+        normalized = normalize_confidence_score(value)
+        if normalized is None:
+            raise ValueError("assessment_confidence_score must be an integer from 0 to 100")
+        return normalized
+
+
+def _compact_to_raw(parsed: _CompactAiResponse, payload: dict[str, Any]) -> "_AiRawResponse":
+    """Combine a tiny Gemma summary with deterministic Oracle-backed advice.
+
+    Pattern applicability was already decided by the rule engine / Pattern
+    Catalog before the model call. In compact mode the model explains the
+    result; it does not get to invent or veto advice patterns. This sharply
+    reduces output variance while preserving the architecture boundary that
+    AI explains and deterministic rules decide.
+    """
+    allowed = [str(x) for x in payload.get("allowed_advice_pattern_ids") or []][:2]
+    advice: list[AdviceItem] = []
+    for pattern_id in allowed:
+        title: str
+        explanation: str
+        presentation = _PATTERN_PRESENTATION.get(pattern_id)
+        if presentation is not None:
+            title, explanation = presentation
+        else:
+            pattern = pattern_selector.get_catalog_pattern(pattern_id) or {}
+            title = str(pattern.get("name_zh_tw") or "改善方向")
+            explanation = str(
+                pattern.get("model_guidance_zh_tw")
+                or pattern.get("rationale_zh_tw")
+                or "可依 Oracle 官方原則評估此項改善方向。"
+            )
+        advice.append(
+            AdviceItem(
+                pattern_id=pattern_id,
+                title=title,
+                explanation=explanation,
+                example="",
+                confidence_score=parsed.assessment_confidence_score,
+            )
+        )
+
+    return _AiRawResponse(
+        summary=parsed.summary,
+        assessment_confidence_score=parsed.assessment_confidence_score,
+        advice=advice,
+        suggested_sql=_RawSuggestedSql(
+            available=False,
+            reason="本次採用精簡建議模式，只提供已確認的改善方向。",
+            rewrite_outcome="advice_only",
+        ),
+    )
 
 class _RawSuggestedSql(BaseModel):
     """The model's own view of suggested_sql. `rewrite_outcome` is optional
@@ -336,6 +501,7 @@ _DECLINE_REASON_TEXT: dict[str, str] = {
     # "不自動產生建議寫法" read as if nothing followed.
     "too_long_for_rewrite": "這份 SQL 較長，AI 不整段重寫，改為針對可改善的地方逐段提供建議寫法。",
     "rewrite_truncated": "AI 嘗試整段重寫時超出回覆長度上限，改為針對可改善的地方逐段提供建議寫法。",
+    "advice_only_pattern": "這支 SQL 含需要先確認業務前提的改善項目，本次提供逐項建議，不自動整段改寫。",
 }
 
 
@@ -679,6 +845,93 @@ _ADVICE_ONLY_PROSE_GUARDS: tuple[tuple[str, re.Pattern[str], re.Pattern[str], st
     ),
 )
 
+
+_GUARD_PATTERN_IDS: dict[str, str] = {
+    "leading_wildcard_like": "LEADING_WILDCARD_LIKE",
+    "trunc_condition": "TRUNC_EQ_TO_RANGE",
+    "to_char_condition": "PREDICATE_FUNCTION_GENERIC",
+    "nvl_condition": "NVL_EQ_TO_OR_IS_NULL",
+    "distinct_removal": "DISTINCT_REMOVAL",
+}
+
+# Known ADVICE_ONLY patterns use server-owned presentation copy after the model
+# nominates a valid pattern id. This makes multi-pattern SQL deterministic:
+# one card can never borrow the prose guard of another card merely because
+# both patterns appear somewhere in the same SQL.
+_PATTERN_PRESENTATION: dict[str, tuple[str, str]] = {
+    "SUBSTR_EQ_TO_LIKE": (
+        "直接比對原始欄位",
+        "這段 SUBSTR 等式可由系統安全整理成 LIKE，減少欄位先做函數處理；實際效能仍需在測試環境確認。",
+    ),
+    "LEADING_WILDCARD_LIKE": (
+        "確認模糊搜尋範圍",
+        "目前使用前置萬用字元。若業務需求允許縮小比對範圍，可評估其他比對方式；調整前請先確認實際比對需求。",
+    ),
+    "TRUNC_EQ_TO_RANGE": (
+        "直接比對日期欄位",
+        "目前條件先用 TRUNC() 處理欄位再比對。若確認是日期欄位，可評估改用日期範圍；調整前請先確認欄位型態與比對值是否包含時間。",
+    ),
+    "NVL_EQ_TO_OR_IS_NULL": (
+        "確認空值比對方式",
+        "目前條件用 NVL() 處理空值。可評估改成分開判斷欄位值與空值；調整前請先確認欄位型態與原本的空值規則。",
+    ),
+    "PREDICATE_FUNCTION_GENERIC": (
+        "直接比對原始欄位",
+        "目前條件先用 TO_CHAR() 等函數轉換欄位再比對。可評估改用原始欄位型態直接比對；調整前請先確認欄位型態與實際比對需求。",
+    ),
+    "UPPER_CASE_FOLD_REMOVAL": (
+        "確認大小寫比對需求",
+        "目前條件先用 UPPER() 或 LOWER() 轉換欄位再比對。若業務資料的大小寫規則固定，可評估直接比對原始欄位；調整前請先確認實際資料與比對需求。",
+    ),
+    "DISTINCT_REMOVAL": (
+        "確認是否真的需要去除重複",
+        "移除 DISTINCT 前，請先確認 JOIN 後是否仍可能出現重複資料；如果會，就不要移除。",
+    ),
+    "OR_CROSS_COLUMN_TO_UNION_ALL": (
+        "確認跨欄位 OR 條件",
+        "這段 OR 連接不同欄位。若要拆開查詢，請先確認兩個條件是否可能同時成立，以及重複資料要如何處理；未確認前不建議改寫。",
+    ),
+    "COMPOSITE_KEY_EXPRESSION_JOIN": (
+        "評估原始欄位勾稽",
+        "目前 JOIN 前先加工欄位再比對。若資料結構允許，可評估直接使用原始欄位勾稽；調整前請先確認欄位寬度、空值與正確關聯鍵。",
+    ),
+    "STRING_CONCAT_PREDICATE_SPLIT": (
+        "確認代碼欄位怎麼拆",
+        "目前先把多個欄位串起來再比對。若要改成分欄位條件，請先確認每個欄位的固定寬度、空值與補空白規則。",
+    ),
+    "LATEST_ROW_CORRELATED_MAX": (
+        "減少重複查詢",
+        "這種寫法可能讓同一來源被重複處理。可評估先整理需要的最新資料，再和主要資料一起查；調整前請先確認同一日期時間是否可能有多筆。",
+    ),
+    "REPEATED_SCALAR_AGGREGATE": (
+        "集中處理重複統計",
+        "這種寫法可能重複計算同一來源的統計資料。可評估先集中計算一次再重用；調整前請先確認各子查詢的條件與空值規則是否相同。",
+    ),
+    "REPEATED_SOURCE_UNION_BRANCH": (
+        "減少重複讀取",
+        "多個查詢區塊重複使用相同來源。可評估把共同資料先整理一次再集中處理；調整前請先確認各區塊的業務條件與合併後結果是否一致。",
+    ),
+}
+
+_REWRITE_RULE_PATTERN_ID: dict[str, str] = {
+    "or_eq_to_in": "OR_SAME_COLUMN_TO_IN",
+    "substr_eq_to_like": "SUBSTR_EQ_TO_LIKE",
+}
+
+def _pattern_evidence_ids(pattern_id: str | None) -> list[str]:
+    """Return only reviewed Oracle evidence ids for one catalog pattern."""
+    if not pattern_id:
+        return []
+    pattern = pattern_selector.get_catalog_pattern(pattern_id)
+    if pattern is None:
+        return []
+    ids: list[str] = []
+    for raw_id in pattern.get("evidence_refs") or ():
+        evidence_id = str(raw_id)
+        if performance_evidence.get_evidence_entry(evidence_id) is not None:
+            ids.append(evidence_id)
+    return ids
+
 _COPYABLE_SQL_IN_PROSE_RE = re.compile(
     r"(?:\b[A-Z_][A-Z0-9_$#]*\.)?[A-Z_][A-Z0-9_$#]*\s*"
     r"(?:=|<>|!=|>=|<=|>|<|\bLIKE\b|\bIN\s*\(|\bIS\s+(?:NOT\s+)?NULL\b)",
@@ -719,19 +972,33 @@ def _source_has_no_main_where(source_sql: str) -> bool:
         return False
 
 
-def _build_advice_contracts(source_sql: str) -> list[dict[str, Any]]:
+def _build_advice_contracts(
+    source_sql: str,
+    structure_flags: set[str] | list[str] | tuple[str, ...] | None = None,
+) -> list[dict[str, Any]]:
     """Return deterministic, SQL-free output contracts for known ADVICE_ONLY traps.
 
-    These are not new compliance rules. They only bound how the model may
-    explain patterns whose safe rewrite depends on schema/business facts that
-    SQLCheck cannot observe.
+    Function contracts are activated from parser flags, not a whole-SQL
+    substring scan. This prevents SUM(NVL(...)) in a SELECT/HAVING aggregate
+    from being mistaken for an NVL predicate merely because the text contains
+    the token NVL.
     """
     contracts: list[dict[str, Any]] = []
+    if structure_flags is None:
+        try:
+            parsed = parse_sql_text(source_sql)
+            parsed_statement = next((s for s in parsed.statements if s.parse_status == "ok"), None)
+            flags = set(parsed_statement.complexity_flags if parsed_statement is not None else ())
+        except Exception:
+            flags = set()
+    else:
+        flags = set(structure_flags)
 
     if rewrite_rules.has_cross_column_or(source_sql):
         contracts.append(
             {
                 "id": "cross_column_or",
+                "pattern_id": "OR_CROSS_COLUMN_TO_UNION_ALL",
                 "classification": "ADVICE_ONLY",
                 "required_explanation": _CROSS_COLUMN_OR_SAFE_COPY,
                 "max_confidence_score": 79,
@@ -748,43 +1015,45 @@ def _build_advice_contracts(source_sql: str) -> list[dict[str, Any]]:
             }
         )
 
+    flag_by_guard = {
+        "trunc_condition": "trunc_predicate",
+        "to_char_condition": "to_char_predicate",
+        "nvl_condition": "nvl_predicate",
+    }
     for guard_id, source_re, _advice_re, safe_copy in _ADVICE_ONLY_PROSE_GUARDS:
-        if source_re.search(source_sql):
-            contracts.append(
-                {
-                    "id": guard_id,
-                    "classification": "ADVICE_ONLY",
-                    "required_explanation": safe_copy,
-                    "max_confidence_score": 79,
-                }
-            )
+        if guard_id in flag_by_guard:
+            active = flag_by_guard[guard_id] in flags
+        elif guard_id == "distinct_removal":
+            active = "distinct" in flags
+        else:
+            active = bool(source_re.search(source_sql))
+        if not active:
+            continue
+        contract = {
+            "id": guard_id,
+            "classification": "ADVICE_ONLY",
+            "required_explanation": safe_copy,
+            "max_confidence_score": 79,
+        }
+        pattern_id = _GUARD_PATTERN_IDS.get(guard_id)
+        if pattern_id:
+            contract["pattern_id"] = pattern_id
+        contracts.append(contract)
 
-    # The same priority order is used by _server_owned_advice_only_reason().
-    # Mark exactly one contract as the canonical source for
-    # suggested_sql.reason so a smaller model does not "helpfully" append
-    # business-field examples that the SQL never supplied. This is model
-    # guidance only; the server still enforces the final reason independently.
     if contracts:
         contracts[0]["use_as_suggested_sql_reason"] = True
     return contracts
 
 
-def _server_owned_advice_only_reason(source_sql: str) -> str | None:
-    """Canonical reason for ADVICE_ONLY cases that previously leaked details.
-
-    The same safe copy is used for advice explanations and for the
-    suggested_sql.reason field so a model cannot bypass the prose guard by
-    moving UNION/date/filter examples into another field.
-    """
-    if rewrite_rules.has_cross_column_or(source_sql):
-        return _CROSS_COLUMN_OR_SAFE_COPY
-    if _source_has_no_main_where(source_sql):
-        return _NO_MAIN_WHERE_SAFE_COPY
-    for _guard_id, source_re, _advice_re, safe_copy in _ADVICE_ONLY_PROSE_GUARDS:
-        if source_re.search(source_sql):
-            return safe_copy
-    return None
-
+def _server_owned_advice_only_reason(
+    source_sql: str,
+    structure_flags: set[str] | list[str] | tuple[str, ...] | None = None,
+) -> str | None:
+    """Canonical reason for the highest-priority deterministic advice contract."""
+    contracts = _build_advice_contracts(source_sql, structure_flags)
+    if not contracts:
+        return None
+    return str(contracts[0]["required_explanation"])
 
 _TO_CHAR_YEAR_VALUE_RE = re.compile(
     r"(?P<prefix>\bTO_CHAR\s*\([^)]*,\s*'YYYY'\s*\)\s*=\s*)"
@@ -871,33 +1140,75 @@ def _calibrate_assessment_confidence(
     return score
 
 
-def _guard_unverified_advice_prose(source_sql: str, title: str, explanation: str) -> tuple[str, str | None]:
-    """Keep ADVICE_ONLY content useful without leaking copy-paste SQL.
+def _legacy_infer_advice_pattern(
+    source_sql: str,
+    title: str,
+    explanation: str,
+) -> str | None:
+    """Infer one advice pattern only when the evidence is unambiguous.
 
-    Prompt rules are guidance; this function is enforcement. Known semantic
-    traps get short server-owned wording. Any remaining unverified prose that
-    still contains a copyable predicate or an invented date literal is
-    replaced by a generic confirmation-first sentence.
+    Production uses ``allowed_pattern_ids`` and the model-returned pattern_id.
+    This helper exists for lower-level/internal callers that predate that
+    contract. It deliberately requires BOTH an active deterministic contract
+    for the SQL and text evidence that this specific card is about that same
+    contract. If zero or multiple patterns match, it returns None rather than
+    guessing. This preserves the Q10 cross-talk fix.
+    """
+    combined = f"{title}\n{explanation}"
+    matches: set[str] = set()
+    contracts = _build_advice_contracts(source_sql)
+    for contract in contracts:
+        pattern_id = str(contract.get("pattern_id") or "")
+        if not pattern_id:
+            continue
+        contract_id = str(contract.get("id") or "")
+        if contract_id == "cross_column_or":
+            text_re = _CROSS_COLUMN_OR_ADVICE_RE
+        else:
+            text_re = next(
+                (advice_re for guard_id, _source_re, advice_re, _safe_copy in _ADVICE_ONLY_PROSE_GUARDS
+                 if guard_id == contract_id),
+                None,
+            )
+        if text_re is not None and text_re.search(combined):
+            matches.add(pattern_id)
+    return next(iter(matches)) if len(matches) == 1 else None
+
+def _guard_unverified_advice_prose(
+    source_sql: str,
+    title: str,
+    explanation: str,
+    *,
+    pattern_id: str | None = None,
+) -> tuple[str, str | None]:
+    """Keep ADVICE_ONLY content useful without allowing pattern cross-talk.
+
+    When the server has validated a Pattern Catalog id, known advice-only
+    patterns use fixed business-facing copy owned by SQLCheck. This is
+    deliberately stricter than scanning the whole SQL for keywords: a LIKE
+    pattern elsewhere in the statement can no longer overwrite the wording
+    of a JOIN-expression advice card.
     """
     if not explanation:
         return explanation, None
 
+    if pattern_id in _PATTERN_PRESENTATION:
+        _server_title, safe_copy = _PATTERN_PRESENTATION[pattern_id]
+        return safe_copy, f"pattern:{pattern_id}"
+
     combined = f"{title}\n{explanation}"
+    # Legacy/no-provenance paths retain only the generic safety guards. They
+    # never select a pattern-specific copy from another part of the SQL.
     if rewrite_rules.has_cross_column_or(source_sql) and _CROSS_COLUMN_OR_ADVICE_RE.search(combined):
         return _CROSS_COLUMN_OR_SAFE_COPY, "cross_column_or"
 
     if _source_has_no_main_where(source_sql) and _NO_MAIN_WHERE_INVENTED_FIELD_RE.search(combined):
         return _NO_MAIN_WHERE_SAFE_COPY, "no_main_where_invented_field"
 
-    for guard_id, source_re, advice_re, safe_copy in _ADVICE_ONLY_PROSE_GUARDS:
-        if source_re.search(source_sql) and advice_re.search(combined):
-            return safe_copy, guard_id
-
     if _COPYABLE_SQL_IN_PROSE_RE.search(explanation) or _DATE_LITERAL_IN_PROSE_RE.search(explanation):
         return "這個改善方向可能改變查詢結果。請先確認業務條件後，再決定是否調整。", "generic_unverified_sql"
 
     return explanation, None
-
 
 def _parse_sql_or_fragment(text: str) -> exp.Expression | None:
     if not text or not text.strip():
@@ -1077,13 +1388,29 @@ def _filter_advice(
     *,
     source_sql: str = "",
     literal_hints: dict[str, dict[str, Any]] | None = None,
+    allowed_pattern_ids: set[str] | None = None,
 ) -> list[AdviceItem]:
+    """Safety-filter model advice and attach server-owned provenance.
+
+    ``allowed_pattern_ids`` enables the production provenance gate. Tests and
+    older internal callers may omit it to exercise lower-level fragment safety
+    in isolation. In the live path, every visible AI advice must map to a
+    deterministic/contract-approved Pattern Catalog entry and at least one
+    reviewed Oracle evidence id.
+    """
     kept: list[AdviceItem] = []
     dropped = 0
-    for item in advice[:3]:  # RESPONSE_SCHEMA already caps at 3; defensive
-        # Keep the established hard-drop behavior for explicit forbidden
-        # phrases before the sentence-level sanitizer removes softer
-        # unsupported database-behavior claims.
+    seen_patterns: set[str] = set()
+    strict_provenance = allowed_pattern_ids is not None
+    allowed = allowed_pattern_ids or set()
+
+    for item in advice[:3]:
+        pattern_id = (item.pattern_id or "").strip() or None
+        if strict_provenance and pattern_id is not None and pattern_id not in allowed:
+            logger.info("ai_service: dropped advice with non-allowed pattern id")
+            dropped += 1
+            continue
+
         raw_title = _apply_vocabulary(item.title, vocab)
         raw_explanation = _apply_vocabulary(item.explanation, vocab)
         if _contains_forbidden(raw_title, forbidden) or _contains_forbidden(raw_explanation, forbidden):
@@ -1091,39 +1418,31 @@ def _filter_advice(
             continue
         title = _sanitize_user_prose(raw_title, {}, literal_hints)
         explanation = _sanitize_user_prose(raw_explanation, {}, literal_hints)
-        # The score belongs to the AI suggestion direction, while the
-        # verification badge separately tells the user what the system could
-        # prove. Business-friendly wording normalization therefore must not
-        # erase a valid model-provided confidence score.
         confidence_score = normalize_confidence_score(item.confidence_score)
-        # Keep the sanitized model wording for pattern classification even if
-        # a lower safety layer later replaces the user-facing text.
         guard_title = title
         guard_explanation = explanation
-        # 2026-09-17: code fragments are shown to the reviewer who owns the
-        # data, so restore masked literals there too (previously `:STR_002`
-        # leaked through into the advice card — confirmed in a production
-        # printout). Prose fields are never un-masked.
+        if not strict_provenance and pattern_id is None:
+            pattern_id = _legacy_infer_advice_pattern(
+                source_sql,
+                guard_title,
+                guard_explanation,
+            )
         example = unmask_sql(item.example, reverse_map or {}) if item.example else None
         before = unmask_sql(item.before, reverse_map or {}) if item.before else None
         verification: str | None = None
         assumption: str | None = None
+        verified_pattern_id: str | None = None
+
         safety_issue = _advice_example_safety_issue(source_sql, before, example) if example else None
         if safety_issue is not None:
-            # The user-facing advice is now server-replaced because the model
-            # invented or altered unsafe SQL details. Do not keep the
-            # item-level score on text the model did not actually author; the
-            # frontend may still show overall AI assessment confidence.
             confidence_score = None
-            logger.info("ai_service: advice SQL example hidden by deterministic safety guard: %s", safety_issue)
+            logger.info(
+                "ai_service: advice SQL example hidden by deterministic safety guard: %s",
+                safety_issue,
+            )
             example = None
             before = None
             verification = "unverified"
-            # Once the model has demonstrated that this advice depends on an
-            # invented identifier/value or lost typed-literal context, do not
-            # keep its accompanying prose: the same hallucinated detail may
-            # be repeated there. Replace it with a server-owned, useful
-            # business instruction instead of merely appending a warning.
             if safety_issue == "unknown_identifier":
                 title = "請先確認查詢條件或資料表關聯"
                 explanation = (
@@ -1144,11 +1463,9 @@ def _filter_advice(
                 )
         elif example:
             if before:
-                # Concrete SQL is a privilege, not a warning label. Only a
-                # deterministic verified/corrected rewrite may reach the API
-                # as copyable SQL.
                 v = rewrite_rules.verify_fragment(before, example)
                 verification, assumption = v.status, v.assumption
+                verified_pattern_id = _REWRITE_RULE_PATTERN_ID.get(v.rule or "")
                 if v.status == "corrected":
                     confidence_score = None
                     logger.info("ai_service: advice fragment corrected by rule %s", v.rule)
@@ -1169,17 +1486,49 @@ def _filter_advice(
             confidence_score = None
             before = None
 
-        if verification not in _VERIFIED:
+        if verified_pattern_id:
+            pattern_id = verified_pattern_id
+
+        evidence_ids: list[str] = list(item.evidence_ids or [])
+        if strict_provenance:
+            if pattern_id is None and len(allowed) == 1:
+                pattern_id = next(iter(allowed))
+            if pattern_id is None or pattern_id not in allowed:
+                logger.info("ai_service: dropped advice without deterministic pattern provenance")
+                dropped += 1
+                continue
+            evidence_ids = _pattern_evidence_ids(pattern_id)
+            if not evidence_ids:
+                logger.info("ai_service: dropped advice without reviewed Oracle evidence")
+                dropped += 1
+                continue
+            if pattern_id in seen_patterns:
+                logger.info("ai_service: dropped duplicate advice pattern")
+                dropped += 1
+                continue
+            seen_patterns.add(pattern_id)
+
+        if pattern_id in _PATTERN_PRESENTATION:
+            server_title, server_explanation = _PATTERN_PRESENTATION[pattern_id]
+            title = server_title
+            explanation = server_explanation
+            if verification not in _VERIFIED:
+                confidence_score = None
+                verification = "unverified"
+            logger.info("ai_service: advice presentation normalized by pattern id")
+        elif verification not in _VERIFIED:
             guarded_explanation, prose_guard = _guard_unverified_advice_prose(
                 source_sql,
                 guard_title,
                 guard_explanation,
+                pattern_id=pattern_id,
             )
             if prose_guard is not None:
                 confidence_score = None
                 explanation = guarded_explanation
                 verification = "unverified"
                 logger.info("ai_service: advice-only prose normalized by guard: %s", prose_guard)
+
         kept.append(
             AdviceItem(
                 title=title,
@@ -1187,19 +1536,17 @@ def _filter_advice(
                 example=example,
                 impact=item.impact,
                 confidence_score=confidence_score,
+                pattern_id=pattern_id,
+                evidence_ids=evidence_ids,
                 before=before,
                 verification=verification,
                 assumption=assumption,
             )
         )
-    if dropped:
-        # PRD: log a counter on a forbidden-phrase hit, never the content
-        # that triggered it. INFO (not debug) so this decision is visible in
-        # production logs without needing debug-level logging enabled — see
-        # tasks/lessons.md "決策 log 用 debug 等於沒有 log".
-        logger.info("ai_service: dropped %d advice item(s) on forbidden-phrase match", dropped)
-    return kept
 
+    if dropped:
+        logger.info("ai_service: dropped %d advice item(s) during safety/provenance review", dropped)
+    return kept
 
 # PRD §25.4's exact fixed copy for "declined to auto-rewrite" — used
 # whenever the server (not the model) is the one deciding no rewrite will be
@@ -1377,17 +1724,13 @@ def _finalize_suggested_sql(
 
     if not candidate_allowed:
         outcome = "gated"
-        # Length-based gates are facts the server knows and the model does
-        # not; the model's own reason (often the generic PRD sentence it
-        # copied from the prompt) must not hide them.
-        length_gate = decline_code in ("too_long_for_rewrite", "rewrite_truncated")
-        if raw.available or length_gate or reason.strip() == _NO_REWRITE_REASON:
-            # The model's own `reason` was almost certainly written to
-            # justify *providing* a rewrite (available=true), so surfacing it
-            # verbatim once we flip available to false would read as
-            # self-contradictory. Replace it with a reason specific to *why*
-            # candidate_allowed is false (decline_code).
-            reason = _decline_reason_text(decline_code)
+        # A gate is a deterministic server decision. Never surface the
+        # model-authored reason for a gated rewrite: it can contradict the
+        # actual gate or smuggle an unsafe suggestion (for example "split
+        # into UNION/UNION ALL and see which is faster"). The decline reason
+        # is therefore always owned by the server and tied to decline_code.
+        reason = _decline_reason_text(decline_code)
+        confidence_score = None
 
     if _contains_forbidden(reason, forbidden):
         logger.info("ai_service: suggested_sql.reason discarded on forbidden-phrase match")
@@ -1436,7 +1779,10 @@ def _finalize_suggested_sql(
         outcome = "advice_only"
 
     source_sql = representative.raw_sql if representative is not None else ""
-    policy_reason = _server_owned_advice_only_reason(source_sql)
+    policy_reason = _server_owned_advice_only_reason(
+        source_sql,
+        representative.complexity_flags if representative is not None else (),
+    )
     if not available and policy_reason is not None and outcome not in {"gated", "rejected"}:
         # A known ADVICE_ONLY pattern cannot become "not_needed" merely
         # because the model overlooked it. The server already knows this
@@ -1499,6 +1845,7 @@ def _finalize(
     *,
     original_sql: str = "",
     literal_hints: dict[str, dict[str, Any]] | None = None,
+    allowed_pattern_ids: set[str] | None = None,
 ) -> AiResult:
     forbidden = ai_guard_cfg.get("forbidden_phrases", [])
     vocab = ai_guard_cfg.get("vocabulary_replacements", {})
@@ -1518,6 +1865,7 @@ def _finalize(
         reverse_map,
         source_sql=representative.raw_sql if representative is not None else original_sql,
         literal_hints=literal_hints,
+        allowed_pattern_ids=allowed_pattern_ids,
     )
     suggested_sql = _finalize_suggested_sql(
         raw.suggested_sql,
@@ -1608,7 +1956,7 @@ def _finalize(
 # reply without opening the container log. Unknown kinds fall back to the
 # PRD §56 sentence.
 DEGRADE_MESSAGES: dict[str, str] = {
-    "output_truncated": "SQL 內容較長，AI 回覆超出長度上限，本次未能完成分析；可縮短或拆分 SQL 後再試。",
+    "output_truncated": "AI 回覆內容超出長度上限，本次未能完整產生建議；請再試一次，若仍發生可改為分段檢視。",
     "prompt_truncated": "SQL 內容過長，超出 AI 可處理範圍，請拆分後再試。",
     "timeout": "AI 分析逾時（SQL 較長時約需 2～3 分鐘），請稍後再試一次。",
     "connection": "無法連線 AI 服務，仍可依上方規則檢核結果進行確認。",
@@ -1726,13 +2074,17 @@ async def _one_attempt(
     payload: dict[str, Any],
     *,
     max_output_tokens: int | None = None,
+    response_schema: dict[str, Any] | None = None,
+    system_prompt: str | None = None,
 ) -> _AiRawResponse:
     """Exactly one provider POST + JSON parse + Pydantic validation."""
+
     user_content = "<SQL_DATA>\n" + json.dumps(payload, ensure_ascii=False) + "\n</SQL_DATA>"
     request_max_output_tokens = max_output_tokens or settings.llm.max_output_tokens
+    active_system_prompt = system_prompt or SYSTEM_PROMPT
     num_ctx = _num_ctx_for(
         settings,
-        SYSTEM_PROMPT,
+        active_system_prompt,
         user_content,
         max_output_tokens=request_max_output_tokens,
     )
@@ -1746,9 +2098,9 @@ async def _one_attempt(
     reply = await llm_provider.generate_structured_json(
         client,
         settings.llm,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=active_system_prompt,
         user_content=user_content,
-        response_schema=RESPONSE_SCHEMA,
+        response_schema=response_schema or RESPONSE_SCHEMA,
         context_window=num_ctx,
         max_output_tokens=request_max_output_tokens,
     )
@@ -1777,6 +2129,45 @@ async def _one_attempt(
     return parsed
 
 
+async def _one_compact_attempt(
+    client: httpx.AsyncClient,
+    settings: Settings,
+    payload: dict[str, Any],
+    *,
+    max_output_tokens: int = _COMPACT_AI_OUTPUT_TOKENS,
+) -> _AiRawResponse:
+    """One tiny Gemma call used for advice-only or truncation recovery."""
+    compact_payload = _compact_retry_payload(payload)
+    user_content = "<SQL_DATA>\n" + json.dumps(compact_payload, ensure_ascii=False) + "\n</SQL_DATA>"
+    num_ctx = _num_ctx_for(
+        settings,
+        COMPACT_RECOVERY_PROMPT,
+        user_content,
+        max_output_tokens=max_output_tokens,
+    )
+    reply = await llm_provider.generate_structured_json(
+        client,
+        settings.llm,
+        system_prompt=COMPACT_RECOVERY_PROMPT,
+        user_content=user_content,
+        response_schema=COMPACT_SUMMARY_SCHEMA,
+        context_window=num_ctx,
+        max_output_tokens=max_output_tokens,
+    )
+    parsed = _CompactAiResponse.model_validate(json.loads(reply.content))
+    if len(parsed.summary) >= _MIN_SUMMARY_LEN_FOR_LANGUAGE_CHECK and not _CJK_RE.search(parsed.summary):
+        raise _NonChineseResponseError("summary contains no Chinese")
+    logger.info(
+        "ai_service: compact provider=%s model=%s done_reason=%s output_tokens=%s allowed_patterns=%d",
+        reply.provider,
+        reply.model,
+        reply.finish_reason,
+        reply.output_tokens,
+        len(compact_payload.get("allowed_advice_pattern_ids") or []),
+    )
+    _record_call_stats(settings, reply, max_output_tokens=max_output_tokens)
+    return _compact_to_raw(parsed, compact_payload)
+
 # A second attempt only makes sense if the provider still has time to answer.
 _MIN_RETRY_BUDGET_SECONDS = 60.0
 
@@ -1799,17 +2190,84 @@ async def _request_ai(
     retry_payload: dict[str, Any] | None = None,
     retry_max_output_tokens: int | None = None,
 ) -> tuple[_AiRawResponse | None, str | None, bool]:
-    """Returns (raw, failure_kind, used_retry_payload).
+    """Returns (raw, failure_kind, used_truncation_recovery).
 
-    One overall deadline bounds the whole provider call, including retry.
-    Transport/configuration failures fail immediately. A provider-reported
-    output-token truncation may retry once in advice-only mode with a bounded
-    per-request output budget. Invalid JSON, schema, or non-Chinese output may
-    retry once with the same payload and the normal output budget.
+    Full-model JSON is used only when a safe full rewrite is still eligible.
+    Once deterministic rules have already placed the request in advice-only
+    mode, Gemma receives a tiny summary-only payload from the start. This is
+    both safer and substantially more reliable than asking the model to
+    regenerate long SQL/context it is not allowed to rewrite.
+
+    A full-response truncation gets one compact summary-only recovery call.
+    Invalid JSON / non-Chinese output on the normal path may retry once with
+    the normal payload and budget.
     """
 
     def remaining() -> float:
         return deadline - time.monotonic()
+
+    async def _compact_call(
+        client: httpx.AsyncClient,
+        compact_source: dict[str, Any],
+        *,
+        used_recovery: bool,
+    ) -> tuple[_AiRawResponse | None, str | None, bool]:
+        compact_payload = _compact_retry_payload(compact_source)
+        compact_budget = min(
+            _COMPACT_AI_OUTPUT_TOKENS,
+            retry_max_output_tokens or settings.llm.max_output_tokens,
+        )
+        logger.info(
+            "ai_service: compact mode recovery=%s allowed_patterns=%d structure_flags=%d output_limit=%d",
+            used_recovery,
+            len(compact_payload.get("allowed_advice_pattern_ids") or []),
+            len(compact_payload.get("structure_flags") or []),
+            compact_budget,
+        )
+        # A truncation recovery is already the second provider call, so it
+        # never gets a third attempt. A request that starts directly in compact
+        # advice-only mode may retry once for invalid/non-Chinese output.
+        attempts = (
+            1
+            if used_recovery
+            else (2 if settings.llm.max_retries_on_invalid_json > 0 else 1)
+        )
+        for attempt in range(attempts):
+            if remaining() <= 0:
+                return None, "timeout", used_recovery
+            client.timeout = httpx.Timeout(max(remaining(), 1.0))
+            try:
+                return (
+                    await _one_compact_attempt(
+                        client,
+                        settings,
+                        compact_payload,
+                        max_output_tokens=compact_budget,
+                    ),
+                    None,
+                    used_recovery,
+                )
+            except (httpx.RequestError, httpx.HTTPStatusError, llm_provider.LLMConfigurationError) as exc:
+                return None, _transport_failure_kind(exc), used_recovery
+            except llm_provider.LLMPromptTruncatedError:
+                return None, "prompt_truncated", used_recovery
+            except llm_provider.LLMOutputTruncatedError as exc:
+                logger.info(
+                    "ai_service: compact response truncated (attempt=%d output_tokens=%s)",
+                    attempt + 1,
+                    exc.output_tokens,
+                )
+                if attempt + 1 >= attempts or remaining() < 15:
+                    return None, "output_truncated", used_recovery
+            except _NonChineseResponseError:
+                logger.info("ai_service: compact response not in Chinese (attempt=%d)", attempt + 1)
+                if attempt + 1 >= attempts or remaining() < 15:
+                    return None, "invalid_response", used_recovery
+            except (json.JSONDecodeError, ValidationError, KeyError, TypeError):
+                logger.info("ai_service: compact response invalid (attempt=%d)", attempt + 1)
+                if attempt + 1 >= attempts or remaining() < 15:
+                    return None, "invalid_response", used_recovery
+        return None, "invalid_response", used_recovery
 
     try:
         await asyncio.wait_for(_LLM_SEMAPHORE.acquire(), timeout=max(remaining(), 0.0))
@@ -1818,14 +2276,18 @@ async def _request_ai(
 
     try:
         async with httpx.AsyncClient(timeout=max(remaining(), 1.0)) as client:
-            normal_output_tokens = settings.llm.max_output_tokens
-            truncation_retry_tokens = max(
-                normal_output_tokens,
-                retry_max_output_tokens or normal_output_tokens,
+            # If deterministic rules already say "advice only" and there are
+            # reviewed Oracle-backed patterns to explain, never send the full
+            # SQL to Gemma. The model contributes only a short summary while
+            # the server owns the advice wording/provenance.
+            compact_primary = (
+                payload.get("candidate_allowed") is False
+                and bool(payload.get("allowed_advice_pattern_ids"))
             )
-            second_payload = payload
-            second_output_tokens = normal_output_tokens
-            used_retry = False
+            if compact_primary:
+                return await _compact_call(client, payload, used_recovery=False)
+
+            normal_output_tokens = settings.llm.max_output_tokens
             try:
                 return (
                     await _one_attempt(
@@ -1854,47 +2316,31 @@ async def _request_ai(
                         "disable provider thinking for schema-constrained JSON output",
                         exc.thinking_chars,
                     )
-
-                retry_changes_payload = retry_payload is not None and retry_payload != payload
-                retry_has_more_output = truncation_retry_tokens > normal_output_tokens
-                retry_is_useful = retry_payload is not None and (
-                    retry_changes_payload or retry_has_more_output
-                )
-                if not retry_is_useful or remaining() < _MIN_RETRY_BUDGET_SECONDS:
+                if (
+                    retry_payload is None
+                    or not retry_payload.get("allowed_advice_pattern_ids")
+                    or remaining() < 15
+                ):
                     logger.info(
                         "ai_service: provider output truncated "
-                        "(output_tokens=%s, normal_limit=%d, fallback_limit=%d) — "
-                        "degrading (retry_useful=%s, remaining=%.0fs)",
+                        "(output_tokens=%s) — no useful compact recovery",
                         exc.output_tokens,
-                        normal_output_tokens,
-                        truncation_retry_tokens,
-                        retry_is_useful,
-                        remaining(),
                     )
                     return None, "output_truncated", False
                 logger.info(
                     "ai_service: provider output truncated "
-                    "(output_tokens=%s, normal_limit=%d) — "
-                    "retrying once in advice-only mode with fallback_limit=%d "
-                    "(remaining=%.0fs)",
+                    "(output_tokens=%s) — switching to compact summary-only recovery (remaining=%.0fs)",
                     exc.output_tokens,
-                    normal_output_tokens,
-                    truncation_retry_tokens,
                     remaining(),
                 )
-                second_payload = retry_payload
-                second_output_tokens = truncation_retry_tokens
-                used_retry = True
+                return await _compact_call(client, retry_payload, used_recovery=True)
             except _NonChineseResponseError:
                 logger.info("ai_service: response not in Chinese — retrying once")
-                second_output_tokens = normal_output_tokens
             except (json.JSONDecodeError, ValidationError, KeyError, TypeError):
-                second_output_tokens = normal_output_tokens
+                logger.info("ai_service: response invalid — retrying once")
 
-            if settings.llm.max_retries_on_invalid_json <= 0 and not used_retry:
+            if settings.llm.max_retries_on_invalid_json <= 0 or remaining() <= 0:
                 return None, "invalid_response", False
-            if remaining() <= 0:
-                return None, "timeout", used_retry
 
             client.timeout = httpx.Timeout(max(remaining(), 1.0))
             try:
@@ -1902,27 +2348,22 @@ async def _request_ai(
                     await _one_attempt(
                         client,
                         settings,
-                        second_payload,
-                        max_output_tokens=second_output_tokens,
+                        payload,
+                        max_output_tokens=normal_output_tokens,
                     ),
                     None,
-                    used_retry,
+                    False,
                 )
             except (httpx.RequestError, httpx.HTTPStatusError, llm_provider.LLMConfigurationError) as exc:
-                return None, _transport_failure_kind(exc), used_retry
+                return None, _transport_failure_kind(exc), False
             except llm_provider.LLMPromptTruncatedError:
-                return None, "prompt_truncated", used_retry
-            except llm_provider.LLMOutputTruncatedError as exc:
-                logger.info(
-                    "ai_service: provider output truncated again on retry (output_tokens=%s) — degrading",
-                    exc.output_tokens,
-                )
-                return None, "output_truncated", used_retry
+                return None, "prompt_truncated", False
+            except llm_provider.LLMOutputTruncatedError:
+                return None, "output_truncated", False
             except _NonChineseResponseError:
-                logger.info("ai_service: response not in Chinese again on retry — degrading")
-                return None, "invalid_response", used_retry
+                return None, "invalid_response", False
             except (json.JSONDecodeError, ValidationError, KeyError, TypeError):
-                return None, "invalid_response", used_retry
+                return None, "invalid_response", False
     finally:
         _LLM_SEMAPHORE.release()
 
@@ -2024,6 +2465,45 @@ async def get_ai_result(
                 "detail": representative.restriction_detail,
             }
 
+        source_sql_for_advice = representative.raw_sql if representative is not None else sql_text
+        structure_flags_for_advice = representative.complexity_flags if representative is not None else set()
+        advice_contracts = _build_advice_contracts(
+            source_sql_for_advice,
+            structure_flags_for_advice,
+        )
+        representative_index = representative.index if representative is not None else None
+        exact_pattern_ids = {
+            match.pattern_id
+            for match in selection.exact
+            if match.classification != "OUT_OF_SCOPE"
+            and representative_index is not None
+            and representative_index in match.statement_indexes
+        }
+        contract_pattern_ids = {
+            str(contract["pattern_id"])
+            for contract in advice_contracts
+            if contract.get("pattern_id")
+        }
+        # Visible AI performance advice is stricter than model context: every
+        # card must have reviewed Oracle evidence. Unsupported/info-only
+        # patterns can still affect deterministic UI/rules, but cannot become
+        # an evidence-free AI recommendation.
+        allowed_pattern_ids = {
+            pattern_id
+            for pattern_id in exact_pattern_ids | contract_pattern_ids
+            if _pattern_evidence_ids(pattern_id)
+        }
+        exact_advice_only_pattern_ids = {
+            match.pattern_id
+            for match in selection.exact
+            if match.classification == "ADVICE_ONLY"
+            and representative_index is not None
+            and representative_index in match.statement_indexes
+        }
+        if candidate_allowed and exact_advice_only_pattern_ids:
+            candidate_allowed = False
+            decline_code = "advice_only_pattern"
+
         logger.info(
             "ai_service: gate candidate=%s decline_code=%s stmt_type=%s flags=%s where_kind=%s sql_tokens=%d",
             candidate_allowed,
@@ -2035,7 +2515,7 @@ async def get_ai_result(
         )
 
         def build(candidate: bool) -> dict[str, Any]:
-            return _build_payload(
+            built = _build_payload(
                 statement_type=statement_type,
                 sanitized_sql=mask_result.masked_sql,
                 cost=cost,
@@ -2047,11 +2527,11 @@ async def get_ai_result(
                 structure_flags=sorted(representative.complexity_flags) if representative else [],
                 knowledge_context=knowledge_context,
                 cost_context=_cost_context(cost, settings.rules_config),
-                advice_contracts=_build_advice_contracts(
-                    representative.raw_sql if representative is not None else sql_text
-                ),
+                advice_contracts=advice_contracts,
                 execution_plan_context=execution_plan_context,
             )
+            built["allowed_advice_pattern_ids"] = sorted(allowed_pattern_ids)
+            return built
 
         payload = build(candidate_allowed)
         # Issue #37: output truncation always has one bounded advice-only
@@ -2097,6 +2577,7 @@ async def get_ai_result(
             settings.important_tables_config,
             original_sql=sql_text,
             literal_hints=mask_result.literal_hints,
+            allowed_pattern_ids=allowed_pattern_ids,
         )
         level, basis = improvement_potential(result, findings)
         return result.model_copy(update={"improvement_potential": level, "improvement_potential_basis": basis})

@@ -19,7 +19,7 @@ from typing import Any
 
 import yaml
 
-from app.schemas import PerformanceEvidence, VerifiedRewrite
+from app.schemas import AdviceItem, PerformanceEvidence, VerifiedRewrite
 from app.services.pattern_selector import PatternSelection, get_catalog_pattern
 
 KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"
@@ -27,11 +27,10 @@ EVIDENCE_REGISTRY_PATH = KNOWLEDGE_DIR / "performance_evidence.yaml"
 
 _LIKE_LITERAL_RE = re.compile(r"\bLIKE\s+'((?:''|[^'])*)'", re.IGNORECASE)
 
-# Safe syntax normalization is not automatically a performance recommendation.
-# OR→IN remains available to the deterministic rewrite engine, but without
-# Oracle evidence of a performance benefit it is intentionally excluded from
-# the user-facing performance-evidence layer.
-_NON_PERFORMANCE_PATTERN_IDS = frozenset({"OR_SAME_COLUMN_TO_IN"})
+# The evidence layer includes both performance principles and Oracle execution
+# boundaries. OR→IN therefore exposes the official 1000-expression limit as a
+# compatibility/correctness source, while its caveat explicitly states that
+# the rewrite is not claimed to be faster.
 
 
 @lru_cache(maxsize=1)
@@ -176,8 +175,6 @@ def build_performance_evidence(
     for match in selection.exact:
         if match.classification == "OUT_OF_SCOPE":
             continue
-        if match.pattern_id in _NON_PERFORMANCE_PATTERN_IDS:
-            continue
         pattern = get_catalog_pattern(match.pattern_id)
         if pattern is None:
             raise ValueError(f"catalog entry missing for evidence pattern {match.pattern_id}")
@@ -217,4 +214,45 @@ def build_performance_evidence(
                     ),
                 )
 
+    return items
+
+
+def merge_advice_evidence(
+    base: list[PerformanceEvidence],
+    selection: PatternSelection,
+    advice: list[AdviceItem],
+) -> list[PerformanceEvidence]:
+    """Ensure every visible AI advice evidence id is materialized in the API.
+
+    Exact matches remain the preferred source. A server-validated advice item
+    may also come from an ADVICE_ONLY contract whose catalog entry is only a
+    family signal; in that case the advice provenance gate is the additional
+    proof that this specific pattern was allowed to reach the UI.
+    """
+    items = list(base)
+    seen = {(item.evidence_id, item.pattern_id, tuple(item.statement_indexes)) for item in items}
+    index_map: dict[str, tuple[int, ...]] = {}
+    for match in (*selection.exact, *selection.family_signals):
+        index_map.setdefault(match.pattern_id, match.statement_indexes)
+
+    for advice_item in advice:
+        pattern_id = advice_item.pattern_id
+        if not pattern_id:
+            continue
+        if get_catalog_pattern(pattern_id) is None:
+            continue
+        indexes = index_map.get(pattern_id, ())
+        for evidence_id in advice_item.evidence_ids:
+            key = (evidence_id, pattern_id, tuple(indexes))
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(
+                _build_item(
+                    evidence_id,
+                    pattern_id=pattern_id,
+                    statement_indexes=indexes,
+                    applicability=_default_applicability(pattern_id),
+                )
+            )
     return items

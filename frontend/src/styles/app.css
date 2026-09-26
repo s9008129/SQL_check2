@@ -479,7 +479,7 @@ mark.legend{margin:0 3px}
   border-radius:13px;
   background:#f5fbf7;
   color:#456052;
-  font-size:13px;
+  font-size:14px;
   line-height:1.55;
 }
 .evidence-source-note .badge{flex:0 0 auto}
@@ -499,6 +499,17 @@ mark.legend{margin:0 3px}
   background:#6c5ce7;
   color:#fff;
 }
+.advice-oracle-links{
+  display:flex;
+  flex-wrap:wrap;
+  gap:7px;
+  margin-top:10px;
+}
+.advice-oracle-links .badge{
+  font-size:12px;
+  line-height:1.35;
+}
+
 
 .plan-summary-grid-business{
   grid-template-columns:repeat(3,minmax(0,1fr));

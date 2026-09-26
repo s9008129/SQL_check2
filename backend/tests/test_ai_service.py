@@ -531,7 +531,8 @@ def test_system_prompt_targets_business_sql_writers_and_avoids_dba_jargon():
     assert "索引存取潛力" in prompt
     assert "相關子查詢" in prompt
     assert "視窗函數" in prompt
-    assert "目前每筆資料都會另外查一次" in prompt
+    assert "這種寫法可能讓同一來源被重複處理" in prompt
+    assert "目前每筆資料都會另外查一次" not in prompt
     assert "可評估先把需要的資料整理好，再和主要資料一起查" in prompt
     assert "不要寫「改用 JOIN／視窗函數／ROW_NUMBER」" in prompt
     assert "不要使用「評估相關子查詢結構」「分析執行路徑」" in prompt
@@ -682,7 +683,8 @@ def test_filter_advice_replaces_index_access_potential_with_plain_language_and_k
 
     assert result[0].confidence_score == 95
     assert "索引存取潛力" not in result[0].explanation
-    assert "這一段可以優先調整" in result[0].explanation
+    assert "這段 SUBSTR 等式可由系統安全整理成 LIKE" in result[0].explanation
+    assert "實際效能仍需在測試環境確認" in result[0].explanation
 
 
 def test_raw_ai_response_requires_confidence_for_every_advice_item():
@@ -912,7 +914,8 @@ async def test_trunc_to_range_full_rewrite_is_rejected(settings, chat_url):
     result = await _call(settings, trunc_stmt)
 
     assert result.suggested_sql.available is False
-    assert result.suggested_sql.outcome == "rejected"
+    assert result.suggested_sql.outcome == "gated"
+    assert "需要先確認業務前提" in result.suggested_sql.reason
     assert result.suggested_sql.sql is None
 
 
@@ -1440,7 +1443,8 @@ async def test_rewrite_not_in_to_not_exists_is_rejected(settings, chat_url):
     rewrite = "SELECT A.X FROM T A WHERE A.Y = 'A' AND NOT EXISTS (SELECT 1 FROM U B WHERE B.K = A.K AND B.Z = 'A')"
     result = await _call_rewrite(settings, chat_url, original, rewrite)
     assert result.suggested_sql.available is False
-    assert "改變了查詢結構" in result.suggested_sql.reason
+    assert result.suggested_sql.outcome == "gated"
+    assert "需要先確認業務前提" in result.suggested_sql.reason
 
 
 @respx.mock
@@ -1544,10 +1548,7 @@ async def test_non_chinese_summary_is_retried_once_then_degraded(settings, chat_
     assert route.call_count == 2
 
 
-async def test_request_ai_truncation_retry_uses_larger_budget_even_when_payload_already_advice_only(
-    settings,
-    monkeypatch,
-):
+async def test_request_ai_truncation_recovers_with_tiny_summary_call(settings, monkeypatch):
     openrouter = dataclasses.replace(
         settings,
         llm=dataclasses.replace(
@@ -1558,8 +1559,16 @@ async def test_request_ai_truncation_retry_uses_larger_budget_even_when_payload_
             truncation_retry_max_output_tokens=8192,
         ),
     )
-    payload = {"candidate_allowed": False, "statement_type": "SELECT"}
-    calls: list[tuple[dict, int | None]] = []
+    payload = {
+        "candidate_allowed": True,
+        "statement_type": "SELECT",
+        "allowed_advice_pattern_ids": ["SUBSTR_EQ_TO_LIKE"],
+    }
+    retry_payload = {
+        "candidate_allowed": False,
+        "statement_type": "SELECT",
+        "allowed_advice_pattern_ids": ["SUBSTR_EQ_TO_LIKE"],
+    }
     success = ai_service._AiRawResponse.model_validate(
         _good_inner(
             suggested_sql={
@@ -1570,30 +1579,37 @@ async def test_request_ai_truncation_retry_uses_larger_budget_even_when_payload_
             }
         )
     )
+    full_budgets: list[int | None] = []
+    compact_budgets: list[int | None] = []
 
-    async def fake_one_attempt(client, current_settings, current_payload, *, max_output_tokens=None):
+    async def truncated_full(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
+        del client, current_settings, current_payload
+        full_budgets.append(max_output_tokens)
+        raise ai_service.llm_provider.LLMOutputTruncatedError(3072)
+
+    async def compact_success(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
         del client, current_settings
-        calls.append((current_payload, max_output_tokens))
-        if len(calls) == 1:
-            raise ai_service.llm_provider.LLMOutputTruncatedError(3072)
+        assert current_payload["mode"] == "compact_truncation_recovery"
+        assert "sanitized_sql" not in current_payload
+        compact_budgets.append(max_output_tokens)
         return success
 
-    monkeypatch.setattr(ai_service, "_one_attempt", fake_one_attempt)
+    monkeypatch.setattr(ai_service, "_one_attempt", truncated_full)
+    monkeypatch.setattr(ai_service, "_one_compact_attempt", compact_success)
 
     raw, failure_kind, used_retry = await ai_service._request_ai(
         openrouter,
         payload,
         deadline=time.monotonic() + 120,
-        retry_payload=dict(payload),
+        retry_payload=retry_payload,
         retry_max_output_tokens=openrouter.llm.truncation_retry_max_output_tokens,
     )
 
     assert raw is success
     assert failure_kind is None
     assert used_retry is True
-    assert [budget for _, budget in calls] == [3072, 8192]
-    assert len(calls) == 2
-
+    assert full_budgets == [3072]
+    assert compact_budgets == [ai_service._COMPACT_AI_OUTPUT_TOKENS]
 
 async def test_request_ai_second_truncation_degrades_without_third_attempt(settings, monkeypatch):
     openrouter = dataclasses.replace(
@@ -1606,29 +1622,41 @@ async def test_request_ai_second_truncation_degrades_without_third_attempt(setti
             truncation_retry_max_output_tokens=8192,
         ),
     )
-    payload = {"candidate_allowed": False}
-    budgets: list[int | None] = []
+    payload = {
+        "candidate_allowed": True,
+        "allowed_advice_pattern_ids": ["SUBSTR_EQ_TO_LIKE"],
+    }
+    retry_payload = {
+        "candidate_allowed": False,
+        "allowed_advice_pattern_ids": ["SUBSTR_EQ_TO_LIKE"],
+    }
+    calls = {"full": 0, "compact": 0}
 
-    async def always_truncated(client, current_settings, current_payload, *, max_output_tokens=None):
-        del client, current_settings, current_payload
-        budgets.append(max_output_tokens)
-        raise ai_service.llm_provider.LLMOutputTruncatedError(max_output_tokens)
+    async def full_truncated(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
+        del client, current_settings, current_payload, max_output_tokens
+        calls["full"] += 1
+        raise ai_service.llm_provider.LLMOutputTruncatedError(3072)
 
-    monkeypatch.setattr(ai_service, "_one_attempt", always_truncated)
+    async def compact_truncated(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
+        del client, current_settings, current_payload, max_output_tokens
+        calls["compact"] += 1
+        raise ai_service.llm_provider.LLMOutputTruncatedError(ai_service._COMPACT_AI_OUTPUT_TOKENS)
+
+    monkeypatch.setattr(ai_service, "_one_attempt", full_truncated)
+    monkeypatch.setattr(ai_service, "_one_compact_attempt", compact_truncated)
 
     raw, failure_kind, used_retry = await ai_service._request_ai(
         openrouter,
         payload,
         deadline=time.monotonic() + 120,
-        retry_payload=dict(payload),
+        retry_payload=retry_payload,
         retry_max_output_tokens=8192,
     )
 
     assert raw is None
     assert failure_kind == "output_truncated"
     assert used_retry is True
-    assert budgets == [3072, 8192]
-
+    assert calls == {"full": 1, "compact": 1}
 
 async def test_request_ai_truncation_with_insufficient_deadline_does_not_retry(settings, monkeypatch):
     openrouter = dataclasses.replace(
@@ -1643,7 +1671,7 @@ async def test_request_ai_truncation_with_insufficient_deadline_does_not_retry(s
     )
     calls = 0
 
-    async def truncated_once(client, current_settings, current_payload, *, max_output_tokens=None):
+    async def truncated_once(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
         nonlocal calls
         del client, current_settings, current_payload, max_output_tokens
         calls += 1
@@ -1679,7 +1707,7 @@ async def test_request_ai_normal_response_keeps_normal_output_budget(settings, m
     success = ai_service._AiRawResponse.model_validate(_good_inner())
     budgets: list[int | None] = []
 
-    async def succeeds(client, current_settings, current_payload, *, max_output_tokens=None):
+    async def succeeds(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
         del client, current_settings, current_payload
         budgets.append(max_output_tokens)
         return success
@@ -1714,7 +1742,7 @@ async def test_request_ai_invalid_json_retry_does_not_use_truncation_budget(sett
     success = ai_service._AiRawResponse.model_validate(_good_inner())
     budgets: list[int | None] = []
 
-    async def invalid_then_success(client, current_settings, current_payload, *, max_output_tokens=None):
+    async def invalid_then_success(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
         del client, current_settings, current_payload
         budgets.append(max_output_tokens)
         if len(budgets) == 1:
@@ -1756,7 +1784,9 @@ async def test_output_truncation_retries_once_in_advice_only_mode(settings, chat
     first = json.loads(route.calls[0].request.content)["messages"][1]["content"]
     second = json.loads(route.calls[1].request.content)["messages"][1]["content"]
     assert '"candidate_allowed": true' in first
-    assert '"candidate_allowed": false' in second
+    assert '"mode": "compact_truncation_recovery"' in second
+    assert '"candidate_allowed"' not in second
+    assert '"sanitized_sql"' not in second
     assert result.suggested_sql.available is False
     assert result.suggested_sql.outcome == "gated"
     assert "超出回覆長度上限" in result.suggested_sql.reason
@@ -1776,9 +1806,9 @@ async def test_output_truncation_twice_degrades_with_specific_message(settings, 
 
 @respx.mock
 async def test_output_truncation_without_time_budget_does_not_retry(settings, chat_url):
-    # Deadline is OLLAMA_TIMEOUT_SECONDS from the start; with only 30s in
-    # total there is no room for a second attempt (< 60s budget rule).
-    short = dataclasses.replace(settings, llm=dataclasses.replace(settings.llm, timeout_seconds=30))
+    # Compact recovery only needs a small window; with 10s total there is
+    # deliberately no room for a second provider call.
+    short = dataclasses.replace(settings, llm=dataclasses.replace(settings.llm, timeout_seconds=10))
     route = respx.post(chat_url).mock(return_value=httpx.Response(200, json=_truncated_envelope()))
     result = await _call(short, _clean_select_statement())
     assert result.status == "unavailable"
@@ -3037,13 +3067,12 @@ async def test_to_char_year_value_is_hidden_from_model_but_format_role_remains(s
     body = json.loads(route.calls[0].request.content)
     user_message = next(m["content"] for m in body["messages"] if m["role"] == "user")
     payload = json.loads(user_message.removeprefix("<SQL_DATA>\n").removesuffix("\n</SQL_DATA>"))
-    assert "'YYYY'" in payload["sanitized_sql"]
-    assert "'2024'" not in payload["sanitized_sql"]
-    year_hints = [h for h in payload["literal_hints"].values() if h.get("semantic_role") == "year_value"]
-    assert len(year_hints) == 1
-    assert year_hints[0]["shape"] == "digits"
-    ids = {item["id"] for item in payload["advice_contracts"]}
-    assert "to_char_condition" in ids
+    # TO_CHAR is now an exact ADVICE_ONLY pattern. Compact mode strengthens
+    # privacy by sending no raw SQL/literal text to the model at all.
+    assert "sanitized_sql" not in payload
+    assert "2024" not in user_message
+    assert payload["mode"] == "compact_truncation_recovery"
+    assert "PREDICATE_FUNCTION_GENERIC" in payload["allowed_advice_pattern_ids"]
 
 
 @respx.mock
@@ -3073,9 +3102,9 @@ async def test_cross_column_or_advice_only_reason_is_server_owned_and_never_ment
     )
 
     assert result.suggested_sql is not None
-    assert result.suggested_sql.outcome == "advice_only"
+    assert result.suggested_sql.outcome == "gated"
+    assert "需要先確認業務前提" in result.suggested_sql.reason
     assert "UNION" not in result.suggested_sql.reason
-    assert result.suggested_sql.reason == ai_service._CROSS_COLUMN_OR_SAFE_COPY
 
 
 @respx.mock
@@ -3135,3 +3164,186 @@ def test_no_main_where_contract_owns_raw_suggested_sql_reason():
     # Exactly one contract owns the raw reason. This keeps the model contract
     # unambiguous when a statement matches more than one ADVICE_ONLY pattern.
     assert sum(item.get("use_as_suggested_sql_reason") is True for item in contracts) == 1
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-26 business E2E hardening: pattern provenance + compact fallback
+# ---------------------------------------------------------------------------
+
+def test_nested_aggregate_nvl_does_not_create_nvl_predicate_contract():
+    sql = (
+        "SELECT A.ID, SUM(NVL(P.AMT,0)) TOTAL "
+        "FROM T A JOIN P P ON P.ID=A.ID "
+        "WHERE A.STATUS='A' GROUP BY A.ID HAVING SUM(NVL(P.AMT,0)) > 0"
+    )
+    statement = parse_sql_text(sql).statements[0]
+    contracts = ai_service._build_advice_contracts(sql, statement.complexity_flags)
+    assert "nvl_condition" not in {item["id"] for item in contracts}
+
+
+def test_direct_nvl_predicate_creates_exact_contract_with_pattern_id():
+    sql = "SELECT A.ID FROM T A WHERE NVL(A.STATUS,'N')='N'"
+    statement = parse_sql_text(sql).statements[0]
+    contracts = ai_service._build_advice_contracts(sql, statement.complexity_flags)
+    nvl = next(item for item in contracts if item["id"] == "nvl_condition")
+    assert nvl["pattern_id"] == "NVL_EQ_TO_OR_IS_NULL"
+    assert nvl["max_confidence_score"] == 79
+
+
+def test_strict_advice_provenance_prevents_multi_pattern_copy_cross_talk():
+    from app.schemas import AdviceItem
+
+    source = (
+        "SELECT A.ID FROM T A JOIN U B "
+        "ON SUBSTR(A.KEY_COL,1,4)=B.KEY_HEAD "
+        "WHERE A.NAME LIKE '%商行%'"
+    )
+    advice = [
+        AdviceItem(
+            pattern_id="COMPOSITE_KEY_EXPRESSION_JOIN",
+            title="評估原始欄位勾稽",
+            explanation="目前是前置萬用字元 LIKE，可評估縮小搜尋範圍。",
+            example=None,
+            impact="medium",
+            confidence_score=70,
+        )
+    ]
+    result = ai_service._filter_advice(
+        advice,
+        [],
+        {},
+        source_sql=source,
+        allowed_pattern_ids={
+            "COMPOSITE_KEY_EXPRESSION_JOIN",
+            "LEADING_WILDCARD_LIKE",
+        },
+    )
+    assert len(result) == 1
+    assert result[0].pattern_id == "COMPOSITE_KEY_EXPRESSION_JOIN"
+    assert result[0].title == "評估原始欄位勾稽"
+    assert "JOIN 前先加工欄位" in result[0].explanation
+    assert "萬用字元" not in result[0].explanation
+    assert result[0].evidence_ids == ["ORACLE11G_TRANSFORMED_COLUMN"]
+
+
+def test_strict_advice_provenance_drops_pattern_without_reviewed_oracle_evidence():
+    from app.schemas import AdviceItem
+
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                pattern_id="DISTINCT_REMOVAL",
+                title="確認 DISTINCT",
+                explanation="請確認是否需要 DISTINCT。",
+                example=None,
+                impact="medium",
+                confidence_score=70,
+            )
+        ],
+        [],
+        {},
+        source_sql="SELECT DISTINCT A.ID FROM T A WHERE A.STATUS='A'",
+        allowed_pattern_ids={"DISTINCT_REMOVAL"},
+    )
+    assert result == []
+
+
+def test_response_schema_requires_pattern_id_and_bounds_text():
+    advice_schema = ai_service.RESPONSE_SCHEMA["properties"]["advice"]
+    assert "pattern_id" in advice_schema["items"]["required"]
+    assert advice_schema["items"]["properties"]["explanation"]["maxLength"] <= 520
+    assert ai_service.RESPONSE_SCHEMA["properties"]["summary"]["maxLength"] <= 360
+
+
+def test_compact_summary_schema_is_tiny_and_sql_free():
+    compact = ai_service.COMPACT_SUMMARY_SCHEMA
+    assert set(compact["properties"]) == {"summary", "assessment_confidence_score"}
+    assert compact["properties"]["summary"]["maxLength"] <= 160
+    assert ai_service._COMPACT_AI_OUTPUT_TOKENS <= 512
+    assert compact["properties"]["summary"]["maxLength"] < ai_service.RESPONSE_SCHEMA["properties"]["summary"]["maxLength"]
+
+async def test_request_ai_starts_compact_when_request_is_already_advice_only(settings, monkeypatch):
+    openrouter = dataclasses.replace(
+        settings,
+        llm=dataclasses.replace(
+            settings.llm,
+            provider="openrouter",
+            provider_type="openrouter",
+            max_output_tokens=3072,
+            truncation_retry_max_output_tokens=8192,
+        ),
+    )
+    success = ai_service._AiRawResponse.model_validate(
+        _good_inner(
+            advice=[],
+            suggested_sql={
+                "available": False,
+                "reason": "僅提供方向。",
+                "rewrite_outcome": "advice_only",
+            },
+        )
+    )
+    compact_calls = []
+
+    async def should_not_run(*_args, **_kwargs):
+        raise AssertionError("full response path must not run for deterministic advice-only mode")
+
+    async def compact_success(client, current_settings, current_payload, *, max_output_tokens=None, **_kwargs):
+        del client, current_settings
+        compact_calls.append((current_payload, max_output_tokens))
+        return success
+
+    monkeypatch.setattr(ai_service, "_one_attempt", should_not_run)
+    monkeypatch.setattr(ai_service, "_one_compact_attempt", compact_success)
+
+    raw, failure_kind, used_retry = await ai_service._request_ai(
+        openrouter,
+        {
+            "candidate_allowed": False,
+            "statement_type": "SELECT",
+            "sanitized_sql": "SELECT A.X FROM T A",
+            "allowed_advice_pattern_ids": ["NVL_EQ_TO_OR_IS_NULL"],
+        },
+        deadline=time.monotonic() + 120,
+        retry_payload=None,
+        retry_max_output_tokens=8192,
+    )
+
+    assert raw is success
+    assert failure_kind is None
+    assert used_retry is False
+    assert len(compact_calls) == 1
+    compact_payload, budget = compact_calls[0]
+    assert compact_payload["mode"] == "compact_truncation_recovery"
+    assert "sanitized_sql" not in compact_payload
+    assert budget == ai_service._COMPACT_AI_OUTPUT_TOKENS
+
+def test_compact_retry_payload_drops_sql_and_keeps_only_two_allowed_patterns():
+    source = {
+        "statement_type": "SELECT",
+        "sanitized_sql": "SELECT " + "X," * 5000 + "Y FROM T",
+        "compliance": "PASS",
+        "cost_context": {"relation": "below_threshold"},
+        "structure_flags": ["set_operation", "repeated_source_set_operation", "group_by_aggregate"],
+        "allowed_advice_pattern_ids": ["P1", "P2", "P3"],
+        "advice_contracts": [
+            {"id": "a", "pattern_id": "P1", "required_explanation": "A"},
+            {"id": "b", "pattern_id": "P2", "required_explanation": "B"},
+            {"id": "c", "pattern_id": "P3", "required_explanation": "C"},
+        ],
+        "knowledge_context": [{"huge": "z" * 10000}],
+        "findings": [{"fact": "long"}],
+    }
+    compact = ai_service._compact_retry_payload(source)
+    assert compact["allowed_advice_pattern_ids"] == ["P1", "P2"]
+    assert [x["pattern_id"] for x in compact["advice_contracts"]] == ["P1", "P2"]
+    assert "sanitized_sql" not in compact
+    assert "knowledge_context" not in compact
+    assert "findings" not in compact
+    assert len(json.dumps(compact, ensure_ascii=False)) < 2000
+
+
+def test_output_truncated_message_does_not_assume_sql_is_long():
+    message = ai_service.DEGRADE_MESSAGES["output_truncated"]
+    assert "AI 回覆內容超出長度上限" in message
+    assert "SQL 內容較長" not in message

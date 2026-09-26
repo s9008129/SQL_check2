@@ -235,6 +235,12 @@ class AdviceItem(BaseModel):
     example: str | None = None
     impact: ImpactLevel | None = None
     confidence_score: int | None = None
+    # Round-2 E2E hardening (2026-09-26): the model may propose a pattern id,
+    # but the server validates/canonicalizes it against deterministic exact
+    # Pattern Selector matches before returning it. evidence_ids are *always*
+    # server-owned; the model never gets to invent Oracle sources.
+    pattern_id: str | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
 
     @field_validator("confidence_score", mode="before")
     @classmethod

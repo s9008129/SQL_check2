@@ -1005,6 +1005,40 @@ def _calibrate_assessment_confidence(
     return score
 
 
+def _legacy_infer_advice_pattern(
+    source_sql: str,
+    title: str,
+    explanation: str,
+) -> str | None:
+    """Infer one advice pattern only when the evidence is unambiguous.
+
+    Production uses ``allowed_pattern_ids`` and the model-returned pattern_id.
+    This helper exists for lower-level/internal callers that predate that
+    contract. It deliberately requires BOTH an active deterministic contract
+    for the SQL and text evidence that this specific card is about that same
+    contract. If zero or multiple patterns match, it returns None rather than
+    guessing. This preserves the Q10 cross-talk fix.
+    """
+    combined = f"{title}\n{explanation}"
+    matches: set[str] = set()
+    contracts = _build_advice_contracts(source_sql)
+    for contract in contracts:
+        pattern_id = str(contract.get("pattern_id") or "")
+        if not pattern_id:
+            continue
+        contract_id = str(contract.get("id") or "")
+        if contract_id == "cross_column_or":
+            text_re = _CROSS_COLUMN_OR_ADVICE_RE
+        else:
+            text_re = next(
+                (advice_re for guard_id, _source_re, advice_re, _safe_copy in _ADVICE_ONLY_PROSE_GUARDS
+                 if guard_id == contract_id),
+                None,
+            )
+        if text_re is not None and text_re.search(combined):
+            matches.add(pattern_id)
+    return next(iter(matches)) if len(matches) == 1 else None
+
 def _guard_unverified_advice_prose(
     source_sql: str,
     title: str,
@@ -1252,6 +1286,12 @@ def _filter_advice(
         confidence_score = normalize_confidence_score(item.confidence_score)
         guard_title = title
         guard_explanation = explanation
+        if not strict_provenance and pattern_id is None:
+            pattern_id = _legacy_infer_advice_pattern(
+                source_sql,
+                guard_title,
+                guard_explanation,
+            )
         example = unmask_sql(item.example, reverse_map or {}) if item.example else None
         before = unmask_sql(item.before, reverse_map or {}) if item.before else None
         verification: str | None = None
@@ -1857,7 +1897,7 @@ def _chat_request_body(settings: Settings, payload: dict[str, Any]) -> dict[str,
         settings.llm,
         system_prompt=SYSTEM_PROMPT,
         user_content=user_content,
-        response_schema=response_schema or RESPONSE_SCHEMA,
+        response_schema=RESPONSE_SCHEMA,
         context_window=num_ctx,
     )
 

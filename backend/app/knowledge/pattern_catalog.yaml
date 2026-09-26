@@ -224,17 +224,22 @@ patterns:
 
   - id: TRUNC_EQ_TO_RANGE
     name_zh_tw: TRUNC 日期等式改為範圍比對
+    model_guidance_zh_tw: >
+      已確定 TRUNC() 是條件式直接比較的一側，不是藏在 SUM/COUNT 等彙總函數裡。
+      只能提醒「若確認欄位是日期，且比較值不含時間，可評估日期範圍」；
+      不得自行產生可直接套用的日期邊界，也不得宣稱索引或執行計畫一定改善。
     category: predicate
     classification: ADVICE_ONLY
     oracle_applicable: true
+    evidence_refs: [ORACLE11G_TRANSFORMED_COLUMN]
     detection:
-      source: prompt_heuristic_only
+      source: sql_parser_complexity_flag
+      complexity_flags: [trunc_condition_predicate]
       family_signals:
         rule_ids: [R005]
         qualifier_zh_tw: >
-          R005 對任何「條件欄位套函數」都會命中，無法分辨是否為 TRUNC 等於
-          比對。rewrite_rules.py 自 2026-09-18 起已沒有 TRUNC 專屬規則，只剩
-          系統提示要求模型把這類改寫當成需要前提的 advice_only。
+          R005 仍只是「條件欄位套函數」的廣義訊號；只有 sql_parser 確認
+          TRUNC() 是 predicate 的直接條件函數時，才算本 pattern 的 exact match。
     rationale_zh_tw: >
       TRUNC(col) = X 與 col >= X AND col < X + 1 只有在 X 不含時分秒、且 col 是
       DATE 時才等價。若 X（綁定變數或運算式）實際帶有時間，例如當天 10:00，
@@ -256,25 +261,30 @@ patterns:
       mechanism: none
     sources:
       - type: internal
+        ref: backend/app/services/sql_parser.py::_function_pattern_flags
+      - type: internal
         ref: backend/app/services/rewrite_rules.py 模組說明（2026-09-18 移除 TRUNC 推導規則）
       - type: internal
         ref: backend/tests/test_rewrite_rules.py TRUNC 段落（綁定變數、運算式、可能帶時間的常數、數值欄位皆為 unverified）
-      - type: internal
-        ref: "PR #2 third-party review item 1 (2026-09-18)"
 
   - id: NVL_EQ_TO_OR_IS_NULL
     name_zh_tw: NVL 預設值比對改為明確條件
+    model_guidance_zh_tw: >
+      已確定 NVL()/COALESCE() 是條件式直接比較的一側，不是 SUM(NVL(...)) 這類
+      彙總內容。只能提醒先確認欄位型態與 NULL 規則，再評估拆成明確條件；
+      不得自行猜測 CHAR/VARCHAR2、NULL 或業務值，也不得宣稱一定使用索引。
     category: predicate
     classification: ADVICE_ONLY
     oracle_applicable: true
+    evidence_refs: [ORACLE11G_TRANSFORMED_COLUMN]
     detection:
-      source: prompt_heuristic_only
+      source: sql_parser_complexity_flag
+      complexity_flags: [nvl_condition_predicate]
       family_signals:
         rule_ids: [R005]
         qualifier_zh_tw: >
-          R005 對任何「條件欄位套函數」都會命中，無法分辨是否為 NVL 等於
-          比對。rewrite_rules.py 自 2026-09-18 起已沒有 NVL 專屬規則；系統提示
-          的檢查項 (1) 仍要求模型檢查條件欄位上的 NVL。
+          R005 仍只是條件函數的廣義訊號；只有 sql_parser 確認 NVL()/COALESCE()
+          是 predicate 的直接條件函數時才算 exact match。SUM(NVL(...)) 不屬於本 pattern。
     rationale_zh_tw: >
       只看 NULL 代換的邏輯時，NVL(col, 'a') = 'b' 在 a == b 時對應
       (col = 'b' OR col IS NULL)，a != b 時對應 col = 'b'；但 Oracle 的比較
@@ -296,13 +306,54 @@ patterns:
       mechanism: none
     sources:
       - type: internal
+        ref: backend/app/services/sql_parser.py::_function_pattern_flags
+      - type: internal
         ref: backend/app/services/rewrite_rules.py 模組說明（2026-09-18 移除 NVL 推導規則）
       - type: oracle_documentation
-        ref: https://docs.oracle.com/en/database/oracle/oracle-database/26/sqlrf/NVL.html
+        ref: https://docs.oracle.com/html/E26088_02/functions119.htm
       - type: oracle_documentation
-        ref: https://docs.oracle.com/en/database/oracle/oracle-database/26/sqlrf/Data-Type-Comparison-Rules.html
+        ref: https://docs.oracle.com/html/E26088_02/sql_elements002.htm
+
+  - id: TO_CHAR_CONDITION_PREDICATE
+    name_zh_tw: TO_CHAR 條件改為原型態比對
+    model_guidance_zh_tw: >
+      已確定 TO_CHAR() 是條件式直接比較的一側。可提醒使用者評估直接以原欄位
+      型態比對，減少欄位端轉換；但 SQLCheck 看不到欄位實際型態、格式與 NLS
+      設定，所以只能提供方向，不得自行產生日期邊界或宣稱索引／執行計畫結果。
+    category: predicate
+    classification: ADVICE_ONLY
+    oracle_applicable: true
+    evidence_refs: [ORACLE11G_TRANSFORMED_COLUMN]
+    detection:
+      source: sql_parser_complexity_flag
+      complexity_flags: [to_char_condition_predicate]
+      family_signals:
+        rule_ids: [R005]
+        qualifier_zh_tw: >
+          R005 仍是廣義函數訊號；只有 sql_parser 確認 TO_CHAR() 是 predicate
+          的直接條件函數時才算 exact match。
+    rationale_zh_tw: >
+      對欄位先做 TO_CHAR() 再比較，會把原欄位轉成文字後才進行條件判斷。
+      是否能安全改成日期、數字或其他原型態比較，取決於欄位型態、格式字串、
+      NLS 設定與實際業務條件。SQLCheck 沒有 schema metadata，因此只能提醒
+      「可評估直接用原欄位型態比較」，不能自動產生完整改寫。
+    allowed_behavior:
+      explain: true
+      advice: true
+      automatic_rewrite: false
+    prohibited_claims:
+      - column_actual_type
+      - index_usage
+      - execution_plan
+      - post_rewrite_cost
+    verification:
+      required_for_rewrite: false
+      mechanism: none
+    sources:
       - type: internal
-        ref: "PR #2 third-party review item 2 (2026-09-18)"
+        ref: backend/app/services/sql_parser.py::_function_pattern_flags
+      - type: oracle_documentation
+        ref: https://docs.oracle.com/html/E26088_02/functions200.htm
 
   - id: OR_SAME_COLUMN_TO_IN
     name_zh_tw: 同欄位 OR 串接改為 IN
@@ -404,16 +455,22 @@ patterns:
 
   - id: UPPER_CASE_FOLD_REMOVAL
     name_zh_tw: 移除 UPPER／LOWER 大小寫轉換
+    model_guidance_zh_tw: >
+      已確定 UPPER()/LOWER() 是條件式直接比較的一側。只能提醒先確認資料實際
+      大小寫規則，再評估是否能直接比對原始欄位；不可自行移除函數或假設資料
+      已經統一大小寫，也不可宣稱索引或實際效能結果。
     category: predicate
     classification: ADVICE_ONLY
     oracle_applicable: true
+    evidence_refs: [ORACLE11G_TRANSFORMED_COLUMN]
     detection:
-      source: prompt_heuristic_only
+      source: sql_parser_complexity_flag
+      complexity_flags: [case_fold_condition_predicate]
       family_signals:
         rule_ids: [R005]
         qualifier_zh_tw: >
-          R005 對任何條件欄位函數都會命中，無法分辨是否為 UPPER／LOWER；
-          系統提示的檢查項 (1) 點名 UPPER，但沒有確定性的偵測器。
+          R005 仍是廣義函數訊號；只有 sql_parser 確認 UPPER()/LOWER()
+          是 predicate 的直接條件函數時才算 exact match。
     rationale_zh_tw: >
       語意陷阱：WHERE UPPER(email) = 'ABC' 直接改成 WHERE email = 'abc' 並不
       保證結果相同——實際資料中大小寫混雜時，兩種寫法比對到的資料列可能不同。
@@ -431,10 +488,10 @@ patterns:
       required_for_rewrite: false
       mechanism: none
     sources:
+      - type: internal
+        ref: backend/app/services/sql_parser.py::_function_pattern_flags
       - type: external_skill
         ref: github/awesome-copilot/sql-optimization
-      - type: internal
-        ref: backend/app/prompts/sql_review_zh_tw.txt 「not_needed 前的檢查項 (1)」
       - type: internal
         ref: backend/tests/test_rewrite_rules.py::test_upper_removal_is_unverified
 
@@ -774,11 +831,14 @@ patterns:
   - id: DISTINCT_REMOVAL
     name_zh_tw: 移除 DISTINCT
     model_guidance_zh_tw: >
-      只提供 advice_only：移除 DISTINCT 前必須確認重複列是否原本就是查詢語意的一部分，
-      以及 JOIN 是否會產生重複資料；不可自動移除。
+      只提供 advice_only：Oracle 文件說明 DISTINCT 的用途是只保留重複結果的一份，
+      而執行計畫中的 SORT UNIQUE 是用來去除重複資料的操作。這只能支持「去重本身
+      需要額外處理」這個原理；移除 DISTINCT 前仍必須確認重複資料是否原本就是查詢
+      語意的一部分，以及 JOIN 是否會產生重複資料，不可自動移除或保證一定變快。
     category: distinct
     classification: ADVICE_ONLY
     oracle_applicable: true
+    evidence_refs: [ORACLE11G_DISTINCT_DUPLICATE_ELIMINATION]
     detection:
       source: sql_parser_complexity_flag
       complexity_flags: [distinct]
@@ -797,14 +857,17 @@ patterns:
       - index_usage
       - execution_plan
       - actual_row_count
+      - actual_runtime_improvement
     verification:
       required_for_rewrite: false
       mechanism: none
     sources:
+      - type: oracle_documentation
+        ref: https://docs.oracle.com/html/E26088_02/statements_10002.htm
+      - type: oracle_documentation
+        ref: https://docs.oracle.com/cd/E11882_01/server.112/e41573/ex_plan.htm
       - type: external_skill
         ref: github/awesome-copilot/sql-optimization
-      - type: internal
-        ref: Handoff.md 2026-09-17 晚「advice_only 的說明改白話」
 
   - id: GROUP_BY_STRUCTURAL_REWRITE
     name_zh_tw: GROUP BY 欄位拆分／合併

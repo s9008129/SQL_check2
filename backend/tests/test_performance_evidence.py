@@ -93,10 +93,34 @@ def test_repeated_correlated_max_gets_11g_subquery_evidence_but_no_verified_rewr
     assert "反覆處理相似的工作" in items[0].claim_zh_tw
 
 
-def test_same_column_or_is_not_exposed_as_performance_evidence():
+def test_same_column_or_gets_oracle_execution_boundary_but_not_speed_claim():
     sql = "SELECT A.X FROM T A WHERE A.STATUS='A' OR A.STATUS='B'"
-    assert _evidence(sql) == []
+    items = _evidence(sql)
+    assert _ids(items) == {"ORACLE11G_IN_LIST_LIMIT"}
+    item = items[0]
+    assert "1000" in item.claim_zh_tw
+    assert "不代表 OR 改成 IN 就一定會變快" in item.caveat_zh_tw
 
 
 def test_clean_sql_has_no_performance_evidence():
     assert _evidence("SELECT A.X FROM T A WHERE A.STATUS='1'") == []
+
+
+def test_distinct_gets_oracle_duplicate_elimination_evidence():
+    items = _evidence("SELECT DISTINCT A.X FROM T A WHERE A.STATUS='A'")
+    assert _ids(items) == {"ORACLE11G_DISTINCT_DUPLICATE_ELIMINATION"}
+    assert items[0].strength == "conditional"
+    assert "去除重複" in items[0].claim_zh_tw
+    assert "不代表" in items[0].caveat_zh_tw
+
+
+def test_simple_nvl_predicate_gets_transformed_column_evidence_but_aggregate_nvl_does_not():
+    predicate = _evidence("SELECT A.X FROM T A WHERE NVL(A.FLAG,'N')='N'")
+    assert "ORACLE11G_TRANSFORMED_COLUMN" in _ids(predicate)
+
+    aggregate = _evidence(
+        "SELECT A.CASE_NO, SUM(NVL(P.AMT,0)) TOTAL "
+        "FROM TAX_CASE A JOIN TAX_PAYMENT P ON P.CASE_NO=A.CASE_NO "
+        "WHERE A.STATUS='A' GROUP BY A.CASE_NO HAVING SUM(NVL(P.AMT,0)) > 0"
+    )
+    assert all(item.pattern_id != "NVL_EQ_TO_OR_IS_NULL" for item in aggregate)

@@ -228,3 +228,26 @@ def test_out_of_scope_exact_match_can_never_become_context_candidate():
     )
     assert selection.exact_ids == ("INDEX_ADVISORY", "SELECT_STAR")
     assert selection.context_candidate_ids == ("SELECT_STAR",)
+
+def test_direct_predicate_functions_are_exact_patterns_but_nested_aggregate_nvl_is_not():
+    direct_cases = [
+        ("SELECT A.X FROM T A WHERE NVL(A.FLAG,'N')='N'", "NVL_EQ_TO_OR_IS_NULL"),
+        ("SELECT A.X FROM T A WHERE TRUNC(A.TXN_DATE)=:D", "TRUNC_EQ_TO_RANGE"),
+        ("SELECT A.X FROM T A WHERE TO_CHAR(A.TXN_DATE,'YYYY')=:Y", "TO_CHAR_CONDITION_PREDICATE"),
+        ("SELECT A.X FROM T A WHERE UPPER(A.STATUS)=:S", "UPPER_CASE_FOLD_REMOVAL"),
+    ]
+    for sql, pattern_id in direct_cases:
+        parsed = _parsed(sql)
+        selection = select_patterns(parsed, [_finding("R005")], _rules())
+        assert pattern_id in selection.exact_ids, (sql, selection.exact_ids)
+
+    aggregate_sql = (
+        "SELECT A.CASE_NO, SUM(NVL(P.AMT,0)) TOTAL "
+        "FROM TAX_CASE A JOIN TAX_PAYMENT P ON P.CASE_NO=A.CASE_NO "
+        "WHERE A.STATUS='A' GROUP BY A.CASE_NO "
+        "HAVING SUM(NVL(P.AMT,0)) > 0"
+    )
+    parsed = _parsed(aggregate_sql)
+    selection = select_patterns(parsed, [], _rules())
+    assert "NVL_EQ_TO_OR_IS_NULL" not in selection.exact_ids
+    assert "nvl_condition_predicate" not in parsed[0].complexity_flags

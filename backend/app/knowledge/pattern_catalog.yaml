@@ -379,6 +379,7 @@ patterns:
     category: predicate
     classification: ADVICE_ONLY
     oracle_applicable: true
+    evidence_refs: [ORACLE11G_TRANSFORMED_COLUMN]
     detection:
       source: prompt_heuristic_only
       family_signals:
@@ -418,6 +419,7 @@ patterns:
     category: predicate
     classification: ADVICE_ONLY
     oracle_applicable: true
+    evidence_refs: [ORACLE11G_TRANSFORMED_COLUMN]
     detection:
       source: prompt_heuristic_only
       family_signals:

@@ -41,6 +41,10 @@ const FRIENDLY_EVIDENCE_COPY: Record<string, FriendlyEvidenceCopy> = {
     title: "避免多做一次資料轉換",
     summary: "兩邊資料格式不同時，資料庫可能要先轉換一次；格式一致時通常比較省事。",
   },
+  ORACLE11G_IN_LIST_LIMIT: {
+    title: "IN 清單有 1000 個值上限",
+    summary: "Oracle 11g 的單一 IN 清單最多 1000 個值；這是安全整理 OR 條件時必須遵守的語法限制。",
+  },
 };
 
 function friendlyEvidenceCopy(item: PerformanceEvidence): FriendlyEvidenceCopy {
@@ -112,6 +116,7 @@ export function adviceEvidenceLevel(item: AdviceItem): EvidenceLevel {
  */
 export default function ImprovementAdvice({ ai, performanceEvidence = [] }: ImprovementAdviceProps) {
   const visibleAdvice = ai.status === "ok" ? performanceAdviceItems(ai.advice) : [];
+  const evidenceById = new Map(performanceEvidence.map((item) => [item.evidence_id, item] as const));
   const assessmentConfidence =
     ai.status === "ok" ? assessmentConfidenceText(ai.assessment_confidence_score) : null;
   const assessmentLevel =
@@ -152,7 +157,7 @@ export default function ImprovementAdvice({ ai, performanceEvidence = [] }: Impr
                 《SQL Language Reference》整理。
               </span>
             </div>
-            <div className="evidence-learning-heading">為什麼這樣可能比較快</div>
+            <div className="evidence-learning-heading">Oracle 11g 依據與原則</div>
             <div className="advice-grid system-evidence-grid" data-testid="performance-evidence-list">
               {performanceEvidence.map((item) => {
                 const copy = friendlyEvidenceCopy(item);
@@ -208,6 +213,22 @@ export default function ImprovementAdvice({ ai, performanceEvidence = [] }: Impr
                       </div>
                       {evidence.explanation && <div className="evidence-explanation">{evidence.explanation}</div>}
                       <p>{item.explanation}</p>
+                      {(item.evidence_ids ?? []).length > 0 && (
+                        <div className="advice-oracle-links" data-testid="advice-oracle-evidence">
+                          {(item.evidence_ids ?? [])
+                            .map((id) => evidenceById.get(id))
+                            .filter((evidenceItem): evidenceItem is PerformanceEvidence => Boolean(evidenceItem))
+                            .map((evidenceItem) => (
+                              <span
+                                className="badge yellow"
+                                key={evidenceItem.evidence_id}
+                                title={evidenceItem.source_document}
+                              >
+                                Oracle 依據：{friendlyEvidenceCopy(evidenceItem).title}
+                              </span>
+                            ))}
+                        </div>
+                      )}
                       {item.example && canShowConcreteExample(item) && <code>{item.example}</code>}
                     </div>
                   );

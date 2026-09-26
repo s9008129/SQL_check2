@@ -2194,17 +2194,77 @@ async def _request_ai(
     retry_payload: dict[str, Any] | None = None,
     retry_max_output_tokens: int | None = None,
 ) -> tuple[_AiRawResponse | None, str | None, bool]:
-    """Returns (raw, failure_kind, used_retry_payload).
+    """Returns (raw, failure_kind, used_truncation_recovery).
 
-    One overall deadline bounds the whole provider call, including retry.
-    Transport/configuration failures fail immediately. A provider-reported
-    output-token truncation may retry once in advice-only mode with a bounded
-    per-request output budget. Invalid JSON, schema, or non-Chinese output may
-    retry once with the same payload and the normal output budget.
+    Full-model JSON is used only when a safe full rewrite is still eligible.
+    Once deterministic rules have already placed the request in advice-only
+    mode, Gemma receives a tiny summary-only payload from the start. This is
+    both safer and substantially more reliable than asking the model to
+    regenerate long SQL/context it is not allowed to rewrite.
+
+    A full-response truncation gets one compact summary-only recovery call.
+    Invalid JSON / non-Chinese output on the normal path may retry once with
+    the normal payload and budget.
     """
 
     def remaining() -> float:
         return deadline - time.monotonic()
+
+    async def _compact_call(
+        client: httpx.AsyncClient,
+        compact_source: dict[str, Any],
+        *,
+        used_recovery: bool,
+    ) -> tuple[_AiRawResponse | None, str | None, bool]:
+        compact_payload = _compact_retry_payload(compact_source)
+        compact_budget = min(
+            _COMPACT_AI_OUTPUT_TOKENS,
+            retry_max_output_tokens or settings.llm.max_output_tokens,
+        )
+        logger.info(
+            "ai_service: compact mode recovery=%s allowed_patterns=%d structure_flags=%d output_limit=%d",
+            used_recovery,
+            len(compact_payload.get("allowed_advice_pattern_ids") or []),
+            len(compact_payload.get("structure_flags") or []),
+            compact_budget,
+        )
+        attempts = 2 if settings.llm.max_retries_on_invalid_json > 0 else 1
+        for attempt in range(attempts):
+            if remaining() <= 0:
+                return None, "timeout", used_recovery
+            client.timeout = httpx.Timeout(max(remaining(), 1.0))
+            try:
+                return (
+                    await _one_compact_attempt(
+                        client,
+                        settings,
+                        compact_payload,
+                        max_output_tokens=compact_budget,
+                    ),
+                    None,
+                    used_recovery,
+                )
+            except (httpx.RequestError, httpx.HTTPStatusError, llm_provider.LLMConfigurationError) as exc:
+                return None, _transport_failure_kind(exc), used_recovery
+            except llm_provider.LLMPromptTruncatedError:
+                return None, "prompt_truncated", used_recovery
+            except llm_provider.LLMOutputTruncatedError as exc:
+                logger.info(
+                    "ai_service: compact response truncated (attempt=%d output_tokens=%s)",
+                    attempt + 1,
+                    exc.output_tokens,
+                )
+                if attempt + 1 >= attempts or remaining() < 15:
+                    return None, "output_truncated", used_recovery
+            except _NonChineseResponseError:
+                logger.info("ai_service: compact response not in Chinese (attempt=%d)", attempt + 1)
+                if attempt + 1 >= attempts or remaining() < 15:
+                    return None, "invalid_response", used_recovery
+            except (json.JSONDecodeError, ValidationError, KeyError, TypeError):
+                logger.info("ai_service: compact response invalid (attempt=%d)", attempt + 1)
+                if attempt + 1 >= attempts or remaining() < 15:
+                    return None, "invalid_response", used_recovery
+        return None, "invalid_response", used_recovery
 
     try:
         await asyncio.wait_for(_LLM_SEMAPHORE.acquire(), timeout=max(remaining(), 0.0))
@@ -2213,14 +2273,18 @@ async def _request_ai(
 
     try:
         async with httpx.AsyncClient(timeout=max(remaining(), 1.0)) as client:
-            normal_output_tokens = settings.llm.max_output_tokens
-            truncation_retry_tokens = max(
-                normal_output_tokens,
-                retry_max_output_tokens or normal_output_tokens,
+            # If deterministic rules already say "advice only" and there are
+            # reviewed Oracle-backed patterns to explain, never send the full
+            # SQL to Gemma. The model contributes only a short summary while
+            # the server owns the advice wording/provenance.
+            compact_primary = (
+                payload.get("candidate_allowed") is False
+                and bool(payload.get("allowed_advice_pattern_ids"))
             )
-            second_payload = payload
-            second_output_tokens = normal_output_tokens
-            used_retry = False
+            if compact_primary:
+                return await _compact_call(client, payload, used_recovery=False)
+
+            normal_output_tokens = settings.llm.max_output_tokens
             try:
                 return (
                     await _one_attempt(
@@ -2249,52 +2313,27 @@ async def _request_ai(
                         "disable provider thinking for schema-constrained JSON output",
                         exc.thinking_chars,
                     )
-
-                retry_changes_payload = retry_payload is not None and retry_payload != payload
-                retry_has_more_output = truncation_retry_tokens > normal_output_tokens
-                retry_is_useful = retry_payload is not None and (
-                    retry_changes_payload or retry_has_more_output
-                )
-                if not retry_is_useful or remaining() < _MIN_RETRY_BUDGET_SECONDS:
+                if retry_payload is None or remaining() < 15:
                     logger.info(
                         "ai_service: provider output truncated "
-                        "(output_tokens=%s, normal_limit=%d, fallback_limit=%d) — "
-                        "degrading (retry_useful=%s, remaining=%.0fs)",
+                        "(output_tokens=%s) — no compact recovery budget",
                         exc.output_tokens,
-                        normal_output_tokens,
-                        truncation_retry_tokens,
-                        retry_is_useful,
-                        remaining(),
                     )
                     return None, "output_truncated", False
                 logger.info(
                     "ai_service: provider output truncated "
-                    "(output_tokens=%s, normal_limit=%d) — "
-                    "retrying once in advice-only mode with fallback_limit=%d "
-                    "(remaining=%.0fs)",
+                    "(output_tokens=%s) — switching to compact summary-only recovery (remaining=%.0fs)",
                     exc.output_tokens,
-                    normal_output_tokens,
-                    truncation_retry_tokens,
                     remaining(),
                 )
-                second_payload = _compact_retry_payload(retry_payload)
-                second_output_tokens = truncation_retry_tokens
-                used_retry = True
-                logger.info(
-                    "ai_service: compact truncation recovery allowed_patterns=%d structure_flags=%d",
-                    len(second_payload.get("allowed_advice_pattern_ids") or []),
-                    len(second_payload.get("structure_flags") or []),
-                )
+                return await _compact_call(client, retry_payload, used_recovery=True)
             except _NonChineseResponseError:
                 logger.info("ai_service: response not in Chinese — retrying once")
-                second_output_tokens = normal_output_tokens
             except (json.JSONDecodeError, ValidationError, KeyError, TypeError):
-                second_output_tokens = normal_output_tokens
+                logger.info("ai_service: response invalid — retrying once")
 
-            if settings.llm.max_retries_on_invalid_json <= 0 and not used_retry:
+            if settings.llm.max_retries_on_invalid_json <= 0 or remaining() <= 0:
                 return None, "invalid_response", False
-            if remaining() <= 0:
-                return None, "timeout", used_retry
 
             client.timeout = httpx.Timeout(max(remaining(), 1.0))
             try:
@@ -2302,29 +2341,22 @@ async def _request_ai(
                     await _one_attempt(
                         client,
                         settings,
-                        second_payload,
-                        max_output_tokens=second_output_tokens,
-                        response_schema=COMPACT_RESPONSE_SCHEMA if used_retry else None,
-                        system_prompt=COMPACT_RECOVERY_PROMPT if used_retry else None,
+                        payload,
+                        max_output_tokens=normal_output_tokens,
                     ),
                     None,
-                    used_retry,
+                    False,
                 )
             except (httpx.RequestError, httpx.HTTPStatusError, llm_provider.LLMConfigurationError) as exc:
-                return None, _transport_failure_kind(exc), used_retry
+                return None, _transport_failure_kind(exc), False
             except llm_provider.LLMPromptTruncatedError:
-                return None, "prompt_truncated", used_retry
-            except llm_provider.LLMOutputTruncatedError as exc:
-                logger.info(
-                    "ai_service: provider output truncated again on retry (output_tokens=%s) — degrading",
-                    exc.output_tokens,
-                )
-                return None, "output_truncated", used_retry
+                return None, "prompt_truncated", False
+            except llm_provider.LLMOutputTruncatedError:
+                return None, "output_truncated", False
             except _NonChineseResponseError:
-                logger.info("ai_service: response not in Chinese again on retry — degrading")
-                return None, "invalid_response", used_retry
+                return None, "invalid_response", False
             except (json.JSONDecodeError, ValidationError, KeyError, TypeError):
-                return None, "invalid_response", used_retry
+                return None, "invalid_response", False
     finally:
         _LLM_SEMAPHORE.release()
 

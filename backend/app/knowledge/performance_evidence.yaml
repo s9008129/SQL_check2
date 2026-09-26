@@ -79,6 +79,21 @@ evidence:
       在不能證明結果相同前，不會自動合併。
     strength: conditional
 
+  - id: ORACLE11G_DISTINCT_DUPLICATE_ELIMINATION
+    source_type: oracle_official
+    source_label: Oracle Database 11g 官方文件
+    source_document: Oracle Database Performance Tuning Guide 11g Release 2
+    source_section: Using EXPLAIN PLAN — SORT UNIQUE
+    source_url: https://docs.oracle.com/cd/E11882_01/server.112/e41573/ex_plan.htm
+    claim_zh_tw: >
+      Oracle 官方文件把 SORT UNIQUE 說明為「去除重複資料」的處理；DISTINCT 的目的
+      也是只保留重複結果中的一份。因此，看到 DISTINCT 時可以先確認這個去重是否真的
+      是業務需要，避免做了不必要的重複資料整理。
+    caveat_zh_tw: >
+      這不代表每一支 DISTINCT 都一定慢，也不代表可以直接移除。若 JOIN 本來就可能
+      產生重複資料，拿掉 DISTINCT 會改變查詢結果；是否可移除必須先確認業務語意。
+    strength: conditional
+
   - id: ORACLE11G_IMPLICIT_CONVERSION
     source_type: oracle_official
     source_label: Oracle Database 11g 官方文件

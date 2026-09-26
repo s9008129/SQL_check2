@@ -2313,10 +2313,14 @@ async def _request_ai(
                         "disable provider thinking for schema-constrained JSON output",
                         exc.thinking_chars,
                     )
-                if retry_payload is None or remaining() < 15:
+                if (
+                    retry_payload is None
+                    or not retry_payload.get("allowed_advice_pattern_ids")
+                    or remaining() < 15
+                ):
                     logger.info(
                         "ai_service: provider output truncated "
-                        "(output_tokens=%s) — no compact recovery budget",
+                        "(output_tokens=%s) — no useful compact recovery",
                         exc.output_tokens,
                     )
                     return None, "output_truncated", False

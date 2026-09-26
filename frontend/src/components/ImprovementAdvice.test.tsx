@@ -85,7 +85,7 @@ describe("ImprovementAdvice", () => {
     );
     expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("Performance Tuning Guide");
     expect(screen.getByTestId("oracle-evidence-note").textContent).toContain("SQL Language Reference");
-    expect(screen.getByText("為什麼這樣可能比較快")).toBeTruthy();
+    expect(screen.getByText("Oracle 依據與注意事項")).toBeTruthy();
     expect(screen.getByText("從固定文字開頭比對")).toBeTruthy();
     expect(screen.getByText("LIKE 從固定文字開頭比對時，比較容易先縮小要找的資料範圍。")).toBeTruthy();
     expect(screen.queryByText(/13%/)).toBeNull();
@@ -496,3 +496,41 @@ it("keeps overall confidence separate from verified/review evidence labels", () 
   expect(screen.getByText("AI 信心：中 72/100")).toBeTruthy();
   expect(screen.queryByText("可使用此改寫")).toBeNull();
 });
+
+
+  it("links each AI advice card to its server-owned Oracle evidence", () => {
+    render(
+      <ImprovementAdvice
+        ai={makeAi({
+          status: "ok",
+          advice: [{
+            title: "確認是否需要去重",
+            explanation: "移除 DISTINCT 前，請先確認 JOIN 後是否仍可能出現重複資料；如果會，就不要移除。",
+            example: null,
+            impact: "medium",
+            confidence_score: 70,
+            pattern_id: "DISTINCT_REMOVAL",
+            evidence_ids: ["ORACLE11G_DISTINCT_DUPLICATE_ELIMINATION"],
+            verification: "unverified",
+          }],
+          suggested_sql: { available: false, reason: "需先確認重複資料需求。", sql: null, outcome: "advice_only" },
+          estimated_improvement_pct: null,
+        })}
+        performanceEvidence={[{
+          evidence_id: "ORACLE11G_DISTINCT_DUPLICATE_ELIMINATION",
+          pattern_id: "DISTINCT_REMOVAL",
+          statement_indexes: [0],
+          source_label: "Oracle Database 11g 官方文件",
+          source_document: "Oracle Database Performance Tuning Guide 11g Release 2",
+          claim_zh_tw: "DISTINCT 會做去除重複資料的處理。",
+          applicability_zh_tw: "本案使用 DISTINCT。",
+          caveat_zh_tw: "不代表可以直接移除。",
+          strength: "conditional",
+        }]}
+      />,
+    );
+
+    const link = screen.getByTestId("advice-oracle-evidence");
+    expect(link.textContent).toContain("Oracle 11g 依據");
+    expect(link.textContent).toContain("確認是否真的需要去除重複資料");
+  });

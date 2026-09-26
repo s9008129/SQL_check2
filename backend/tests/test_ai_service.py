@@ -3135,3 +3135,156 @@ def test_no_main_where_contract_owns_raw_suggested_sql_reason():
     # Exactly one contract owns the raw reason. This keeps the model contract
     # unambiguous when a statement matches more than one ADVICE_ONLY pattern.
     assert sum(item.get("use_as_suggested_sql_reason") is True for item in contracts) == 1
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-26 business E2E hardening: pattern provenance + compact fallback
+# ---------------------------------------------------------------------------
+
+def test_nested_aggregate_nvl_does_not_create_nvl_predicate_contract():
+    sql = (
+        "SELECT A.ID, SUM(NVL(P.AMT,0)) TOTAL "
+        "FROM T A JOIN P P ON P.ID=A.ID "
+        "WHERE A.STATUS='A' GROUP BY A.ID HAVING SUM(NVL(P.AMT,0)) > 0"
+    )
+    statement = parse_sql_text(sql).statements[0]
+    contracts = ai_service._build_advice_contracts(sql, statement.complexity_flags)
+    assert "nvl_condition" not in {item["id"] for item in contracts}
+
+
+def test_direct_nvl_predicate_creates_exact_contract_with_pattern_id():
+    sql = "SELECT A.ID FROM T A WHERE NVL(A.STATUS,'N')='N'"
+    statement = parse_sql_text(sql).statements[0]
+    contracts = ai_service._build_advice_contracts(sql, statement.complexity_flags)
+    nvl = next(item for item in contracts if item["id"] == "nvl_condition")
+    assert nvl["pattern_id"] == "NVL_EQ_TO_OR_IS_NULL"
+    assert nvl["max_confidence_score"] == 79
+
+
+def test_strict_advice_provenance_prevents_multi_pattern_copy_cross_talk():
+    from app.schemas import AdviceItem
+
+    source = (
+        "SELECT A.ID FROM T A JOIN U B "
+        "ON SUBSTR(A.KEY_COL,1,4)=B.KEY_HEAD "
+        "WHERE A.NAME LIKE '%商行%'"
+    )
+    advice = [
+        AdviceItem(
+            pattern_id="COMPOSITE_KEY_EXPRESSION_JOIN",
+            title="評估原始欄位勾稽",
+            explanation="目前是前置萬用字元 LIKE，可評估縮小搜尋範圍。",
+            example=None,
+            impact="medium",
+            confidence_score=70,
+        )
+    ]
+    result = ai_service._filter_advice(
+        advice,
+        [],
+        {},
+        source_sql=source,
+        allowed_pattern_ids={
+            "COMPOSITE_KEY_EXPRESSION_JOIN",
+            "LEADING_WILDCARD_LIKE",
+        },
+    )
+    assert len(result) == 1
+    assert result[0].pattern_id == "COMPOSITE_KEY_EXPRESSION_JOIN"
+    assert result[0].title == "評估原始欄位勾稽"
+    assert "JOIN 前先加工欄位" in result[0].explanation
+    assert "萬用字元" not in result[0].explanation
+    assert result[0].evidence_ids == ["ORACLE11G_TRANSFORMED_COLUMN"]
+
+
+def test_strict_advice_provenance_drops_pattern_without_reviewed_oracle_evidence():
+    from app.schemas import AdviceItem
+
+    result = ai_service._filter_advice(
+        [
+            AdviceItem(
+                pattern_id="DISTINCT_REMOVAL",
+                title="確認 DISTINCT",
+                explanation="請確認是否需要 DISTINCT。",
+                example=None,
+                impact="medium",
+                confidence_score=70,
+            )
+        ],
+        [],
+        {},
+        source_sql="SELECT DISTINCT A.ID FROM T A WHERE A.STATUS='A'",
+        allowed_pattern_ids={"DISTINCT_REMOVAL"},
+    )
+    assert result == []
+
+
+def test_response_schema_requires_pattern_id_and_bounds_text():
+    advice_schema = ai_service.RESPONSE_SCHEMA["properties"]["advice"]
+    assert "pattern_id" in advice_schema["items"]["required"]
+    assert advice_schema["items"]["properties"]["explanation"]["maxLength"] <= 520
+    assert ai_service.RESPONSE_SCHEMA["properties"]["summary"]["maxLength"] <= 360
+
+
+def test_compact_truncation_schema_is_advice_only_and_smaller():
+    compact = ai_service.COMPACT_RESPONSE_SCHEMA
+    assert compact["properties"]["advice"]["maxItems"] == 2
+    suggested = compact["properties"]["suggested_sql"]["properties"]
+    assert suggested["available"]["enum"] == [False]
+    assert "sql" not in suggested
+    assert compact["properties"]["summary"]["maxLength"] < ai_service.RESPONSE_SCHEMA["properties"]["summary"]["maxLength"]
+
+
+async def test_request_ai_uses_compact_schema_only_for_truncation_retry(settings, monkeypatch):
+    openrouter = dataclasses.replace(
+        settings,
+        llm=dataclasses.replace(
+            settings.llm,
+            provider="openrouter",
+            provider_type="openrouter",
+            max_output_tokens=3072,
+            truncation_retry_max_output_tokens=8192,
+        ),
+    )
+    success = ai_service._AiRawResponse.model_validate(
+        _good_inner(advice=[], suggested_sql={
+            "available": False,
+            "reason": "僅提供方向。",
+            "rewrite_outcome": "advice_only",
+        })
+    )
+    schemas = []
+
+    async def fake_attempt(
+        client,
+        current_settings,
+        current_payload,
+        *,
+        max_output_tokens=None,
+        response_schema=None,
+    ):
+        del client, current_settings, current_payload, max_output_tokens
+        schemas.append(response_schema)
+        if len(schemas) == 1:
+            raise ai_service.llm_provider.LLMOutputTruncatedError(3072)
+        return success
+
+    monkeypatch.setattr(ai_service, "_one_attempt", fake_attempt)
+    raw, failure_kind, used_retry = await ai_service._request_ai(
+        openrouter,
+        {"candidate_allowed": True},
+        deadline=time.monotonic() + 120,
+        retry_payload={"candidate_allowed": False},
+        retry_max_output_tokens=8192,
+    )
+
+    assert raw is success
+    assert failure_kind is None
+    assert used_retry is True
+    assert schemas == [None, ai_service.COMPACT_RESPONSE_SCHEMA]
+
+
+def test_output_truncated_message_does_not_assume_sql_is_long():
+    message = ai_service.DEGRADE_MESSAGES["output_truncated"]
+    assert "AI 回覆內容超出長度上限" in message
+    assert "SQL 內容較長" not in message

@@ -41,6 +41,14 @@ const FRIENDLY_EVIDENCE_COPY: Record<string, FriendlyEvidenceCopy> = {
     title: "避免多做一次資料轉換",
     summary: "兩邊資料格式不同時，資料庫可能要先轉換一次；格式一致時通常比較省事。",
   },
+  ORACLE11G_DISTINCT_DUPLICATE_ELIMINATION: {
+    title: "確認是否真的需要去除重複資料",
+    summary: "DISTINCT 會做去除重複資料的處理；移除前仍要先確認重複資料是否原本就是業務上需要排除的。",
+  },
+  ORACLE11G_IN_LIST_LIMIT: {
+    title: "確認 IN 清單仍在 Oracle 11g 範圍內",
+    summary: "Oracle 11g 的單一 IN 清單最多 1000 個值；這項依據是在確認改寫可執行，不代表一定會變快。",
+  },
 };
 
 function friendlyEvidenceCopy(item: PerformanceEvidence): FriendlyEvidenceCopy {
@@ -152,7 +160,7 @@ export default function ImprovementAdvice({ ai, performanceEvidence = [] }: Impr
                 《SQL Language Reference》整理。
               </span>
             </div>
-            <div className="evidence-learning-heading">為什麼這樣可能比較快</div>
+            <div className="evidence-learning-heading">Oracle 依據與注意事項</div>
             <div className="advice-grid system-evidence-grid" data-testid="performance-evidence-list">
               {performanceEvidence.map((item) => {
                 const copy = friendlyEvidenceCopy(item);
@@ -190,6 +198,9 @@ export default function ImprovementAdvice({ ai, performanceEvidence = [] }: Impr
               <div className="advice-grid">
                 {visibleAdvice.map((item, index) => {
                   const evidence = EVIDENCE_META[adviceEvidenceLevel(item)];
+                  const linkedEvidence = performanceEvidence.filter((source) =>
+                    (item.evidence_ids ?? []).includes(source.evidence_id),
+                  );
                   return (
                     <div className={`advice-box ${evidence.tone}`} key={`${item.title}-${index}`}>
                       <div className="advice-title-row">
@@ -208,6 +219,14 @@ export default function ImprovementAdvice({ ai, performanceEvidence = [] }: Impr
                       </div>
                       {evidence.explanation && <div className="evidence-explanation">{evidence.explanation}</div>}
                       <p>{item.explanation}</p>
+                      {linkedEvidence.length > 0 && (
+                        <div className="advice-oracle-evidence" data-testid="advice-oracle-evidence">
+                          <strong>Oracle 11g 依據</strong>
+                          <span>
+                            {linkedEvidence.map((source) => friendlyEvidenceCopy(source).title).join("、")}
+                          </span>
+                        </div>
+                      )}
                       {item.example && canShowConcreteExample(item) && <code>{item.example}</code>}
                     </div>
                   );

@@ -1211,13 +1211,29 @@ def _filter_advice(
     *,
     source_sql: str = "",
     literal_hints: dict[str, dict[str, Any]] | None = None,
+    allowed_pattern_ids: set[str] | None = None,
 ) -> list[AdviceItem]:
+    """Safety-filter model advice and attach server-owned provenance.
+
+    ``allowed_pattern_ids`` enables the production provenance gate. Tests and
+    older internal callers may omit it to exercise lower-level fragment safety
+    in isolation. In the live path, every visible AI advice must map to a
+    deterministic/contract-approved Pattern Catalog entry and at least one
+    reviewed Oracle evidence id.
+    """
     kept: list[AdviceItem] = []
     dropped = 0
-    for item in advice[:3]:  # RESPONSE_SCHEMA already caps at 3; defensive
-        # Keep the established hard-drop behavior for explicit forbidden
-        # phrases before the sentence-level sanitizer removes softer
-        # unsupported database-behavior claims.
+    seen_patterns: set[str] = set()
+    strict_provenance = allowed_pattern_ids is not None
+    allowed = allowed_pattern_ids or set()
+
+    for item in advice[:3]:
+        pattern_id = (item.pattern_id or "").strip() or None
+        if strict_provenance and pattern_id is not None and pattern_id not in allowed:
+            logger.info("ai_service: dropped advice with non-allowed pattern id")
+            dropped += 1
+            continue
+
         raw_title = _apply_vocabulary(item.title, vocab)
         raw_explanation = _apply_vocabulary(item.explanation, vocab)
         if _contains_forbidden(raw_title, forbidden) or _contains_forbidden(raw_explanation, forbidden):
@@ -1225,39 +1241,25 @@ def _filter_advice(
             continue
         title = _sanitize_user_prose(raw_title, {}, literal_hints)
         explanation = _sanitize_user_prose(raw_explanation, {}, literal_hints)
-        # The score belongs to the AI suggestion direction, while the
-        # verification badge separately tells the user what the system could
-        # prove. Business-friendly wording normalization therefore must not
-        # erase a valid model-provided confidence score.
         confidence_score = normalize_confidence_score(item.confidence_score)
-        # Keep the sanitized model wording for pattern classification even if
-        # a lower safety layer later replaces the user-facing text.
         guard_title = title
         guard_explanation = explanation
-        # 2026-09-17: code fragments are shown to the reviewer who owns the
-        # data, so restore masked literals there too (previously `:STR_002`
-        # leaked through into the advice card — confirmed in a production
-        # printout). Prose fields are never un-masked.
         example = unmask_sql(item.example, reverse_map or {}) if item.example else None
         before = unmask_sql(item.before, reverse_map or {}) if item.before else None
         verification: str | None = None
         assumption: str | None = None
+        verified_pattern_id: str | None = None
+
         safety_issue = _advice_example_safety_issue(source_sql, before, example) if example else None
         if safety_issue is not None:
-            # The user-facing advice is now server-replaced because the model
-            # invented or altered unsafe SQL details. Do not keep the
-            # item-level score on text the model did not actually author; the
-            # frontend may still show overall AI assessment confidence.
             confidence_score = None
-            logger.info("ai_service: advice SQL example hidden by deterministic safety guard: %s", safety_issue)
+            logger.info(
+                "ai_service: advice SQL example hidden by deterministic safety guard: %s",
+                safety_issue,
+            )
             example = None
             before = None
             verification = "unverified"
-            # Once the model has demonstrated that this advice depends on an
-            # invented identifier/value or lost typed-literal context, do not
-            # keep its accompanying prose: the same hallucinated detail may
-            # be repeated there. Replace it with a server-owned, useful
-            # business instruction instead of merely appending a warning.
             if safety_issue == "unknown_identifier":
                 title = "請先確認查詢條件或資料表關聯"
                 explanation = (
@@ -1278,11 +1280,9 @@ def _filter_advice(
                 )
         elif example:
             if before:
-                # Concrete SQL is a privilege, not a warning label. Only a
-                # deterministic verified/corrected rewrite may reach the API
-                # as copyable SQL.
                 v = rewrite_rules.verify_fragment(before, example)
                 verification, assumption = v.status, v.assumption
+                verified_pattern_id = _REWRITE_RULE_PATTERN_ID.get(v.rule or "")
                 if v.status == "corrected":
                     confidence_score = None
                     logger.info("ai_service: advice fragment corrected by rule %s", v.rule)
@@ -1303,17 +1303,49 @@ def _filter_advice(
             confidence_score = None
             before = None
 
+        if verified_pattern_id:
+            pattern_id = verified_pattern_id
+
+        evidence_ids: list[str] = list(item.evidence_ids or [])
+        if strict_provenance:
+            if pattern_id is None and len(allowed) == 1:
+                pattern_id = next(iter(allowed))
+            if pattern_id is None or pattern_id not in allowed:
+                logger.info("ai_service: dropped advice without deterministic pattern provenance")
+                dropped += 1
+                continue
+            evidence_ids = _pattern_evidence_ids(pattern_id)
+            if not evidence_ids:
+                logger.info("ai_service: dropped advice without reviewed Oracle evidence")
+                dropped += 1
+                continue
+            if pattern_id in seen_patterns:
+                logger.info("ai_service: dropped duplicate advice pattern")
+                dropped += 1
+                continue
+            seen_patterns.add(pattern_id)
+
         if verification not in _VERIFIED:
-            guarded_explanation, prose_guard = _guard_unverified_advice_prose(
-                source_sql,
-                guard_title,
-                guard_explanation,
-            )
-            if prose_guard is not None:
+            if pattern_id in _PATTERN_PRESENTATION:
+                server_title, server_explanation = _PATTERN_PRESENTATION[pattern_id]
+                title = server_title
+                explanation = server_explanation
                 confidence_score = None
-                explanation = guarded_explanation
                 verification = "unverified"
-                logger.info("ai_service: advice-only prose normalized by guard: %s", prose_guard)
+                logger.info("ai_service: advice-only presentation normalized by pattern id")
+            else:
+                guarded_explanation, prose_guard = _guard_unverified_advice_prose(
+                    source_sql,
+                    guard_title,
+                    guard_explanation,
+                    pattern_id=pattern_id,
+                )
+                if prose_guard is not None:
+                    confidence_score = None
+                    explanation = guarded_explanation
+                    verification = "unverified"
+                    logger.info("ai_service: advice-only prose normalized by guard: %s", prose_guard)
+
         kept.append(
             AdviceItem(
                 title=title,
@@ -1321,19 +1353,17 @@ def _filter_advice(
                 example=example,
                 impact=item.impact,
                 confidence_score=confidence_score,
+                pattern_id=pattern_id,
+                evidence_ids=evidence_ids,
                 before=before,
                 verification=verification,
                 assumption=assumption,
             )
         )
-    if dropped:
-        # PRD: log a counter on a forbidden-phrase hit, never the content
-        # that triggered it. INFO (not debug) so this decision is visible in
-        # production logs without needing debug-level logging enabled — see
-        # tasks/lessons.md "決策 log 用 debug 等於沒有 log".
-        logger.info("ai_service: dropped %d advice item(s) on forbidden-phrase match", dropped)
-    return kept
 
+    if dropped:
+        logger.info("ai_service: dropped %d advice item(s) during safety/provenance review", dropped)
+    return kept
 
 # PRD §25.4's exact fixed copy for "declined to auto-rewrite" — used
 # whenever the server (not the model) is the one deciding no rewrite will be

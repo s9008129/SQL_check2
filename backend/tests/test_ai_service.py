@@ -683,7 +683,8 @@ def test_filter_advice_replaces_index_access_potential_with_plain_language_and_k
 
     assert result[0].confidence_score == 95
     assert "索引存取潛力" not in result[0].explanation
-    assert "這一段可以優先調整" in result[0].explanation
+    assert "這段 SUBSTR 等式可由系統安全整理成 LIKE" in result[0].explanation
+    assert "實際效能仍需在測試環境確認" in result[0].explanation
 
 
 def test_raw_ai_response_requires_confidence_for_every_advice_item():

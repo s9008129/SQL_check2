@@ -7,7 +7,7 @@ import httpx
 import pytest
 import respx
 
-from app.schemas import Finding
+from app.schemas import AdviceItem, Finding
 from app.services import ai_service
 from app.services.sql_parser import parse_sql_text
 from app.settings import get_settings
@@ -3135,3 +3135,101 @@ def test_no_main_where_contract_owns_raw_suggested_sql_reason():
     # Exactly one contract owns the raw reason. This keeps the model contract
     # unambiguous when a statement matches more than one ADVICE_ONLY pattern.
     assert sum(item.get("use_as_suggested_sql_reason") is True for item in contracts) == 1
+
+
+# ---------------------------------------------------------------------------
+# Round-2 acceptance hardening: evidence attribution / compact recovery
+# ---------------------------------------------------------------------------
+def test_response_schema_requires_pattern_id_and_compact_retry_is_prose_only():
+    advice_schema = ai_service.RESPONSE_SCHEMA["properties"]["advice"]["items"]
+    assert "pattern_id" in advice_schema["required"]
+    assert advice_schema["properties"]["explanation"]["maxLength"] == 420
+
+    compact = ai_service.COMPACT_RESPONSE_SCHEMA
+    assert compact["properties"]["advice"]["maxItems"] == 2
+    compact_item = compact["properties"]["advice"]["items"]
+    assert compact_item["properties"]["example"]["maxLength"] == 0
+    assert compact_item["properties"]["before"]["maxLength"] == 0
+    assert compact["properties"]["suggested_sql"]["properties"]["sql"]["maxLength"] == 0
+    assert set(compact["properties"]["suggested_sql"]["properties"]["rewrite_outcome"]["enum"]) == {
+        "not_needed",
+        "advice_only",
+    }
+
+
+def test_multi_pattern_guard_cannot_replace_join_advice_with_like_copy():
+    source_sql = (
+        "SELECT A.CASE_NO FROM TAX_CASE A "
+        "JOIN KEY_REFERENCE B ON SUBSTR(A.COMPOSITE_KEY,1,6)=B.KEY_HEAD "
+        "WHERE A.OWNER_NAME LIKE '%商行%'"
+    )
+    item = AdviceItem(
+        pattern_id="COMPOSITE_KEY_EXPRESSION_JOIN",
+        title="評估原始欄位勾稽",
+        explanation="這段比對可評估直接使用原始欄位。",
+        example=None,
+        impact="medium",
+        confidence_score=75,
+    )
+    filtered = ai_service._filter_advice(
+        [item],
+        forbidden=[],
+        vocab={},
+        source_sql=source_sql,
+        evidence_by_pattern={
+            "COMPOSITE_KEY_EXPRESSION_JOIN": ("ORACLE11G_TRANSFORMED_COLUMN",),
+            "LEADING_WILDCARD_LIKE": ("ORACLE11G_LEADING_WILDCARD_RANGE_LIMIT",),
+        },
+    )
+    assert len(filtered) == 1
+    assert filtered[0].pattern_id == "COMPOSITE_KEY_EXPRESSION_JOIN"
+    assert filtered[0].evidence_ids == ["ORACLE11G_TRANSFORMED_COLUMN"]
+    assert "JOIN" in filtered[0].explanation
+    assert "前置萬用字元" not in filtered[0].explanation
+
+
+def test_advice_without_oracle_evidence_is_dropped_when_evidence_contract_is_active():
+    item = AdviceItem(
+        pattern_id="UNKNOWN_MODEL_IDEA",
+        title="模型自行想到的方向",
+        explanation="這不是系統確定性 pattern。",
+        example=None,
+        impact="medium",
+        confidence_score=70,
+    )
+    filtered = ai_service._filter_advice(
+        [item],
+        forbidden=[],
+        vocab={},
+        source_sql="SELECT A.X FROM T A WHERE A.X=1",
+        evidence_by_pattern={"DISTINCT_REMOVAL": ("ORACLE11G_DISTINCT_DUPLICATE_ELIMINATION",)},
+    )
+    assert filtered == []
+
+
+def test_repeated_max_server_copy_uses_cautious_language():
+    item = AdviceItem(
+        pattern_id="LATEST_ROW_CORRELATED_MAX",
+        title="減少重複查詢",
+        explanation="目前每筆資料都會重複查詢同一來源。",
+        example=None,
+        impact="medium",
+        confidence_score=75,
+    )
+    filtered = ai_service._filter_advice(
+        [item],
+        forbidden=[],
+        vocab={},
+        source_sql="SELECT A.X FROM T A WHERE A.X=1",
+        evidence_by_pattern={"LATEST_ROW_CORRELATED_MAX": ("ORACLE11G_SUBQUERY_UNNESTING",)},
+    )
+    assert len(filtered) == 1
+    assert "可能" in filtered[0].explanation
+    assert "每筆資料都會" not in filtered[0].explanation
+    assert filtered[0].evidence_ids == ["ORACLE11G_SUBQUERY_UNNESTING"]
+
+
+def test_output_truncated_message_does_not_blame_sql_length():
+    message = ai_service.DEGRADE_MESSAGES["output_truncated"]
+    assert "SQL 內容較長" not in message
+    assert "AI 回覆內容超出長度上限" in message

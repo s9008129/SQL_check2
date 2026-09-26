@@ -1666,6 +1666,7 @@ def _finalize(
     *,
     original_sql: str = "",
     literal_hints: dict[str, dict[str, Any]] | None = None,
+    allowed_pattern_ids: set[str] | None = None,
 ) -> AiResult:
     forbidden = ai_guard_cfg.get("forbidden_phrases", [])
     vocab = ai_guard_cfg.get("vocabulary_replacements", {})
@@ -1685,6 +1686,7 @@ def _finalize(
         reverse_map,
         source_sql=representative.raw_sql if representative is not None else original_sql,
         literal_hints=literal_hints,
+        allowed_pattern_ids=allowed_pattern_ids,
     )
     suggested_sql = _finalize_suggested_sql(
         raw.suggested_sql,

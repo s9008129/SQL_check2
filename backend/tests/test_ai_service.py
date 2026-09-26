@@ -3256,6 +3256,8 @@ async def test_request_ai_uses_compact_schema_only_for_truncation_retry(settings
         })
     )
     schemas = []
+    prompts = []
+    payloads = []
 
     async def fake_attempt(
         client,
@@ -3264,9 +3266,12 @@ async def test_request_ai_uses_compact_schema_only_for_truncation_retry(settings
         *,
         max_output_tokens=None,
         response_schema=None,
+        system_prompt=None,
     ):
-        del client, current_settings, current_payload, max_output_tokens
+        del client, current_settings, max_output_tokens
         schemas.append(response_schema)
+        prompts.append(system_prompt)
+        payloads.append(current_payload)
         if len(schemas) == 1:
             raise ai_service.llm_provider.LLMOutputTruncatedError(3072)
         return success
@@ -3284,6 +3289,34 @@ async def test_request_ai_uses_compact_schema_only_for_truncation_retry(settings
     assert failure_kind is None
     assert used_retry is True
     assert schemas == [None, ai_service.COMPACT_RESPONSE_SCHEMA]
+    assert prompts == [None, ai_service.COMPACT_RECOVERY_PROMPT]
+    assert payloads[1]["mode"] == "compact_truncation_recovery"
+    assert "sanitized_sql" not in payloads[1]
+
+
+def test_compact_retry_payload_drops_sql_and_keeps_only_two_allowed_patterns():
+    source = {
+        "statement_type": "SELECT",
+        "sanitized_sql": "SELECT " + "X," * 5000 + "Y FROM T",
+        "compliance": "PASS",
+        "cost_context": {"relation": "below_threshold"},
+        "structure_flags": ["set_operation", "repeated_source_set_operation", "group_by_aggregate"],
+        "allowed_advice_pattern_ids": ["P1", "P2", "P3"],
+        "advice_contracts": [
+            {"id": "a", "pattern_id": "P1", "required_explanation": "A"},
+            {"id": "b", "pattern_id": "P2", "required_explanation": "B"},
+            {"id": "c", "pattern_id": "P3", "required_explanation": "C"},
+        ],
+        "knowledge_context": [{"huge": "z" * 10000}],
+        "findings": [{"fact": "long"}],
+    }
+    compact = ai_service._compact_retry_payload(source)
+    assert compact["allowed_advice_pattern_ids"] == ["P1", "P2"]
+    assert [x["pattern_id"] for x in compact["advice_contracts"]] == ["P1", "P2"]
+    assert "sanitized_sql" not in compact
+    assert "knowledge_context" not in compact
+    assert "findings" not in compact
+    assert len(json.dumps(compact, ensure_ascii=False)) < 2000
 
 
 def test_output_truncated_message_does_not_assume_sql_is_long():

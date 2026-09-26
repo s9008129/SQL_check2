@@ -228,3 +228,31 @@ def test_out_of_scope_exact_match_can_never_become_context_candidate():
     )
     assert selection.exact_ids == ("INDEX_ADVISORY", "SELECT_STAR")
     assert selection.context_candidate_ids == ("SELECT_STAR",)
+
+
+def test_direct_predicate_function_patterns_are_exact_but_nested_aggregate_nvl_is_not():
+    nvl = select_patterns(
+        _parsed("SELECT A.ID FROM T A WHERE NVL(A.STATUS,'N')='N'"),
+        [_finding("R005")],
+        _rules(),
+    )
+    assert "NVL_EQ_TO_OR_IS_NULL" in nvl.exact_ids
+
+    trunc = select_patterns(
+        _parsed("SELECT A.ID FROM T A WHERE TRUNC(A.TXN_DATE)=:D"),
+        [_finding("R005")],
+        _rules(),
+    )
+    assert "TRUNC_EQ_TO_RANGE" in trunc.exact_ids
+
+    aggregate_nvl = select_patterns(
+        _parsed(
+            "SELECT A.ID, SUM(NVL(P.AMT,0)) TOTAL "
+            "FROM T A JOIN P P ON P.ID=A.ID "
+            "WHERE A.STATUS='A' "
+            "GROUP BY A.ID HAVING SUM(NVL(P.AMT,0)) > 0"
+        ),
+        [_finding("R005")],
+        _rules(),
+    )
+    assert "NVL_EQ_TO_OR_IS_NULL" not in aggregate_nvl.exact_ids
